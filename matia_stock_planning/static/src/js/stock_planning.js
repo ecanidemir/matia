@@ -16,6 +16,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             'change .msp-check-usa': '_onChangeLocation',
             'click .msp-btn-toggle-bom': '_onToggleBomQty',
             'click .msp-btn-add-col': '_onAddDynamicColumn',
+            'keypress .msp-col-target-input': '_onTargetInputKeypress',
             'click .chip-remove': '_onRemoveDynamicColumn',
             'click .btn-remove-dyn': '_onRemoveDynamicColumn',
             'input .msp-input-search': '_onSearchInput',
@@ -154,8 +155,17 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 return;
             }
 
-            var inputVal = window.prompt(_t("Enter the target device quantity to calculate requirements for (e.g. 50, 100):"));
-            if (!inputVal) {
+            // Read value from inline input (no browser native prompt)
+            var inputEl = this.$('.msp-col-target-input');
+            var inputVal = inputEl.val();
+
+            if (!inputVal || !inputVal.trim()) {
+                this.displayNotification({
+                    title: _t("Input Required"),
+                    message: _t("Please enter a target device count in the input field before clicking Add Column."),
+                    type: 'warning'
+                });
+                inputEl.focus();
                 return;
             }
 
@@ -166,6 +176,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     message: _t("Please enter a valid positive integer greater than zero."),
                     type: 'warning'
                 });
+                inputEl.focus().select();
                 return;
             }
 
@@ -175,6 +186,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     message: _t("The 20 Devices requirement column is already present by default."),
                     type: 'info'
                 });
+                inputEl.val('');
                 return;
             }
 
@@ -184,6 +196,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     message: _t(target + " Devices target column is already in the table."),
                     type: 'info'
                 });
+                inputEl.val('');
                 return;
             }
 
@@ -193,6 +206,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this._fetchPlanningData().then(function () {
                 self._updateView();
             });
+        },
+
+        _onTargetInputKeypress: function (ev) {
+            // Allow pressing Enter in the input field to add the column
+            if (ev.which === 13) {
+                ev.preventDefault();
+                this._onAddDynamicColumn(ev);
+            }
         },
 
         _onRemoveDynamicColumn: function (ev) {

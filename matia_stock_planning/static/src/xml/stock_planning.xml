@@ -47,9 +47,24 @@
                         <span t-else="">Show Usage Qty</span>
                     </button>
 
-                    <button class="btn btn-primary btn-sm msp-btn-add-col" t-att-disabled="widget.dynamic_targets.length >= 3 ? 'disabled' : undefined" title="Add Target Device Column (Max 3)">
-                        <i class="fa fa-plus-circle mr-1"></i> Add Target Column
-                    </button>
+                    <!-- Inline target input (avoids browser native prompt with OS-translated buttons) -->
+                    <t t-if="widget.dynamic_targets.length &lt; 3">
+                        <div class="msp-add-col-inline" title="Enter device count and press Add">
+                            <input type="number"
+                                   class="form-control form-control-sm msp-col-target-input"
+                                   placeholder="e.g. 100"
+                                   min="1"
+                                   style="width:90px; display:inline-block;"/>
+                            <button class="btn btn-primary btn-sm msp-btn-add-col ml-1">
+                                <i class="fa fa-plus-circle mr-1"></i> Add Column
+                            </button>
+                        </div>
+                    </t>
+                    <t t-else="">
+                        <button class="btn btn-secondary btn-sm" disabled="disabled" title="Maximum 3 dynamic columns reached">
+                            <i class="fa fa-plus-circle mr-1"></i> Add Column (Max 3)
+                        </button>
+                    </t>
                 </div>
             </div>
 
