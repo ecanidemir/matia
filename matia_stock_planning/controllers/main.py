@@ -129,6 +129,22 @@ class MatiaStockPlanningController(http.Controller):
             'align': 'center',
             'valign': 'vcenter',
         })
+        cell_sub_text_format = workbook.add_format({
+            'border': 1,
+            'border_color': '#e2e8f0',
+            'bg_color': '#f8fafc',
+            'align': 'left',
+            'valign': 'vcenter',
+            'font_size': 9,
+        })
+        cell_sub_num_format = workbook.add_format({
+            'border': 1,
+            'border_color': '#e2e8f0',
+            'bg_color': '#f8fafc',
+            'align': 'center',
+            'valign': 'vcenter',
+            'font_size': 9,
+        })
 
         # Header Title and Date
         row = 0
@@ -167,6 +183,8 @@ class MatiaStockPlanningController(http.Controller):
             for itm in items:
                 worksheet.set_row(row, 20)
                 cells = itm.get('cells', [])
+                is_sub = itm.get('is_sub', False)
+
                 for col_idx, cell in enumerate(cells):
                     val = cell.get('val', '')
                     c_type = cell.get('type', 'text')
@@ -191,10 +209,12 @@ class MatiaStockPlanningController(http.Controller):
                                 num_val = 0
                         except:
                             num_val = 0
-                        worksheet.write(row, col_idx, num_val, cell_num_format)
+                        fmt = cell_sub_num_format if is_sub else cell_num_format
+                        worksheet.write(row, col_idx, num_val, fmt)
                     else:
                         text_val = '' if val in [False, None] else str(val)
-                        worksheet.write(row, col_idx, text_val, cell_text_format)
+                        fmt = cell_sub_text_format if is_sub else cell_text_format
+                        worksheet.write(row, col_idx, text_val, fmt)
 
                     val_str = str(val if val not in [False, None] else (0 if c_type == 'number' else ''))
                     if len(val_str) + 3 > col_widths[col_idx]:

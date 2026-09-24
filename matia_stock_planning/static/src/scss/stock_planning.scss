@@ -544,7 +544,7 @@
         display: inline-block;
     }
 
-    /* Sub-assembly BOM Accordion & Table */
+    /* Sub-assembly BOM Accordion & Table Rows */
     .msp-bom-spacer {
         display: inline-block;
         width: 14px;
@@ -574,55 +574,40 @@
         }
     }
 
-    tr.sub-bom-header-row {
+    tr.sub-bom-row {
         background-color: #f8fafc;
+        border-left: 3px solid #38bdf8;
+        transition: background-color 0.15s ease;
 
-        .sub-bom-wrapper {
-            margin: 0.25rem 0.5rem 0.75rem 2.5rem;
-            background: #ffffff;
-            border: 1px solid #cbd5e1;
-            border-left: 4px solid #0284c7;
-            border-radius: 6px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
-            overflow: hidden;
+        &:hover {
+            background-color: #f1f5f9 !important;
+        }
 
-            .sub-bom-header {
-                background: #f1f5f9;
-                padding: 0.5rem 0.85rem;
-                font-size: 0.825rem;
-                border-bottom: 1px solid #e2e8f0;
-            }
+        td {
+            font-size: 0.8rem !important;
+            padding: 0.45rem 0.85rem !important;
+            background-color: transparent !important;
 
-            table.msp-sub-table {
-                thead {
-                    background: #f8fafc;
-                    th {
-                        font-size: 0.75rem;
-                        color: #64748b;
-                        font-weight: 600;
-                        padding: 0.4rem 0.6rem;
-                        border-top: none;
-                        border-bottom: 1px solid #e2e8f0;
-                    }
+            &.td-sub-product {
+                display: flex;
+                align-items: center;
+
+                .sub-bom-indent {
+                    display: inline-block;
+                    width: 24px;
+                    flex-shrink: 0;
                 }
 
-                tbody {
-                    tr.sub-bom-item-row {
-                        &:hover {
-                            background-color: #f8fafc;
-                        }
+                .sub-tree-icon {
+                    color: #0284c7;
+                    font-size: 0.8rem;
+                    flex-shrink: 0;
+                }
 
-                        td {
-                            padding: 0.35rem 0.6rem;
-                            font-size: 0.8rem;
-                            vertical-align: middle;
-                            border-top: 1px solid #f1f5f9;
-
-                            &.td-sub-name {
-                                text-align: left;
-                            }
-                        }
-                    }
+                .sub-prod-code {
+                    color: #0369a1;
+                    font-weight: 600;
+                    margin-right: 0.35rem;
                 }
             }
         }

@@ -277,14 +277,19 @@ class MatiaStockPlanning(models.AbstractModel):
         }
 
     @api.model
-    def get_sub_bom_details(self, product_id, include_tr=True, include_usa=True):
+    def get_sub_bom_details(self, product_id, parent_bom_qty=1.0, dynamic_targets=None, include_tr=True, include_usa=True):
         """
         Fetches the Bill of Materials (BOM) components and their current stock levels
-        for a specific sub-assembly product.
+        for a specific sub-assembly product, scaled to the main device requirements.
         """
         product = self.env['product.product'].browse(product_id)
         if not product.exists():
             return {'has_bom': False, 'message': 'Product not found'}
+
+        if dynamic_targets is None:
+            dynamic_targets = []
+        dynamic_targets = [int(t) for t in dynamic_targets if str(t).isdigit() and int(t) > 0][:3]
+        parent_bom_qty = float(parent_bom_qty or 1.0)
 
         # Find BOM for this product
         bom = self.env['mrp.bom'].search([
@@ -336,12 +341,18 @@ class MatiaStockPlanning(models.AbstractModel):
         for line in bom.bom_line_ids:
             p = line.product_id
             sub_product_ids.add(p.id)
+            sub_qty = float(line.product_qty or 1.0)
+            effective_qty = sub_qty * parent_bom_qty
+            eff_clean = int(effective_qty) if effective_qty.is_integer() else round(effective_qty, 3)
+
             lines_list.append({
                 'product_id': p.id,
                 'product_code': p.default_code or '',
                 'product_name': p.name or '',
                 'display_name': p.display_name or p.name,
-                'bom_qty': line.product_qty or 1.0,
+                'sub_bom_qty': sub_qty,
+                'parent_bom_qty': parent_bom_qty,
+                'bom_qty': eff_clean,
                 'uom_name': _UOM_NAME_MAP.get(line.product_uom_id.name or '', line.product_uom_id.name or 'Units'),
                 'has_bom': bool(p.product_tmpl_id.bom_ids),
             })
@@ -377,31 +388,62 @@ class MatiaStockPlanning(models.AbstractModel):
                     pid = nq['product_id'][0]
                     product_ncr[pid] = float(nq.get('quantity') or 0.0)
 
-        # 4. Attach stock and producible capacity
+        # 4. Attach stock and producible device capacity
         min_producible = 999999
         bottleneck_product = "-"
 
         for item in lines_list:
             pid = item['product_id']
-            b_qty = item['bom_qty']
+            b_qty = float(item['bom_qty']) # Effective qty per 1 device
             s_qty = product_stock.get(pid, 0.0)
             n_qty = product_ncr.get(pid, 0.0)
 
             if b_qty > 0:
-                max_sub = math.floor(s_qty / b_qty)
-                if max_sub < 0:
-                    max_sub = 0
+                max_dev = math.floor(s_qty / b_qty)
+                if max_dev < 0:
+                    max_dev = 0
             else:
-                max_sub = 0
+                max_dev = 0
+
+            # Requirement for 20 devices: (20 * bom_qty) - stock_qty
+            needed_20 = (20.0 * b_qty) - s_qty
+            if needed_20 <= 0:
+                req_20_status = 'OK'
+                req_20_val = 0
+            else:
+                req_20_status = 'NEED'
+                req_20_val = int(math.ceil(needed_20))
+
+            # Dynamic columns
+            dynamic_needs = {}
+            for target in dynamic_targets:
+                needed_target = (float(target) * b_qty) - s_qty
+                if needed_target <= 0:
+                    dynamic_needs[str(target)] = {
+                        'status': 'OK',
+                        'val': 0,
+                        'text': 'OK'
+                    }
+                else:
+                    c_val = int(math.ceil(needed_target))
+                    dynamic_needs[str(target)] = {
+                        'status': 'NEED',
+                        'val': c_val,
+                        'text': str(c_val)
+                    }
 
             s_clean = float(s_qty or 0.0)
             n_clean = float(n_qty or 0.0)
             item['stock_qty'] = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
             item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
-            item['max_producible'] = max_sub
+            item['max_devices'] = max_dev
+            item['req_20_status'] = req_20_status
+            item['req_20_val'] = req_20_val
+            item['req_20_text'] = 'OK' if req_20_status == 'OK' else str(req_20_val)
+            item['dynamic_needs'] = dynamic_needs
 
-            if max_sub < min_producible:
-                min_producible = max_sub
+            if max_dev < min_producible:
+                min_producible = max_dev
                 bottleneck_product = item['display_name']
 
         if min_producible == 999999:
@@ -413,6 +455,7 @@ class MatiaStockPlanning(models.AbstractModel):
             'bom_name': bom.display_name,
             'product_id': product.id,
             'product_name': product.display_name,
+            'parent_bom_qty': parent_bom_qty,
             'items': lines_list,
             'min_producible': min_producible,
             'bottleneck_product': bottleneck_product,

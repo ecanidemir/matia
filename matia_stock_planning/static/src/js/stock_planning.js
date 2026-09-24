@@ -22,6 +22,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             'input .msp-input-search': '_onSearchInput',
             'click .msp-btn-sub-bom': '_onToggleSubBom',
             'click .msp-clickable-prod': '_onProductClick',
+            'click .msp-btn-expand-all': '_onExpandAllBoms',
+            'click .msp-btn-collapse-all': '_onCollapseAllBoms',
         },
 
         init: function (parent, action) {
@@ -273,9 +275,10 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             ev.preventDefault();
             var $target = $(ev.currentTarget);
             var prodId = $target.data('product-id');
+            var bomQty = parseFloat($target.data('bom-qty') || 1.0);
             var $btn = $target.closest('td').find('.msp-btn-sub-bom');
             if ($btn.length) {
-                this._toggleSubBomForProduct(prodId, $btn);
+                this._toggleSubBomForProduct(prodId, bomQty, $btn);
             }
         },
 
@@ -284,26 +287,27 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             ev.stopPropagation();
             var $btn = $(ev.currentTarget);
             var prodId = $btn.data('product-id');
-            this._toggleSubBomForProduct(prodId, $btn);
+            var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
+            this._toggleSubBomForProduct(prodId, bomQty, $btn);
         },
 
-        _toggleSubBomForProduct: function (prodId, $btn) {
+        _toggleSubBomForProduct: function (prodId, bomQty, $btn) {
             var self = this;
             var $row = $btn.closest('tr.item-row');
-            var $existingSubRow = this.$('tr.sub-bom-header-row[data-parent-id="' + prodId + '"]');
+            var $existingSubRows = this.$('tr.sub-bom-row[data-parent-id="' + prodId + '"]');
 
-            if ($existingSubRow.length) {
+            if ($existingSubRows.length) {
                 // Toggle visibility if already rendered
-                if ($existingSubRow.is(':visible')) {
-                    $existingSubRow.hide();
+                if ($existingSubRows.is(':visible')) {
+                    $existingSubRows.hide();
                     $btn.removeClass('expanded');
                     delete this.expanded_boms[prodId];
                 } else {
-                    $existingSubRow.show();
+                    $existingSubRows.show();
                     $btn.addClass('expanded');
                     this.expanded_boms[prodId] = true;
                 }
-                return;
+                return Promise.resolve();
             }
 
             // Otherwise, fetch sub-BOM details from server (or cache)
@@ -317,12 +321,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     method: 'get_sub_bom_details',
                     kwargs: {
                         product_id: parseInt(prodId, 10),
+                        parent_bom_qty: bomQty || 1.0,
+                        dynamic_targets: this.dynamic_targets,
                         include_tr: this.include_tr,
                         include_usa: this.include_usa,
                     }
                 });
 
-            fetchPromise.then(function (result) {
+            return fetchPromise.then(function (result) {
                 $btn.find('.msp-bom-arrow').removeClass('fa-spinner fa-spin').addClass('fa-caret-right');
 
                 if (!result || !result.has_bom) {
@@ -338,12 +344,11 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 self.sub_bom_cache[prodId] = result;
                 self.expanded_boms[prodId] = true;
 
-                // Render Sub-BOM rows
-                var colspan = self.get_total_columns_count();
+                // Render Sub-BOM rows (inline matching table columns)
                 var subRowHtml = QWeb.render('MatiaStockPlanning.SubBomRows', {
+                    widget: self,
                     data: result,
                     parent_id: prodId,
-                    colspan: colspan,
                 });
 
                 $row.after(subRowHtml);
@@ -355,6 +360,42 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     message: error.message || _t("Could not load sub-assembly BOM components."),
                     type: 'danger'
                 });
+            });
+        },
+
+        _onExpandAllBoms: function (ev) {
+            ev.preventDefault();
+            var self = this;
+            var buttons = this.$('.msp-btn-sub-bom:not(.expanded)').toArray();
+            if (!buttons.length) {
+                return;
+            }
+
+            var promises = buttons.map(function (btnEl) {
+                var $btn = $(btnEl);
+                var prodId = $btn.data('product-id');
+                var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
+                return self._toggleSubBomForProduct(prodId, bomQty, $btn);
+            });
+
+            Promise.all(promises).then(function () {
+                self.displayNotification({
+                    title: _t("Expanded"),
+                    message: _t("All available sub-assembly BOMs have been expanded."),
+                    type: 'success'
+                });
+            });
+        },
+
+        _onCollapseAllBoms: function (ev) {
+            ev.preventDefault();
+            this.$('tr.sub-bom-row').hide();
+            this.$('.msp-btn-sub-bom').removeClass('expanded');
+            this.expanded_boms = {};
+            this.displayNotification({
+                title: _t("Collapsed"),
+                message: _t("All sub-assembly BOMs have been collapsed."),
+                type: 'info'
             });
         },
 
@@ -424,7 +465,56 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                         }
                     }
 
-                    grpItems.push({ cells: cells });
+                    grpItems.push({ cells: cells, is_sub: false });
+
+                    // If this item has an expanded sub-BOM, export sub-components directly beneath it
+                    if (self.expanded_boms[item.product_id] && self.sub_bom_cache[item.product_id]) {
+                        var subData = self.sub_bom_cache[item.product_id];
+                        for (var sIdx = 0; sIdx < subData.items.length; sIdx++) {
+                            var subItem = subData.items[sIdx];
+                            var subCells = [];
+
+                            // Sub Part Code (indented)
+                            subCells.push({ val: '    ' + (subItem.product_code || ''), type: 'text' });
+                            // Sub Part Name (indented)
+                            subCells.push({ val: '    ↳ ' + (subItem.product_name || ''), type: 'text' });
+
+                            // Usage Qty
+                            if (self.show_bom_qty) {
+                                subCells.push({ val: subItem.bom_qty + ' ' + (subItem.uom_name || ''), type: 'text' });
+                            }
+                            // Stock
+                            var subSVal = (subItem.stock_qty !== undefined && subItem.stock_qty !== null && subItem.stock_qty !== false) ? subItem.stock_qty : 0;
+                            subCells.push({ val: subSVal, type: 'number' });
+                            // NCR
+                            var subNVal = (subItem.ncr_qty !== undefined && subItem.ncr_qty !== null && subItem.ncr_qty !== false) ? subItem.ncr_qty : 0;
+                            subCells.push({ val: subNVal, type: 'number' });
+                            // Producible Devices
+                            var subDVal = (subItem.max_devices !== undefined && subItem.max_devices !== null && subItem.max_devices !== false) ? subItem.max_devices : 0;
+                            subCells.push({ val: subDVal, type: 'number' });
+                            // 20 Devices Needed
+                            if (subItem.req_20_status === 'OK') {
+                                subCells.push({ val: 'OK', type: 'ok' });
+                            } else {
+                                subCells.push({ val: subItem.req_20_val, type: 'need' });
+                            }
+
+                            // Dynamic Targets
+                            for (var dt = 0; dt < self.dynamic_targets.length; dt++) {
+                                var dtTarget = self.dynamic_targets[dt];
+                                var subDynObj = subItem.dynamic_needs[dtTarget.toString()];
+                                if (subDynObj && subDynObj.status === 'OK') {
+                                    subCells.push({ val: 'OK', type: 'ok' });
+                                } else if (subDynObj) {
+                                    subCells.push({ val: subDynObj.val, type: 'need' });
+                                } else {
+                                    subCells.push({ val: '-', type: 'text' });
+                                }
+                            }
+
+                            grpItems.push({ cells: subCells, is_sub: true });
+                        }
+                    }
                 }
 
                 exportGroups.push({

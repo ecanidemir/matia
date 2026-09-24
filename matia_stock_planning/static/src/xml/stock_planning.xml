@@ -41,6 +41,13 @@
 
                 <!-- Right: View & Dynamic Column Tools -->
                 <div class="msp-tool-buttons">
+                    <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs">
+                        <i class="fa fa-plus-square-o mr-1"></i> Expand All BOMs
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm msp-btn-collapse-all" title="Collapse all sub-assembly BOMs">
+                        <i class="fa fa-minus-square-o mr-1"></i> Collapse All BOMs
+                    </button>
+
                     <button class="btn btn-secondary btn-sm msp-btn-toggle-bom" t-att-title="widget.show_bom_qty ? 'Hide Usage Qty' : 'Show Usage Qty'">
                         <i t-attf-class="fa #{widget.show_bom_qty ? 'fa-eye-slash' : 'fa-eye'} mr-1"></i>
                         <span t-if="widget.show_bom_qty">Hide Usage Qty</span>
@@ -205,6 +212,7 @@
                                                 <button type="button" class="btn btn-sm btn-link msp-btn-sub-bom p-0 mr-1 text-primary"
                                                         t-att-data-product-id="item.product_id"
                                                         t-att-data-product-name="item.display_name"
+                                                        t-att-data-bom-qty="item.bom_qty"
                                                         title="Click to view sub-assembly BOM components">
                                                     <i class="fa fa-caret-right msp-bom-arrow"></i>
                                                 </button>
@@ -215,6 +223,7 @@
                                             <span t-if="item.product_code" class="prod-code">[<t t-esc="item.product_code"/>]</span>
                                             <span class="prod-name" t-att-class="item.has_bom ? 'cursor-pointer msp-clickable-prod' : ''"
                                                   t-att-data-product-id="item.product_id"
+                                                  t-att-data-bom-qty="item.bom_qty"
                                                   t-att-title="item.has_bom ? 'Click to show BOM components' : ''">
                                                 <t t-esc="item.product_name"/>
                                             </span>
@@ -291,76 +300,80 @@
         </div>
     </t>
 
-    <!-- Sub-assembly BOM Component Rows Template -->
+    <!-- Sub-assembly BOM Component Rows Template (Matches Main Table Columns Exactly) -->
     <t t-name="MatiaStockPlanning.SubBomRows">
-        <tr class="sub-bom-header-row" t-att-data-parent-id="parent_id">
-            <td t-att-colspan="colspan" class="p-0">
-                <div class="sub-bom-wrapper">
-                    <div class="sub-bom-header">
-                        <div class="d-flex align-items-center justify-content-between">
-                            <div>
-                                <i class="fa fa-sitemap mr-1 text-primary"></i>
-                                <strong>BOM Components:</strong> <span class="text-dark font-weight-bold"><t t-esc="data.bom_name"/></span>
-                                <span class="badge badge-info ml-2"><t t-esc="data.total_items"/> Parts</span>
-                            </div>
-                            <div class="text-muted" style="font-size: 0.775rem;">
-                                Producible Sub-Assemblies:
-                                <strong t-attf-class="#{data.min_producible &lt;= 0 ? 'text-danger' : 'text-success'}">
-                                    <t t-esc="data.min_producible"/> Units
-                                </strong>
-                                <span class="ml-2">| Bottleneck: <t t-esc="data.bottleneck_product"/></span>
-                            </div>
-                        </div>
-                    </div>
-                    <table class="table table-sm msp-sub-table mb-0">
-                        <thead>
-                            <tr>
-                                <th class="th-sub-name" style="width: 45%;">Sub Component (Code &amp; Name)</th>
-                                <th class="text-center" style="width: 15%;">Usage Qty</th>
-                                <th class="text-center" style="width: 15%;">Net Stock</th>
-                                <th class="text-center" style="width: 10%;">NCR</th>
-                                <th class="text-center" style="width: 15%;">Producible</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <t t-foreach="data.items" t-as="sub_item">
-                                <tr class="sub-bom-item-row">
-                                    <td class="td-sub-name">
-                                        <i class="fa fa-level-up fa-rotate-90 mr-2 text-muted" style="font-size: 0.75rem;"></i>
-                                        <span t-if="sub_item.product_code" class="text-primary font-weight-bold mr-1">[<t t-esc="sub_item.product_code"/>]</span>
-                                        <span><t t-esc="sub_item.product_name"/></span>
-                                    </td>
-                                    <td class="text-center">
-                                        <t t-esc="sub_item.bom_qty"/> <small class="text-muted"><t t-esc="sub_item.uom_name"/></small>
-                                    </td>
-                                    <td class="text-center font-weight-bold">
-                                        <t t-if="sub_item.stock_qty &lt;= 0">
-                                            <span class="stock-zero">0</span>
-                                        </t>
-                                        <t t-else="">
-                                            <t t-esc="sub_item.stock_qty"/>
-                                        </t>
-                                    </td>
-                                    <td class="text-center">
-                                        <span t-attf-class="ncr-pill #{sub_item.ncr_qty &gt; 0 ? 'ncr-has-stock' : ''}">
-                                            <t t-esc="sub_item.ncr_qty"/>
-                                        </span>
-                                    </td>
-                                    <td class="text-center">
-                                        <t t-if="sub_item.max_producible &lt;= 0">
-                                            <span class="dev-badge dev-critical">0</span>
-                                        </t>
-                                        <t t-else="">
-                                            <span class="dev-normal"><t t-esc="sub_item.max_producible"/></span>
-                                        </t>
-                                    </td>
-                                </tr>
-                            </t>
-                        </tbody>
-                    </table>
-                </div>
-            </td>
-        </tr>
+        <t t-foreach="data.items" t-as="item">
+            <tr class="item-row sub-bom-row" t-att-data-parent-id="parent_id">
+                <!-- Part Code & Name (Indented with sub-tree icon) -->
+                <td class="td-product td-sub-product">
+                    <span class="sub-bom-indent"></span>
+                    <i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>
+                    <span t-if="item.product_code" class="prod-code sub-prod-code">[<t t-esc="item.product_code"/>]</span>
+                    <span class="prod-name"><t t-esc="item.product_name"/></span>
+                </td>
+
+                <!-- Usage Qty: per device (with breakdown if parent qty > 1) -->
+                <td t-if="widget.show_bom_qty" class="td-bom-qty">
+                    <span class="font-weight-bold"><t t-esc="item.bom_qty"/></span> <small class="text-muted"><t t-esc="item.uom_name"/></small>
+                    <t t-if="item.parent_bom_qty &gt; 1">
+                        <small class="text-muted d-block" style="font-size:0.7rem;">(<t t-esc="item.sub_bom_qty"/> × <t t-esc="item.parent_bom_qty"/>)</small>
+                    </t>
+                </td>
+
+                <!-- Net Stock: 0 in red, otherwise plain -->
+                <td class="td-stock">
+                    <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
+                    <t t-if="s_val &lt;= 0">
+                        <span class="stock-zero">0</span>
+                    </t>
+                    <t t-else="">
+                        <t t-esc="s_val"/>
+                    </t>
+                </td>
+
+                <!-- NCR Storage -->
+                <td class="td-ncr">
+                    <t t-set="ncr_val" t-value="(item.ncr_qty !== undefined &amp;&amp; item.ncr_qty !== null &amp;&amp; item.ncr_qty !== false) ? item.ncr_qty : 0"/>
+                    <span t-attf-class="ncr-pill #{ncr_val &gt; 0 ? 'ncr-has-stock' : ''}" t-att-title="ncr_val &gt; 0 ? ncr_val + ' units available in NCR' : 'None in NCR'">
+                        <t t-esc="ncr_val"/>
+                    </span>
+                </td>
+
+                <!-- Producible Devices -->
+                <td class="td-max-dev">
+                    <t t-if="item.max_devices &lt;= 0">
+                        <span class="dev-badge dev-critical">0</span>
+                    </t>
+                    <t t-else="">
+                        <span class="dev-normal"><t t-esc="item.max_devices"/></span>
+                    </t>
+                </td>
+
+                <!-- 20 Devices Needed -->
+                <td class="td-req td-req-20">
+                    <t t-if="item.req_20_status == 'OK'">
+                        <span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>
+                    </t>
+                    <t t-else="">
+                        <span class="badge-req-need"><t t-esc="item.req_20_val"/></span>
+                    </t>
+                </td>
+
+                <!-- Dynamic Target Columns -->
+                <t t-foreach="widget.dynamic_targets" t-as="target">
+                    <t t-set="dyn_need" t-value="item.dynamic_needs[target.toString()]"/>
+                    <td class="td-req td-dynamic">
+                        <t t-if="dyn_need and dyn_need.status == 'OK'">
+                            <span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>
+                        </t>
+                        <t t-elif="dyn_need">
+                            <span class="badge-req-need"><t t-esc="dyn_need.val"/></span>
+                        </t>
+                        <t t-else="">-</t>
+                    </td>
+                </t>
+            </tr>
+        </t>
     </t>
 
 </templates>
