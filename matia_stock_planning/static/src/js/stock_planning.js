@@ -480,6 +480,11 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 var grpKey = $btn.closest('tr.item-row').data('group');
                 var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
 
+                // Skip products whose group is currently hidden
+                if (self.hidden_groups[grpKey]) {
+                    return;
+                }
+
                 if (self.$('tr.sub-bom-row[data-parent-id="' + prodId + '"]').length) {
                     // Already rendered — just show if hidden
                     toShow.push({ $btn: $btn, prodId: prodId });
