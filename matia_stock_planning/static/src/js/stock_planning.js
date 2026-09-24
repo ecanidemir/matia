@@ -309,8 +309,25 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.dynamic_targets.push(target);
             this.dynamic_targets.sort(function (a, b) { return a - b; });
 
+            // Invalidate sub-BOM cache and track open sub-BOMs for auto-re-expansion
+            var openBomIds = Object.keys(this.expanded_boms).filter(function (pid) {
+                return self.expanded_boms[pid];
+            });
+            this.sub_bom_cache = {};
+
             this._fetchPlanningData().then(function () {
                 self._updateView();
+                // Auto re-expand previously opened sub-BOMs with fresh dynamic column values
+                if (openBomIds.length) {
+                    openBomIds.forEach(function (pid) {
+                        var $btn = self.$('.msp-btn-sub-bom[data-product-id="' + pid + '"]');
+                        if ($btn.length) {
+                            var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
+                            var grpKey = $btn.closest('tr.item-row').data('group');
+                            self._toggleSubBomForProduct(parseInt(pid, 10), bomQty, grpKey, $btn);
+                        }
+                    });
+                }
             });
         },
 
@@ -333,9 +350,24 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 this.sort_col = null;
             }
 
+            var openBomIds = Object.keys(this.expanded_boms).filter(function (pid) {
+                return self.expanded_boms[pid];
+            });
+            this.sub_bom_cache = {};
+
             var self = this;
             this._fetchPlanningData().then(function () {
                 self._updateView();
+                if (openBomIds.length) {
+                    openBomIds.forEach(function (pid) {
+                        var $btn = self.$('.msp-btn-sub-bom[data-product-id="' + pid + '"]');
+                        if ($btn.length) {
+                            var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
+                            var grpKey = $btn.closest('tr.item-row').data('group');
+                            self._toggleSubBomForProduct(parseInt(pid, 10), bomQty, grpKey, $btn);
+                        }
+                    });
+                }
             });
         },
 
@@ -418,6 +450,21 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this._toggleSubBomForProduct(prodId, bomQty, grpKey, $btn);
         },
 
+        // Helper: Validate sub-BOM cache has all current dynamic targets
+        _isSubBomCacheValid: function (prodId) {
+            var cached = this.sub_bom_cache[prodId];
+            if (!cached || !cached.items) return false;
+            for (var i = 0; i < this.dynamic_targets.length; i++) {
+                var t = this.dynamic_targets[i].toString();
+                for (var j = 0; j < cached.items.length; j++) {
+                    if (!cached.items[j].dynamic_needs || !(t in cached.items[j].dynamic_needs)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        },
+
         _toggleSubBomForProduct: function (prodId, bomQty, grpKey, $btn) {
             var self = this;
             var $row = $btn.closest('tr.item-row');
@@ -439,7 +486,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             $btn.addClass('expanded');
             $btn.find('.msp-bom-arrow').removeClass('fa-caret-right').addClass('fa-spinner fa-spin');
 
-            var fetchPromise = this.sub_bom_cache[prodId]
+            var cacheValid = this._isSubBomCacheValid(prodId);
+            var fetchPromise = cacheValid
                 ? Promise.resolve(this.sub_bom_cache[prodId])
                 : this._rpc({
                     model: 'matia.stock.planning',
@@ -532,9 +580,9 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 return;
             }
 
-            // PERFORMANCE: Batch fetch all uncached products in one RPC call
-            var uncachedIds = toFetch.filter(function (f) { return !self.sub_bom_cache[f.prodId]; });
-            var cachedFetch = toFetch.filter(function (f) { return !!self.sub_bom_cache[f.prodId]; });
+            // PERFORMANCE: Batch fetch all uncached/invalid products in one RPC call
+            var uncachedIds = toFetch.filter(function (f) { return !self._isSubBomCacheValid(f.prodId); });
+            var cachedFetch = toFetch.filter(function (f) { return self._isSubBomCacheValid(f.prodId); });
 
             // Render already-cached ones immediately
             cachedFetch.forEach(function (f) {
@@ -660,7 +708,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             if (this.show_bom_qty) {
                 headers.push('Usage Qty');
             }
-            headers.push('Net Stock');
+            headers.push('On Hand (incl. reserved)');
             if (this.show_reserved) {
                 headers.push('Reserved');
             }
@@ -790,7 +838,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var payload = {
                 headers: headers,
                 groups: exportGroups,
-                filter_info: filterInfo.join(' + ') + ' [Net Stock: Total On-Hand | Reserved deducted in calculations | Excl. NCR]',
+                filter_info: filterInfo.join(' + ') + ' [On Hand: incl. reserved | Reserved & NCR excluded in capacity]',
             };
 
             var form = document.createElement('form');

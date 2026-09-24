@@ -192,12 +192,20 @@
         }
     }
 
-    /* KPI Summary Cards */
+    /* KPI Summary Cards (4 BOM Groups) */
     .msp-kpi-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+        grid-template-columns: repeat(4, 1fr);
         gap: 0.85rem;
         margin-bottom: 1.25rem;
+
+        @media (max-width: 991px) {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        @media (max-width: 576px) {
+            grid-template-columns: 1fr;
+        }
 
         .msp-kpi-card {
             background: #ffffff;
@@ -220,7 +228,6 @@
                 height: 100%;
             }
 
-            &.kpi-overall::before { background-color: #0284c7; }
             &.kpi-base::before    { background-color: #3b82f6; }
             &.kpi-outdoor::before { background-color: #10b981; }
             &.kpi-seat::before    { background-color: #8b5cf6; }
@@ -381,8 +388,8 @@
                 position: sticky;
                 top: 0;
                 z-index: 10;
-                background-color: #0f172a;
-                color: #ffffff;
+                background-color: #0f172a !important;
+                color: #ffffff !important;
 
                 th {
                     font-size: 0.8rem;
@@ -393,37 +400,75 @@
                     text-align: center;
                     vertical-align: middle;
                     white-space: nowrap;
+                    background-color: #0f172a !important;
+                    color: #ffffff !important;
+                    user-select: none;
+                    -webkit-user-select: none;
+
+                    &:focus,
+                    &:active {
+                        background-color: #0f172a !important;
+                        color: #ffffff !important;
+                        outline: none !important;
+                        box-shadow: none !important;
+                    }
 
                     &.th-product {
                         text-align: left;
                         min-width: 260px;
                     }
 
-                    /* Sortable column headers */
+                    /* Sortable column headers - prevent turning white on click/focus */
                     &.msp-th-sortable {
                         cursor: pointer;
                         user-select: none;
-                        transition: background-color 0.15s ease;
+                        -webkit-user-select: none;
+                        transition: background-color 0.15s ease, color 0.15s ease;
+                        background-color: #0f172a !important;
+                        color: #ffffff !important;
 
                         &:hover {
-                            background-color: #1e3a5f;
+                            background-color: #1e293b !important;
+                            color: #ffffff !important;
+                        }
+
+                        &:active,
+                        &:focus {
+                            background-color: #334155 !important;
+                            color: #ffffff !important;
+                            outline: none !important;
+                            box-shadow: none !important;
                         }
 
                         .msp-sort-icon {
                             font-size: 0.7rem;
-                            opacity: 0.5;
+                            opacity: 0.75;
                             vertical-align: middle;
+                            color: #ffffff !important;
                         }
 
                         &.th-dynamic .msp-sort-icon {
-                            color: #c7d2fe;
+                            color: #c7d2fe !important;
                         }
                     }
 
                     &.th-dynamic {
-                        background-color: #1e1b4b;
-                        color: #c7d2fe;
+                        background-color: #1e1b4b !important;
+                        color: #c7d2fe !important;
                         border-left: 1px solid #312e81;
+
+                        &:hover {
+                            background-color: #2e2a72 !important;
+                            color: #ffffff !important;
+                        }
+
+                        &:active,
+                        &:focus {
+                            background-color: #3730a3 !important;
+                            color: #ffffff !important;
+                            outline: none !important;
+                            box-shadow: none !important;
+                        }
 
                         .dyn-header-content {
                             display: inline-flex;
@@ -723,6 +768,94 @@
                     color: #0369a1;
                     font-weight: 600;
                     margin-right: 0.35rem;
+                }
+            }
+        }
+    }
+
+    /* Mobile & Responsive UX Enhancements */
+    @media (max-width: 991px) {
+        padding: 0.75rem 0.75rem 6rem 0.75rem !important; // Generous 6rem bottom padding
+        min-height: 100%;
+        height: auto;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+
+        .msp-header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.75rem;
+            padding: 1rem;
+
+            .msp-title-area {
+                h2 { font-size: 1.15rem; }
+            }
+
+            .msp-actions {
+                width: 100%;
+                justify-content: flex-end;
+            }
+        }
+
+        .msp-control-bar {
+            padding: 0.75rem 1rem;
+            gap: 0.75rem;
+
+            .msp-location-group,
+            .msp-button-group {
+                flex-wrap: wrap;
+                width: 100%;
+            }
+
+            .msp-add-col-inline {
+                flex-wrap: wrap;
+                width: 100%;
+
+                input.msp-col-target-input {
+                    width: 75px;
+                }
+            }
+        }
+
+        .msp-table-card {
+            border-radius: 8px;
+
+            .msp-table-search {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.5rem;
+                padding: 0.75rem;
+
+                .search-input-box {
+                    max-width: 100%;
+                    width: 100%;
+                }
+
+                .table-legend {
+                    flex-wrap: wrap;
+                    gap: 0.5rem;
+                    font-size: 0.7rem;
+                }
+            }
+
+            /* Eliminate nested scroll trap on mobile so full table and page scroll smoothly */
+            .table-responsive {
+                max-height: none !important;
+                overflow-y: visible !important;
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            table.msp-table {
+                thead th,
+                tbody td {
+                    padding: 0.5rem 0.6rem !important;
+                    font-size: 0.75rem !important;
+                }
+
+                thead th.th-product,
+                tbody td.td-product {
+                    min-width: 200px;
                 }
             }
         }

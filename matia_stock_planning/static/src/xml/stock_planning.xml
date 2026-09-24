@@ -11,7 +11,7 @@
                     <i class="fa fa-cubes"></i>
                     <div>
                         <h2 style="color: #ffffff !important; margin: 0; font-weight: 700;">TekRMD Device Capacity &amp; Stock Plan</h2>
-                        <p style="color: #cbd5e1 !important; margin: 0; font-size: 0.85rem;">Net Stock &amp; Production Requirement Analysis Based on BOMs</p>
+                        <p style="color: #cbd5e1 !important; margin: 0; font-size: 0.85rem;">Stock Capacity &amp; Production Requirement Analysis Based on BOMs</p>
                     </div>
                 </div>
                 <div class="msp-actions">
@@ -99,20 +99,8 @@
                 <small class="text-muted ml-2">(Max 3 columns, remaining: <t t-esc="3 - widget.dynamic_targets.length"/>)</small>
             </div>
 
-            <!-- 4. KPI Summary Cards -->
+            <!-- 4. KPI Summary Cards (4 Groups) -->
             <div class="msp-kpi-grid">
-                <!-- Overall Bottleneck -->
-                <div class="msp-kpi-card kpi-overall">
-                    <div class="kpi-info">
-                        <div class="kpi-title">Producible TekRMD</div>
-                        <div class="kpi-value text-primary"><t t-esc="widget.summary.overall_min_devices"/> Units</div>
-                        <div class="kpi-sub" t-att-title="'Bottleneck Part: ' + widget.summary.overall_bottleneck">
-                            Bottleneck: <t t-esc="widget.summary.overall_bottleneck"/>
-                        </div>
-                    </div>
-                    <div class="kpi-icon text-primary"><i class="fa fa-cogs"></i></div>
-                </div>
-
                 <!-- Base Bottleneck -->
                 <t t-set="base_grp" t-value="widget.get_group('base')"/>
                 <div class="msp-kpi-card kpi-base">
@@ -190,7 +178,7 @@
                         <span><span class="dot-ok"></span> OK = Stock Sufficient</span>
                         <span><span class="dot-need"></span> Red Number = Missing Parts for Target</span>
                         <span class="legend-note" style="color: #0369a1; background: #f0f9ff; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd; font-size: 0.72rem; font-weight: 500;">
-                            <i class="fa fa-info-circle mr-1"></i> Net Stock shows total on-hand stock; reserved quantities are deducted in capacity calculations
+                            <i class="fa fa-info-circle mr-1"></i> Reserved &amp; NCR quantities are excluded from capacity calculations
                         </span>
                         <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
                     </div>
@@ -208,8 +196,8 @@
                                     Usage Qty
                                     <i t-attf-class="fa ml-1 #{widget.sort_col == 'bom_qty' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
                                 </th>
-                                <th class="th-stock msp-th-sortable" data-sort-col="stock" title="Total on-hand stock. Note: reserved quantities are deducted from production capacity calculations.">
-                                    Net Stock
+                                <th class="th-stock msp-th-sortable" data-sort-col="stock" title="Total on-hand stock (includes reserved). Note: reserved and NCR quantities are excluded from device capacity calculations.">
+                                    On Hand <small class="text-white-50 ml-1" style="font-size:0.65rem; font-weight:400; opacity:0.85;">(incl. reserved)</small>
                                     <i t-attf-class="fa ml-1 #{widget.sort_col == 'stock' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
                                 </th>
                                 <th t-if="widget.show_reserved" class="th-reserved msp-th-sortable" data-sort-col="reserved">
@@ -309,9 +297,9 @@
                                             <t t-esc="item.bom_qty"/> <small class="text-muted"><t t-esc="item.uom_name"/></small>
                                         </td>
 
-                                        <!-- Net Stock (Total On Hand) -->
+                                        <!-- On Hand (Total Physical Stock) -->
                                         <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
-                                        <td class="td-stock" t-att-title="'Total On-Hand: ' + s_val + (item.reserved_qty ? ' (Reserved: ' + item.reserved_qty + ', Net Usable: ' + (item.avail_qty || 0) + ')' : '')">
+                                        <td class="td-stock" t-att-title="'Total On-Hand: ' + s_val + (item.reserved_qty ? ' (Reserved: ' + item.reserved_qty + ', Usable: ' + (item.avail_qty || 0) + ')' : '')">
                                             <t t-if="s_val &lt;= 0">
                                                 <span class="stock-zero">0</span>
                                             </t>
@@ -404,9 +392,9 @@
                     </t>
                 </td>
 
-                <!-- Net Stock (Total On Hand) -->
+                <!-- On Hand (Total Physical Stock) -->
                 <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
-                <td class="td-stock" t-att-title="'Total On-Hand: ' + s_val + (item.reserved_qty ? ' (Reserved: ' + item.reserved_qty + ', Net Usable: ' + (item.avail_qty || 0) + ')' : '')">
+                <td class="td-stock" t-att-title="'Total On-Hand: ' + s_val + (item.reserved_qty ? ' (Reserved: ' + item.reserved_qty + ', Usable: ' + (item.avail_qty || 0) + ')' : '')">
                     <t t-if="s_val &lt;= 0">
                         <span class="stock-zero">0</span>
                     </t>
