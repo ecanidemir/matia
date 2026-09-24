@@ -37,9 +37,10 @@ class MatiaStockPlanning(models.AbstractModel):
         # Accept at most 3 dynamic targets
         dynamic_targets = [int(t) for t in dynamic_targets if str(t).isdigit() and int(t) > 0][:3]
 
-        # 0. Multi-company context: ensure all company locations and quants are readable
-        all_companies = self.env['res.company'].sudo().search([])
-        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids)).sudo()
+        # 0. Multi-company context: include ALL companies (even inactive/archived ones)
+        # active_test=False ensures pasif/archived USA company is still queried
+        all_companies = self.env(context={'active_test': False})['res.company'].sudo().search([])
+        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids, active_test=False)).sudo()
 
         # 1. Identify locations
         all_locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
@@ -287,9 +288,10 @@ class MatiaStockPlanning(models.AbstractModel):
         Fetches the Bill of Materials (BOM) components and their current stock levels
         for a specific sub-assembly product, scaled to the main device requirements.
         """
-        # Multi-company context: ensure all company locations and quants are readable
-        all_companies = self.env['res.company'].sudo().search([])
-        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids)).sudo()
+        # Multi-company context: include ALL companies (even inactive/archived ones)
+        # active_test=False ensures pasif/archived USA company is still queried
+        all_companies = self.env(context={'active_test': False})['res.company'].sudo().search([])
+        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids, active_test=False)).sudo()
 
         product = env_sudo['product.product'].browse(product_id)
         if not product.exists():
