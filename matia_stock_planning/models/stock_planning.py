@@ -266,7 +266,9 @@ class MatiaStockPlanning(models.AbstractModel):
                 avail_clean = max(0.0, avail_qty)
                 avail_disp = int(avail_clean) if avail_clean.is_integer() else round(avail_clean, 2)
 
-                item['stock_qty'] = s_disp
+                item['total_stock_qty'] = s_disp
+                item['stock_qty'] = avail_disp
+                item['net_stock'] = avail_disp
                 item['reserved_qty'] = r_disp
                 item['avail_qty'] = avail_disp
                 item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
@@ -483,7 +485,9 @@ class MatiaStockPlanning(models.AbstractModel):
             avail_clean = max(0.0, avail_qty)
             avail_disp = int(avail_clean) if avail_clean.is_integer() else round(avail_clean, 2)
 
-            item['stock_qty'] = s_disp
+            item['total_stock_qty'] = s_disp
+            item['stock_qty'] = avail_disp
+            item['net_stock'] = avail_disp
             item['reserved_qty'] = r_disp
             item['avail_qty'] = avail_disp
             item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
