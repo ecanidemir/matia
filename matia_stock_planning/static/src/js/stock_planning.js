@@ -660,7 +660,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             if (this.show_bom_qty) {
                 headers.push('Usage Qty');
             }
-            headers.push('Net On Hand Stock');
+            headers.push('Net Stock (Incl. Reserved)');
             if (this.show_reserved) {
                 headers.push('Reserved');
             }
@@ -790,7 +790,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var payload = {
                 headers: headers,
                 groups: exportGroups,
-                filter_info: filterInfo.join(' + ') + ' [Excl. NCR]',
+                filter_info: filterInfo.join(' + ') + ' [Net Stock includes Reserved | Reserved deducted from requirements | Excl. NCR]',
             };
 
             var form = document.createElement('form');
