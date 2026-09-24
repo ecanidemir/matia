@@ -1,10 +1,41 @@
 /* Matia TekRMD Stock Planning Styles */
 
+/*
+ * Force Odoo wrapper containers to allow mobile touch-scroll.
+ * On mobile, .o_action_manager and .o_main_content can trap scroll.
+ */
+.o_action_manager,
+.o_main_content,
+.o_action_manager > .o_action,
+.o_action_manager .o_view_controller {
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
+}
+
+@media (max-width: 991px) {
+    /* Allow native mobile scroll by letting the page/body scroll instead of inner containers */
+    .o_action_manager {
+        overflow: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+    .o_main_content {
+        overflow: visible !important;
+    }
+    .o_action_manager > .o_action {
+        overflow: visible !important;
+        height: auto !important;
+        min-height: 100% !important;
+    }
+}
+
 .o_matia_stock_planning {
     display: flex;
     flex-direction: column;
+    /* Desktop: fill the action panel height and scroll internally */
     height: 100%;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
     background-color: #f8fafc;
     padding: 1.5rem;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -775,56 +806,98 @@
 
     /* Mobile & Responsive UX Enhancements */
     @media (max-width: 991px) {
-        padding: 0.75rem 0.75rem 6rem 0.75rem !important; // Generous 6rem bottom padding
-        min-height: 100%;
-        height: auto;
-        overflow-y: auto !important;
+        /* KEY FIX: Don't try to scroll inside ourselves — let Odoo's action container or body scroll.
+           height:auto + overflow-y:visible hands scroll control to the parent. */
+        height: auto !important;
+        min-height: 100% !important;
+        overflow-y: visible !important;
+        overflow-x: visible !important;
+        padding: 0.5rem 0.5rem 8rem 0.5rem !important;
         -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
 
         .msp-header {
             flex-direction: column;
             align-items: stretch;
-            gap: 0.75rem;
-            padding: 1rem;
+            gap: 0.65rem;
+            padding: 0.85rem;
+            margin-bottom: 0.85rem;
 
             .msp-title-area {
-                h2 { font-size: 1.15rem; }
+                h2 { font-size: 1.1rem; }
+                p { font-size: 0.78rem; }
             }
 
             .msp-actions {
                 width: 100%;
-                justify-content: flex-end;
+                flex-wrap: wrap;
+                justify-content: flex-start;
+                gap: 0.4rem;
+
+                .btn {
+                    font-size: 0.78rem;
+                    padding: 0.3rem 0.6rem;
+                }
             }
         }
 
         .msp-control-bar {
-            padding: 0.75rem 1rem;
-            gap: 0.75rem;
+            padding: 0.65rem 0.75rem;
+            gap: 0.5rem;
+            flex-wrap: wrap;
 
             .msp-location-group,
             .msp-button-group {
                 flex-wrap: wrap;
                 width: 100%;
+                gap: 0.35rem;
+            }
+
+            .btn {
+                font-size: 0.78rem;
+                padding: 0.3rem 0.55rem;
             }
 
             .msp-add-col-inline {
                 flex-wrap: wrap;
                 width: 100%;
+                gap: 0.35rem;
 
                 input.msp-col-target-input {
-                    width: 75px;
+                    width: 70px;
+                    font-size: 0.8rem;
                 }
             }
         }
 
+        .msp-kpi-grid {
+            grid-template-columns: repeat(2, 1fr) !important;
+            gap: 0.5rem;
+            margin-bottom: 0.85rem;
+
+            .msp-kpi-card {
+                padding: 0.7rem 0.85rem;
+
+                .kpi-info .kpi-value {
+                    font-size: 1.25rem;
+                }
+            }
+        }
+
+        .msp-dynamic-chips-bar {
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
         .msp-table-card {
             border-radius: 8px;
+            overflow: hidden;
 
             .msp-table-search {
                 flex-direction: column;
                 align-items: stretch;
                 gap: 0.5rem;
-                padding: 0.75rem;
+                padding: 0.65rem 0.75rem;
 
                 .search-input-box {
                     max-width: 100%;
@@ -833,31 +906,69 @@
 
                 .table-legend {
                     flex-wrap: wrap;
-                    gap: 0.5rem;
-                    font-size: 0.7rem;
+                    gap: 0.4rem;
+                    font-size: 0.68rem;
+
+                    .legend-note {
+                        width: 100%;
+                        font-size: 0.68rem !important;
+                    }
                 }
             }
 
-            /* Eliminate nested scroll trap on mobile so full table and page scroll smoothly */
+            /* Critical: remove the inner height cap and allow horizontal scroll only.
+               The page itself will scroll vertically (no nested vertical trap). */
             .table-responsive {
                 max-height: none !important;
+                height: auto !important;
                 overflow-y: visible !important;
                 overflow-x: auto !important;
                 -webkit-overflow-scrolling: touch;
+                touch-action: pan-x pan-y;
             }
 
             table.msp-table {
+                min-width: 600px; /* prevent table from collapsing too small */
+
                 thead th,
                 tbody td {
-                    padding: 0.5rem 0.6rem !important;
-                    font-size: 0.75rem !important;
+                    padding: 0.45rem 0.55rem !important;
+                    font-size: 0.73rem !important;
+                    white-space: nowrap;
                 }
 
                 thead th.th-product,
                 tbody td.td-product {
-                    min-width: 200px;
+                    min-width: 180px;
+                    max-width: 220px;
+                    white-space: normal;
+                    word-break: break-word;
+                }
+
+                /* Smaller sort icons on mobile */
+                .msp-sort-icon {
+                    display: none !important;
                 }
             }
+        }
+
+        /* Group row toggle buttons smaller on mobile */
+        .group-title-badge {
+            font-size: 0.8rem;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+    }
+
+    @media (max-width: 480px) {
+        padding: 0.35rem 0.35rem 8rem 0.35rem !important;
+
+        .msp-kpi-grid {
+            grid-template-columns: 1fr 1fr !important;
+        }
+
+        .msp-header .msp-title-area h2 {
+            font-size: 0.95rem;
         }
     }
 }
