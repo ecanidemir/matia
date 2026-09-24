@@ -3,6 +3,22 @@ import math
 from odoo import models, api, _
 from odoo.exceptions import UserError
 
+# Common UoM name translations (Odoo stores them in the language of the DB)
+_UOM_NAME_MAP = {
+    'Adet': 'Units',
+    'adet': 'Units',
+    'Birim': 'Units',
+    'birim': 'Units',
+    'Kg': 'kg',
+    'Metre': 'm',
+    'metre': 'm',
+    'Paket': 'Pack',
+    'paket': 'Pack',
+    'Set': 'Set',
+    'Takım': 'Set',
+    'takım': 'Set',
+}
+
 class MatiaStockPlanning(models.AbstractModel):
     _name = 'matia.stock.planning'
     _description = 'Matia TekRMD Device Capacity and Stock Planning'
@@ -126,7 +142,7 @@ class MatiaStockPlanning(models.AbstractModel):
                         'product_name': p.name or '',
                         'display_name': p.display_name or p.name,
                         'bom_qty': line.product_qty or 1.0,
-                        'uom_name': line.product_uom_id.name or 'Units',
+                        'uom_name': _UOM_NAME_MAP.get(line.product_uom_id.name or '', line.product_uom_id.name or 'Units'),
                     })
 
             groups_data.append({

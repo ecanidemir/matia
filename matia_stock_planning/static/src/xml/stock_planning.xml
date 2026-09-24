@@ -195,12 +195,15 @@
                                             <t t-esc="item.bom_qty"/> <small class="text-muted"><t t-esc="item.uom_name"/></small>
                                         </td>
 
-                                        <!-- Net Stock -->
+                                        <!-- Net Stock: 0 shown in red, otherwise plain -->
                                         <td class="td-stock">
-                                            <t t-if="item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false">
-                                                <t t-esc="item.stock_qty"/>
+                                            <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
+                                            <t t-if="s_val &lt;= 0">
+                                                <span class="stock-zero">0</span>
                                             </t>
-                                            <t t-else="">0</t>
+                                            <t t-else="">
+                                                <t t-esc="s_val"/>
+                                            </t>
                                         </td>
 
                                         <!-- NCR Quantity Info -->
