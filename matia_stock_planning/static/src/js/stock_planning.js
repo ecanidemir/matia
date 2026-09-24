@@ -20,6 +20,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             'click .chip-remove': '_onRemoveDynamicColumn',
             'click .btn-remove-dyn': '_onRemoveDynamicColumn',
             'input .msp-input-search': '_onSearchInput',
+            'click .msp-btn-sub-bom': '_onToggleSubBom',
+            'click .msp-clickable-prod': '_onProductClick',
         },
 
         init: function (parent, action) {
@@ -29,6 +31,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.show_bom_qty = true;
             this.dynamic_targets = [];
             this.groups = [];
+            this.sub_bom_cache = {};
+            this.expanded_boms = {};
             this.summary = {
                 overall_min_devices: 0,
                 overall_bottleneck: "-",
@@ -103,6 +107,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         _onRefresh: function (ev) {
             ev.preventDefault();
             var self = this;
+            this.sub_bom_cache = {};
+            this.expanded_boms = {};
             this._fetchPlanningData().then(function () {
                 self._updateView();
                 self.displayNotification({
@@ -129,6 +135,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
             this.include_tr = trChecked;
             this.include_usa = usaChecked;
+            this.sub_bom_cache = {};
+            this.expanded_boms = {};
 
             var self = this;
             this._fetchPlanningData().then(function () {
@@ -258,6 +266,95 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 } else {
                     $(this).show();
                 }
+            });
+        },
+
+        _onProductClick: function (ev) {
+            ev.preventDefault();
+            var $target = $(ev.currentTarget);
+            var prodId = $target.data('product-id');
+            var $btn = $target.closest('td').find('.msp-btn-sub-bom');
+            if ($btn.length) {
+                this._toggleSubBomForProduct(prodId, $btn);
+            }
+        },
+
+        _onToggleSubBom: function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var $btn = $(ev.currentTarget);
+            var prodId = $btn.data('product-id');
+            this._toggleSubBomForProduct(prodId, $btn);
+        },
+
+        _toggleSubBomForProduct: function (prodId, $btn) {
+            var self = this;
+            var $row = $btn.closest('tr.item-row');
+            var $existingSubRow = this.$('tr.sub-bom-header-row[data-parent-id="' + prodId + '"]');
+
+            if ($existingSubRow.length) {
+                // Toggle visibility if already rendered
+                if ($existingSubRow.is(':visible')) {
+                    $existingSubRow.hide();
+                    $btn.removeClass('expanded');
+                    delete this.expanded_boms[prodId];
+                } else {
+                    $existingSubRow.show();
+                    $btn.addClass('expanded');
+                    this.expanded_boms[prodId] = true;
+                }
+                return;
+            }
+
+            // Otherwise, fetch sub-BOM details from server (or cache)
+            $btn.addClass('expanded');
+            $btn.find('.msp-bom-arrow').removeClass('fa-caret-right').addClass('fa-spinner fa-spin');
+
+            var fetchPromise = this.sub_bom_cache[prodId]
+                ? Promise.resolve(this.sub_bom_cache[prodId])
+                : this._rpc({
+                    model: 'matia.stock.planning',
+                    method: 'get_sub_bom_details',
+                    kwargs: {
+                        product_id: parseInt(prodId, 10),
+                        include_tr: this.include_tr,
+                        include_usa: this.include_usa,
+                    }
+                });
+
+            fetchPromise.then(function (result) {
+                $btn.find('.msp-bom-arrow').removeClass('fa-spinner fa-spin').addClass('fa-caret-right');
+
+                if (!result || !result.has_bom) {
+                    $btn.removeClass('expanded');
+                    self.displayNotification({
+                        title: _t("No BOM Found"),
+                        message: _t("No Bill of Materials (BOM) found for this product."),
+                        type: 'info'
+                    });
+                    return;
+                }
+
+                self.sub_bom_cache[prodId] = result;
+                self.expanded_boms[prodId] = true;
+
+                // Render Sub-BOM rows
+                var colspan = self.get_total_columns_count();
+                var subRowHtml = QWeb.render('MatiaStockPlanning.SubBomRows', {
+                    data: result,
+                    parent_id: prodId,
+                    colspan: colspan,
+                });
+
+                $row.after(subRowHtml);
+            }).catch(function (error) {
+                $btn.removeClass('expanded');
+                $btn.find('.msp-bom-arrow').removeClass('fa-spinner fa-spin').addClass('fa-caret-right');
+                self.displayNotification({
+                    title: _t("Error Loading BOM"),
+                    message: error.message || _t("Could not load sub-assembly BOM components."),
+                    type: 'danger'
+                });
             });
         },
 
