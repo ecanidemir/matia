@@ -24,6 +24,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             'click .msp-clickable-prod': '_onProductClick',
             'click .msp-btn-expand-all': '_onExpandAllBoms',
             'click .msp-btn-collapse-all': '_onCollapseAllBoms',
+            'click .msp-btn-toggle-group': '_onToggleGroup',
         },
 
         init: function (parent, action) {
@@ -35,6 +36,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.groups = [];
             this.sub_bom_cache = {};
             this.expanded_boms = {};
+            this.hidden_groups = {};  // keys: group.key -> true when hidden
             this.summary = {
                 overall_min_devices: 0,
                 overall_bottleneck: "-",
@@ -389,7 +391,18 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
         _onCollapseAllBoms: function (ev) {
             ev.preventDefault();
-            this.$('tr.sub-bom-row').hide();
+            // Only collapse sub-BOMs in visible groups
+            var self = this;
+            this.$('tr.sub-bom-row').each(function () {
+                var $row = $(this);
+                var parentId = $row.data('parent-id');
+                // Find which group this row's parent item belongs to
+                var $parentRow = self.$('tr.item-row .msp-btn-sub-bom[data-product-id="' + parentId + '"]').closest('tr.item-row');
+                var grpKey = $parentRow.data('group');
+                if (!self.hidden_groups[grpKey]) {
+                    $row.hide();
+                }
+            });
             this.$('.msp-btn-sub-bom').removeClass('expanded');
             this.expanded_boms = {};
             this.displayNotification({
@@ -397,6 +410,33 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 message: _t("All sub-assembly BOMs have been collapsed."),
                 type: 'info'
             });
+        },
+
+        _onToggleGroup: function (ev) {
+            ev.preventDefault();
+            var $btn = $(ev.currentTarget);
+            var grpKey = $btn.data('group-key');
+            if (this.hidden_groups[grpKey]) {
+                // Show
+                delete this.hidden_groups[grpKey];
+                this.$('.item-row[data-group="' + grpKey + '"]').show();
+                this.$('.sub-bom-row[data-group="' + grpKey + '"]').show();
+                $btn.html('<i class="fa fa-eye-slash mr-1"></i>Hide');
+                $btn.removeClass('btn-outline-secondary').addClass('btn-outline-danger');
+            } else {
+                // Hide
+                this.hidden_groups[grpKey] = true;
+                this.$('.item-row[data-group="' + grpKey + '"]').hide();
+                // Also hide any expanded sub-bom rows whose parent item belongs to this group
+                var self = this;
+                Object.keys(this.expanded_boms).forEach(function (prodId) {
+                    if (self.$('tr.item-row[data-group="' + grpKey + '"] .msp-btn-sub-bom[data-product-id="' + prodId + '"]').length) {
+                        self.$('tr.sub-bom-row[data-parent-id="' + prodId + '"]').hide();
+                    }
+                });
+                $btn.html('<i class="fa fa-eye mr-1"></i>Show');
+                $btn.removeClass('btn-outline-danger').addClass('btn-outline-secondary');
+            }
         },
 
         _onExportExcel: function (ev) {
@@ -422,6 +462,12 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
             for (var g = 0; g < this.groups.length; g++) {
                 var grp = this.groups[g];
+
+                // Skip hidden groups in the export
+                if (this.hidden_groups[grp.key]) {
+                    continue;
+                }
+
                 var grpItems = [];
 
                 for (var itmIdx = 0; itmIdx < grp.items.length; itmIdx++) {

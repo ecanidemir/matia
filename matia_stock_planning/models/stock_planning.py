@@ -105,6 +105,14 @@ class MatiaStockPlanning(models.AbstractModel):
                 'preferred_id': 1738,
                 'names': ['TekRMD Seat Parts'],
             },
+            {
+                'key': 'screws',
+                'title': 'TekRMD Common Screws',
+                'badge': 'Screws',
+                'color_class': 'badge-secondary',
+                'preferred_id': 1736,
+                'names': ['TekRMD Common Screws'],
+            },
         ]
 
         all_product_ids = set()

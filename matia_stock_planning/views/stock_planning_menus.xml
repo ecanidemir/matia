@@ -15,19 +15,4 @@
               groups="base.group_user"
               sequence="10"/>
 
-    <!-- Inventory Menu: Device Capacity Plan (for stock users) -->
-    <menuitem id="menu_matia_stock_planning_root"
-              name="Device Capacity Plan"
-              parent="stock.menu_stock_root"
-              action="action_matia_stock_planning_dashboard"
-              groups="base.group_user"
-              sequence="15"/>
-
-    <!-- Inventory > Reporting: TekRMD Device Capacity (for stock users) -->
-    <menuitem id="menu_matia_stock_planning_report"
-              name="TekRMD Device Capacity"
-              parent="stock.menu_warehouse_report"
-              action="action_matia_stock_planning_dashboard"
-              groups="base.group_user"
-              sequence="25"/>
 </odoo>
