@@ -10,8 +10,8 @@
                 <div class="msp-title-area">
                     <i class="fa fa-cubes"></i>
                     <div>
-                        <h2>TekRMD Device Capacity &amp; Stock Plan</h2>
-                        <p>Net Stock &amp; Production Requirement Analysis Based on BOMs</p>
+                        <h2 style="color: #ffffff !important; margin: 0; font-weight: 700;">TekRMD Device Capacity &amp; Stock Plan</h2>
+                        <p style="color: #cbd5e1 !important; margin: 0; font-size: 0.85rem;">Net Stock &amp; Production Requirement Analysis Based on BOMs</p>
                     </div>
                 </div>
                 <div class="msp-actions">
