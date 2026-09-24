@@ -211,11 +211,14 @@
                                             </span>
                                         </td>
 
-                                        <!-- Producible Devices (>= 20 is completely green dev-good) -->
+                                        <!-- Producible Devices (Only 0 is red, others have no coloring) -->
                                         <td class="td-max-dev">
-                                            <span t-attf-class="dev-badge #{item.max_devices &lt; 20 ? 'dev-critical' : 'dev-good'}">
-                                                <t t-esc="item.max_devices"/>
-                                            </span>
+                                            <t t-if="item.max_devices &lt;= 0">
+                                                <span class="dev-badge dev-critical">0</span>
+                                            </t>
+                                            <t t-else="">
+                                                <span class="dev-normal"><t t-esc="item.max_devices"/></span>
+                                            </t>
                                         </td>
 
                                         <!-- 20 Devices Needed -->

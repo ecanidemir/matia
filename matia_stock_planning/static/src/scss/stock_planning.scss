@@ -461,22 +461,16 @@
                                 padding: 0.25rem 0.6rem;
                                 border-radius: 6px;
                                 font-weight: 700;
-                                min-width: 44px;
+                                min-width: 40px;
                             }
                             .dev-critical {
                                 background-color: #fee2e2;
                                 color: #b91c1c;
                                 border: 1px solid #fca5a5;
                             }
-                            .dev-warning {
-                                background-color: #fef3c7;
-                                color: #b45309;
-                                border: 1px solid #fcd34d;
-                            }
-                            .dev-good {
-                                background-color: #d1fae5;
-                                color: #047857;
-                                border: 1px solid #6ee7b7;
+                            .dev-normal {
+                                font-weight: 600;
+                                color: #334155;
                             }
                         }
 
