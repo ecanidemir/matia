@@ -190,7 +190,7 @@
                         <span><span class="dot-ok"></span> OK = Stock Sufficient</span>
                         <span><span class="dot-need"></span> Red Number = Missing Parts for Target</span>
                         <span class="legend-note" style="color: #0369a1; background: #f0f9ff; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd; font-size: 0.72rem; font-weight: 500;">
-                            <i class="fa fa-info-circle mr-1"></i> Net Stock = On Hand Stock − Reserved Stock
+                            <i class="fa fa-info-circle mr-1"></i> Net Stock shows total on-hand stock; reserved quantities are deducted in capacity calculations
                         </span>
                         <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
                     </div>
@@ -208,7 +208,7 @@
                                     Usage Qty
                                     <i t-attf-class="fa ml-1 #{widget.sort_col == 'bom_qty' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
                                 </th>
-                                <th class="th-stock msp-th-sortable" data-sort-col="stock" title="Net available stock for production (Total On Hand minus Reserved)">
+                                <th class="th-stock msp-th-sortable" data-sort-col="stock" title="Total on-hand stock. Note: reserved quantities are deducted from production capacity calculations.">
                                     Net Stock
                                     <i t-attf-class="fa ml-1 #{widget.sort_col == 'stock' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
                                 </th>
@@ -309,9 +309,9 @@
                                             <t t-esc="item.bom_qty"/> <small class="text-muted"><t t-esc="item.uom_name"/></small>
                                         </td>
 
-                                        <!-- Net Stock (Available = On Hand - Reserved) -->
+                                        <!-- Net Stock (Total On Hand) -->
                                         <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
-                                        <td class="td-stock" t-att-title="'Net Available: ' + s_val + (item.total_stock_qty !== undefined ? ' (On Hand: ' + item.total_stock_qty + ', Reserved: ' + (item.reserved_qty || 0) + ')' : '')">
+                                        <td class="td-stock" t-att-title="'Total On-Hand: ' + s_val + (item.reserved_qty ? ' (Reserved: ' + item.reserved_qty + ', Net Usable: ' + (item.avail_qty || 0) + ')' : '')">
                                             <t t-if="s_val &lt;= 0">
                                                 <span class="stock-zero">0</span>
                                             </t>
@@ -404,9 +404,9 @@
                     </t>
                 </td>
 
-                <!-- Net Stock (Available = On Hand - Reserved) -->
+                <!-- Net Stock (Total On Hand) -->
                 <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
-                <td class="td-stock" t-att-title="'Net Available: ' + s_val + (item.total_stock_qty !== undefined ? ' (On Hand: ' + item.total_stock_qty + ', Reserved: ' + (item.reserved_qty || 0) + ')' : '')">
+                <td class="td-stock" t-att-title="'Total On-Hand: ' + s_val + (item.reserved_qty ? ' (Reserved: ' + item.reserved_qty + ', Net Usable: ' + (item.avail_qty || 0) + ')' : '')">
                     <t t-if="s_val &lt;= 0">
                         <span class="stock-zero">0</span>
                     </t>

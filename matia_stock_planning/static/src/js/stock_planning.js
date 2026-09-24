@@ -790,7 +790,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var payload = {
                 headers: headers,
                 groups: exportGroups,
-                filter_info: filterInfo.join(' + ') + ' [Net Stock = On Hand - Reserved | Excl. NCR]',
+                filter_info: filterInfo.join(' + ') + ' [Net Stock: Total On-Hand | Reserved deducted in calculations | Excl. NCR]',
             };
 
             var form = document.createElement('form');
