@@ -174,6 +174,7 @@ class MatiaStockPlanning(models.AbstractModel):
 
         # 3. Read stock and NCR quantities across all companies
         product_stock = {pid: 0.0 for pid in all_product_ids}
+        product_reserved = {pid: 0.0 for pid in all_product_ids}
         product_ncr = {pid: 0.0 for pid in all_product_ids}
 
         if all_product_ids:
@@ -183,12 +184,13 @@ class MatiaStockPlanning(models.AbstractModel):
                         ('product_id', 'in', list(all_product_ids)),
                         ('location_id', 'in', selected_loc_ids)
                     ],
-                    ['product_id', 'quantity'],
+                    ['product_id', 'quantity', 'reserved_quantity'],
                     ['product_id']
                 )
                 for sq in stock_quants:
                     pid = sq['product_id'][0]
                     product_stock[pid] = float(sq.get('quantity') or 0.0)
+                    product_reserved[pid] = float(sq.get('reserved_quantity') or 0.0)
 
             if selected_ncr_ids:
                 ncr_quants = env_sudo['stock.quant'].read_group(
@@ -215,18 +217,22 @@ class MatiaStockPlanning(models.AbstractModel):
                 pid = item['product_id']
                 b_qty = item['bom_qty']
                 s_qty = product_stock.get(pid, 0.0)
+                r_qty = product_reserved.get(pid, 0.0)
                 n_qty = product_ncr.get(pid, 0.0)
 
-                # Maximum devices producible
+                # Available stock with reserved quantity deducted
+                avail_qty = s_qty - r_qty
+
+                # Maximum devices producible (based on available stock)
                 if b_qty > 0:
-                    max_dev = math.floor(s_qty / b_qty)
+                    max_dev = math.floor(max(0.0, avail_qty) / b_qty)
                     if max_dev < 0:
                         max_dev = 0
                 else:
                     max_dev = 0
 
-                # Requirement for 20 devices: (20 * bom_qty) - stock_qty
-                needed_20 = (20.0 * b_qty) - s_qty
+                # Requirement for 20 devices: (20 * bom_qty) - available_stock
+                needed_20 = (20.0 * b_qty) - avail_qty
                 if needed_20 <= 0:
                     req_20_status = 'OK'
                     req_20_val = 0
@@ -237,7 +243,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 # Dynamic columns
                 dynamic_needs = {}
                 for target in dynamic_targets:
-                    needed_target = (float(target) * b_qty) - s_qty
+                    needed_target = (float(target) * b_qty) - avail_qty
                     if needed_target <= 0:
                         dynamic_needs[str(target)] = {
                             'status': 'OK',
@@ -253,9 +259,16 @@ class MatiaStockPlanning(models.AbstractModel):
                         }
 
                 s_clean = float(s_qty or 0.0)
+                r_clean = float(r_qty or 0.0)
                 n_clean = float(n_qty or 0.0)
                 s_disp = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
+                r_disp = int(r_clean) if r_clean.is_integer() else round(r_clean, 2)
+                avail_clean = max(0.0, avail_qty)
+                avail_disp = int(avail_clean) if avail_clean.is_integer() else round(avail_clean, 2)
+
                 item['stock_qty'] = s_disp
+                item['reserved_qty'] = r_disp
+                item['avail_qty'] = avail_disp
                 item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
                 item['max_devices'] = max_dev
                 item['req_20_status'] = req_20_status
@@ -263,15 +276,15 @@ class MatiaStockPlanning(models.AbstractModel):
                 item['req_20_text'] = 'OK' if req_20_status == 'OK' else str(req_20_val)
                 item['dynamic_needs'] = dynamic_needs
 
-                # Group bottleneck with stock amount
+                # Group bottleneck with available stock amount
                 if max_dev < grp_min_devices:
                     grp_min_devices = max_dev
-                    grp_bottleneck_product = f"{item['display_name']} ({s_disp} {item['uom_name']})"
+                    grp_bottleneck_product = f"{item['display_name']} ({avail_disp} {item['uom_name']})"
 
-                # Overall bottleneck with stock amount
+                # Overall bottleneck with available stock amount
                 if max_dev < overall_min_devices:
                     overall_min_devices = max_dev
-                    overall_bottleneck_product = f"{item['display_name']} ({s_disp} {item['uom_name']})"
+                    overall_bottleneck_product = f"{item['display_name']} ({avail_disp} {item['uom_name']})"
 
             grp['min_devices'] = grp_min_devices if grp_min_devices != 999999 else 0
             grp['bottleneck_product'] = grp_bottleneck_product
@@ -384,6 +397,7 @@ class MatiaStockPlanning(models.AbstractModel):
 
         # 3. Read stock across all companies
         product_stock = {pid: 0.0 for pid in sub_product_ids}
+        product_reserved = {pid: 0.0 for pid in sub_product_ids}
         product_ncr = {pid: 0.0 for pid in sub_product_ids}
 
         if sub_product_ids:
@@ -393,12 +407,13 @@ class MatiaStockPlanning(models.AbstractModel):
                         ('product_id', 'in', list(sub_product_ids)),
                         ('location_id', 'in', selected_loc_ids)
                     ],
-                    ['product_id', 'quantity'],
+                    ['product_id', 'quantity', 'reserved_quantity'],
                     ['product_id']
                 )
                 for sq in stock_quants:
                     pid = sq['product_id'][0]
                     product_stock[pid] = float(sq.get('quantity') or 0.0)
+                    product_reserved[pid] = float(sq.get('reserved_quantity') or 0.0)
 
             if selected_ncr_ids:
                 ncr_quants = env_sudo['stock.quant'].read_group(
@@ -421,17 +436,20 @@ class MatiaStockPlanning(models.AbstractModel):
             pid = item['product_id']
             b_qty = float(item['bom_qty']) # Effective qty per 1 device
             s_qty = product_stock.get(pid, 0.0)
+            r_qty = product_reserved.get(pid, 0.0)
             n_qty = product_ncr.get(pid, 0.0)
 
+            avail_qty = s_qty - r_qty
+
             if b_qty > 0:
-                max_dev = math.floor(s_qty / b_qty)
+                max_dev = math.floor(max(0.0, avail_qty) / b_qty)
                 if max_dev < 0:
                     max_dev = 0
             else:
                 max_dev = 0
 
-            # Requirement for 20 devices: (20 * bom_qty) - stock_qty
-            needed_20 = (20.0 * b_qty) - s_qty
+            # Requirement for 20 devices: (20 * bom_qty) - available_stock
+            needed_20 = (20.0 * b_qty) - avail_qty
             if needed_20 <= 0:
                 req_20_status = 'OK'
                 req_20_val = 0
@@ -442,7 +460,7 @@ class MatiaStockPlanning(models.AbstractModel):
             # Dynamic columns
             dynamic_needs = {}
             for target in dynamic_targets:
-                needed_target = (float(target) * b_qty) - s_qty
+                needed_target = (float(target) * b_qty) - avail_qty
                 if needed_target <= 0:
                     dynamic_needs[str(target)] = {
                         'status': 'OK',
@@ -458,9 +476,16 @@ class MatiaStockPlanning(models.AbstractModel):
                     }
 
             s_clean = float(s_qty or 0.0)
+            r_clean = float(r_qty or 0.0)
             n_clean = float(n_qty or 0.0)
             s_disp = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
+            r_disp = int(r_clean) if r_clean.is_integer() else round(r_clean, 2)
+            avail_clean = max(0.0, avail_qty)
+            avail_disp = int(avail_clean) if avail_clean.is_integer() else round(avail_clean, 2)
+
             item['stock_qty'] = s_disp
+            item['reserved_qty'] = r_disp
+            item['avail_qty'] = avail_disp
             item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
             item['max_devices'] = max_dev
             item['req_20_status'] = req_20_status
@@ -470,7 +495,7 @@ class MatiaStockPlanning(models.AbstractModel):
 
             if max_dev < min_producible:
                 min_producible = max_dev
-                bottleneck_product = f"{item['display_name']} ({s_disp} {item['uom_name']})"
+                bottleneck_product = f"{item['display_name']} ({avail_disp} {item['uom_name']})"
 
         if min_producible == 999999:
             min_producible = 0

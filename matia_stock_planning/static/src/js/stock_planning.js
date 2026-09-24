@@ -15,6 +15,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             'change .msp-check-tr': '_onChangeLocation',
             'change .msp-check-usa': '_onChangeLocation',
             'click .msp-btn-toggle-bom': '_onToggleBomQty',
+            'click .msp-btn-toggle-reserved': '_onToggleReserved',
+            'click .msp-btn-toggle-ncr': '_onToggleNcr',
             'click .msp-btn-add-col': '_onAddDynamicColumn',
             'keypress .msp-col-target-input': '_onTargetInputKeypress',
             'click .chip-remove': '_onRemoveDynamicColumn',
@@ -33,6 +35,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.include_tr = true;
             this.include_usa = true;
             this.show_bom_qty = true;
+            this.show_reserved = true;
+            this.show_ncr = true;
             this.dynamic_targets = [];
             this.groups = [];
             this.sub_bom_cache = {};
@@ -74,8 +78,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
         // Helper: Total column count
         get_total_columns_count: function () {
-            var count = 5; // Product, Stock, NCR, Producible Devices, 20 Devices Needed
+            var count = 4; // Product, Stock, Producible Devices, 20 Devices Needed
             if (this.show_bom_qty) {
+                count += 1;
+            }
+            if (this.show_reserved) {
+                count += 1;
+            }
+            if (this.show_ncr) {
                 count += 1;
             }
             count += this.dynamic_targets.length;
@@ -149,6 +159,9 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     } else if (col === 'stock') {
                         aVal = parseFloat(a.stock_qty) || 0;
                         bVal = parseFloat(b.stock_qty) || 0;
+                    } else if (col === 'reserved') {
+                        aVal = parseFloat(a.reserved_qty) || 0;
+                        bVal = parseFloat(b.reserved_qty) || 0;
                     } else if (col === 'ncr') {
                         aVal = parseFloat(a.ncr_qty) || 0;
                         bVal = parseFloat(b.ncr_qty) || 0;
@@ -221,6 +234,18 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         _onToggleBomQty: function (ev) {
             ev.preventDefault();
             this.show_bom_qty = !this.show_bom_qty;
+            this._updateView();
+        },
+
+        _onToggleReserved: function (ev) {
+            ev.preventDefault();
+            this.show_reserved = !this.show_reserved;
+            this._updateView();
+        },
+
+        _onToggleNcr: function (ev) {
+            ev.preventDefault();
+            this.show_ncr = !this.show_ncr;
             this._updateView();
         },
 
@@ -636,7 +661,12 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 headers.push('Usage Qty');
             }
             headers.push('Net On Hand Stock');
-            headers.push('NCR Storage');
+            if (this.show_reserved) {
+                headers.push('Reserved');
+            }
+            if (this.show_ncr) {
+                headers.push('NCR Storage');
+            }
             headers.push('Producible Devices');
             headers.push('20 Devices Needed');
 
@@ -668,8 +698,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     }
                     var sVal = (item.stock_qty !== undefined && item.stock_qty !== null && item.stock_qty !== false) ? item.stock_qty : 0;
                     cells.push({ val: sVal, type: 'number' });
-                    var nVal = (item.ncr_qty !== undefined && item.ncr_qty !== null && item.ncr_qty !== false) ? item.ncr_qty : 0;
-                    cells.push({ val: nVal, type: 'number' });
+                    if (self.show_reserved) {
+                        var rVal = (item.reserved_qty !== undefined && item.reserved_qty !== null && item.reserved_qty !== false) ? item.reserved_qty : 0;
+                        cells.push({ val: rVal, type: 'number' });
+                    }
+                    if (self.show_ncr) {
+                        var nVal = (item.ncr_qty !== undefined && item.ncr_qty !== null && item.ncr_qty !== false) ? item.ncr_qty : 0;
+                        cells.push({ val: nVal, type: 'number' });
+                    }
                     var dVal = (item.max_devices !== undefined && item.max_devices !== null && item.max_devices !== false) ? item.max_devices : 0;
                     cells.push({ val: dVal, type: 'number' });
                     if (item.req_20_status === 'OK') {
@@ -707,8 +743,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                             }
                             var subSVal = (subItem.stock_qty !== undefined && subItem.stock_qty !== null && subItem.stock_qty !== false) ? subItem.stock_qty : 0;
                             subCells.push({ val: subSVal, type: 'number' });
-                            var subNVal = (subItem.ncr_qty !== undefined && subItem.ncr_qty !== null && subItem.ncr_qty !== false) ? subItem.ncr_qty : 0;
-                            subCells.push({ val: subNVal, type: 'number' });
+                            if (self.show_reserved) {
+                                var subRVal = (subItem.reserved_qty !== undefined && subItem.reserved_qty !== null && subItem.reserved_qty !== false) ? subItem.reserved_qty : 0;
+                                subCells.push({ val: subRVal, type: 'number' });
+                            }
+                            if (self.show_ncr) {
+                                var subNVal = (subItem.ncr_qty !== undefined && subItem.ncr_qty !== null && subItem.ncr_qty !== false) ? subItem.ncr_qty : 0;
+                                subCells.push({ val: subNVal, type: 'number' });
+                            }
                             var subDVal = (subItem.max_devices !== undefined && subItem.max_devices !== null && subItem.max_devices !== false) ? subItem.max_devices : 0;
                             subCells.push({ val: subDVal, type: 'number' });
                             if (subItem.req_20_status === 'OK') {

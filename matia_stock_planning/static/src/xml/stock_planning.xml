@@ -54,6 +54,18 @@
                         <span t-else="">Show Usage Qty</span>
                     </button>
 
+                    <button class="btn btn-secondary btn-sm msp-btn-toggle-reserved" t-att-title="widget.show_reserved ? 'Hide Reserved' : 'Show Reserved'">
+                        <i t-attf-class="fa #{widget.show_reserved ? 'fa-eye-slash' : 'fa-eye'} mr-1"></i>
+                        <span t-if="widget.show_reserved">Hide Reserved</span>
+                        <span t-else="">Show Reserved</span>
+                    </button>
+
+                    <button class="btn btn-secondary btn-sm msp-btn-toggle-ncr" t-att-title="widget.show_ncr ? 'Hide NCR Storage' : 'Show NCR Storage'">
+                        <i t-attf-class="fa #{widget.show_ncr ? 'fa-eye-slash' : 'fa-eye'} mr-1"></i>
+                        <span t-if="widget.show_ncr">Hide NCR</span>
+                        <span t-else="">Show NCR</span>
+                    </button>
+
                     <!-- Inline target input -->
                     <t t-if="widget.dynamic_targets.length &lt; 3">
                         <div class="msp-add-col-inline" title="Enter device count and press Add">
@@ -197,7 +209,11 @@
                                     Net Stock
                                     <i t-attf-class="fa ml-1 #{widget.sort_col == 'stock' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
                                 </th>
-                                <th class="th-ncr msp-th-sortable" data-sort-col="ncr">
+                                <th t-if="widget.show_reserved" class="th-reserved msp-th-sortable" data-sort-col="reserved">
+                                    Reserved
+                                    <i t-attf-class="fa ml-1 #{widget.sort_col == 'reserved' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
+                                </th>
+                                <th t-if="widget.show_ncr" class="th-ncr msp-th-sortable" data-sort-col="ncr">
                                     NCR Storage
                                     <i t-attf-class="fa ml-1 #{widget.sort_col == 'ncr' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
                                 </th>
@@ -301,8 +317,16 @@
                                             </t>
                                         </td>
 
+                                        <!-- Reserved -->
+                                        <td t-if="widget.show_reserved" class="td-reserved">
+                                            <t t-set="r_val" t-value="(item.reserved_qty !== undefined &amp;&amp; item.reserved_qty !== null &amp;&amp; item.reserved_qty !== false) ? item.reserved_qty : 0"/>
+                                            <span t-attf-class="reserved-pill #{r_val &gt; 0 ? 'reserved-has-qty' : ''}" t-att-title="r_val &gt; 0 ? r_val + ' units reserved' : 'None reserved'">
+                                                <t t-esc="r_val"/>
+                                            </span>
+                                        </td>
+
                                         <!-- NCR -->
-                                        <td class="td-ncr">
+                                        <td t-if="widget.show_ncr" class="td-ncr">
                                             <t t-set="ncr_val" t-value="(item.ncr_qty !== undefined &amp;&amp; item.ncr_qty !== null &amp;&amp; item.ncr_qty !== false) ? item.ncr_qty : 0"/>
                                             <span t-attf-class="ncr-pill #{ncr_val &gt; 0 ? 'ncr-has-stock' : ''}" t-att-title="ncr_val &gt; 0 ? ncr_val + ' units available in NCR' : 'None in NCR'">
                                                 <t t-esc="ncr_val"/>
@@ -388,8 +412,16 @@
                     </t>
                 </td>
 
+                <!-- Reserved -->
+                <td t-if="widget.show_reserved" class="td-reserved">
+                    <t t-set="r_val" t-value="(item.reserved_qty !== undefined &amp;&amp; item.reserved_qty !== null &amp;&amp; item.reserved_qty !== false) ? item.reserved_qty : 0"/>
+                    <span t-attf-class="reserved-pill #{r_val &gt; 0 ? 'reserved-has-qty' : ''}" t-att-title="r_val &gt; 0 ? r_val + ' units reserved' : 'None reserved'">
+                        <t t-esc="r_val"/>
+                    </span>
+                </td>
+
                 <!-- NCR Storage -->
-                <td class="td-ncr">
+                <td t-if="widget.show_ncr" class="td-ncr">
                     <t t-set="ncr_val" t-value="(item.ncr_qty !== undefined &amp;&amp; item.ncr_qty !== null &amp;&amp; item.ncr_qty !== false) ? item.ncr_qty : 0"/>
                     <span t-attf-class="ncr-pill #{ncr_val &gt; 0 ? 'ncr-has-stock' : ''}" t-att-title="ncr_val &gt; 0 ? ncr_val + ' units available in NCR' : 'None in NCR'">
                         <t t-esc="ncr_val"/>

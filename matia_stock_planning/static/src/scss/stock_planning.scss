@@ -154,7 +154,9 @@
                 }
             }
 
-            .msp-btn-toggle-bom {
+            .msp-btn-toggle-bom,
+            .msp-btn-toggle-reserved,
+            .msp-btn-toggle-ncr {
                 background-color: #f8fafc !important;
                 color: #475569 !important;
                 border: 1px solid #cbd5e1 !important;
@@ -564,6 +566,24 @@
                                 padding: 0.2rem 0.5rem;
                                 border-radius: 5px;
                                 font-weight: 700;
+                            }
+                        }
+
+                        &.td-reserved {
+                            color: #64748b;
+                            .reserved-pill {
+                                background-color: #f1f5f9;
+                                border: 1px solid #e2e8f0;
+                                padding: 0.15rem 0.45rem;
+                                border-radius: 4px;
+                                font-size: 0.75rem;
+                                font-weight: 500;
+                            }
+                            .reserved-has-qty {
+                                background-color: #ffedd5;
+                                color: #c2410c;
+                                border-color: #fed7aa;
+                                font-weight: 600;
                             }
                         }
 
