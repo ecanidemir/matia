@@ -59,9 +59,10 @@ class MatiaStockPlanning(models.AbstractModel):
         bom_configs = [
             {
                 'key': 'base',
-                'title': 'TekRMD Common Parts (Base)',
+                'title': 'TekRMD Common Parts v2 (Base)',
                 'badge': 'Base',
                 'color_class': 'badge-primary',
+                'preferred_id': 1766,
                 'names': ['TekRMD Common Parts v2', 'TekRMD Common Parts'],
             },
             {
@@ -69,6 +70,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 'title': 'TekRMD Outdoor Parts (Outdoor)',
                 'badge': 'Outdoor',
                 'color_class': 'badge-success',
+                'preferred_id': 1737,
                 'names': ['TekRMD Outdoor Parts'],
             },
             {
@@ -76,6 +78,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 'title': 'TekRMD Seat Parts (Seat)',
                 'badge': 'Seat',
                 'color_class': 'badge-warning',
+                'preferred_id': 1738,
                 'names': ['TekRMD Seat Parts'],
             },
         ]
@@ -84,12 +87,24 @@ class MatiaStockPlanning(models.AbstractModel):
         groups_data = []
 
         for cfg in bom_configs:
-            bom = self.env['mrp.bom'].search([
-                '|',
-                ('product_tmpl_id.name', 'in', cfg['names']),
-                ('code', 'in', cfg['names'])
-            ], limit=1)
+            bom = False
+            # 1. Try preferred direct ID if exists
+            pref_id = cfg.get('preferred_id')
+            if pref_id:
+                pref_bom = self.env['mrp.bom'].browse(pref_id)
+                if pref_bom.exists() and pref_bom.active:
+                    bom = pref_bom
 
+            # 2. Sequential priority search by exact product template name
+            if not bom:
+                for n in cfg['names']:
+                    bom = self.env['mrp.bom'].search([
+                        ('product_tmpl_id.name', '=', n)
+                    ], limit=1)
+                    if bom:
+                        break
+
+            # 3. Fallback search with ilike
             if not bom:
                 for n in cfg['names']:
                     bom = self.env['mrp.bom'].search([

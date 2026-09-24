@@ -211,9 +211,9 @@
                                             </span>
                                         </td>
 
-                                        <!-- Producible Devices -->
+                                        <!-- Producible Devices (>= 20 is completely green dev-good) -->
                                         <td class="td-max-dev">
-                                            <span t-attf-class="dev-badge #{item.max_devices &lt; 20 ? 'dev-critical' : (item.max_devices &lt; 50 ? 'dev-warning' : 'dev-good')}">
+                                            <span t-attf-class="dev-badge #{item.max_devices &lt; 20 ? 'dev-critical' : 'dev-good'}">
                                                 <t t-esc="item.max_devices"/>
                                             </span>
                                         </td>
