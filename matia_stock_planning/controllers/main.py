@@ -99,6 +99,14 @@ class MatiaStockPlanningController(http.Controller):
             'border_color': '#fde68a',
             'valign': 'vcenter',
         })
+        group_screws_format = workbook.add_format({
+            'bold': True,
+            'font_color': '#334155',
+            'bg_color': '#f1f5f9',
+            'border': 1,
+            'border_color': '#cbd5e1',
+            'valign': 'vcenter',
+        })
         cell_text_format = workbook.add_format({
             'border': 1,
             'border_color': '#e2e8f0',
@@ -173,6 +181,8 @@ class MatiaStockPlanningController(http.Controller):
                 g_fmt = group_outdoor_format
             elif grp_key == 'seat':
                 g_fmt = group_seat_format
+            elif grp_key == 'screws':
+                g_fmt = group_screws_format
             else:
                 g_fmt = group_base_format
 

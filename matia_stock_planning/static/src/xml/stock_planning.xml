@@ -24,9 +24,9 @@
                 </div>
             </div>
 
-            <!-- 2. Controls & Filters Card -->
+            <!-- 2. Controls &amp; Filters Card -->
             <div class="msp-controls-card">
-                <!-- Left: Locations & Companies Selection -->
+                <!-- Left: Locations &amp; Companies Selection -->
                 <div class="msp-filter-group">
                     <span class="msp-filter-label"><i class="fa fa-building-o mr-1"></i> Included Locations:</span>
                     <label class="form-check">
@@ -39,7 +39,7 @@
                     </label>
                 </div>
 
-                <!-- Right: View & Dynamic Column Tools -->
+                <!-- Right: View &amp; Dynamic Column Tools -->
                 <div class="msp-tool-buttons">
                     <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs">
                         <i class="fa fa-plus-square-o mr-1"></i> Expand All BOMs
@@ -54,7 +54,7 @@
                         <span t-else="">Show Usage Qty</span>
                     </button>
 
-                    <!-- Inline target input (avoids browser native prompt with OS-translated buttons) -->
+                    <!-- Inline target input -->
                     <t t-if="widget.dynamic_targets.length &lt; 3">
                         <div class="msp-add-col-inline" title="Enter device count and press Add">
                             <input type="number"
@@ -168,7 +168,7 @@
 
             <!-- 5. Main Table Card -->
             <div class="msp-table-card">
-                <!-- Search & Legend Bar -->
+                <!-- Search &amp; Legend Bar -->
                 <div class="msp-table-search">
                     <div class="search-input-box">
                         <i class="fa fa-search"></i>
@@ -177,6 +177,7 @@
                     <div class="table-legend">
                         <span><span class="dot-ok"></span> OK = Stock Sufficient</span>
                         <span><span class="dot-need"></span> Red Number = Missing Parts for Target</span>
+                        <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
                     </div>
                 </div>
 
@@ -184,16 +185,35 @@
                     <table class="msp-table">
                         <thead>
                             <tr>
-                                <th class="th-product">Part Name &amp; Code</th>
-                                <th t-if="widget.show_bom_qty" class="th-bom-qty">Usage Qty</th>
-                                <th class="th-stock">Net Stock</th>
-                                <th class="th-ncr">NCR Storage</th>
-                                <th class="th-max-dev">Producible Devices</th>
-                                <th class="th-req-20">20 Devices Needed</th>
+                                <th class="th-product msp-th-sortable" data-sort-col="name" t-attf-title="Sort by name #{widget.sort_col == 'name' ? (widget.sort_dir == 'asc' ? '↑' : '↓') : ''}">
+                                    Part Name &amp; Code
+                                    <i t-attf-class="fa ml-1 #{widget.sort_col == 'name' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
+                                </th>
+                                <th t-if="widget.show_bom_qty" class="th-bom-qty msp-th-sortable" data-sort-col="bom_qty">
+                                    Usage Qty
+                                    <i t-attf-class="fa ml-1 #{widget.sort_col == 'bom_qty' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
+                                </th>
+                                <th class="th-stock msp-th-sortable" data-sort-col="stock">
+                                    Net Stock
+                                    <i t-attf-class="fa ml-1 #{widget.sort_col == 'stock' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
+                                </th>
+                                <th class="th-ncr msp-th-sortable" data-sort-col="ncr">
+                                    NCR Storage
+                                    <i t-attf-class="fa ml-1 #{widget.sort_col == 'ncr' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
+                                </th>
+                                <th class="th-max-dev msp-th-sortable" data-sort-col="max_dev">
+                                    Producible Devices
+                                    <i t-attf-class="fa ml-1 #{widget.sort_col == 'max_dev' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
+                                </th>
+                                <th class="th-req-20 msp-th-sortable" data-sort-col="req_20">
+                                    20 Devices Needed
+                                    <i t-attf-class="fa ml-1 #{widget.sort_col == 'req_20' ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
+                                </th>
                                 <t t-foreach="widget.dynamic_targets" t-as="target">
-                                    <th class="th-dynamic">
+                                    <th class="th-dynamic msp-th-sortable" t-att-data-sort-col="'dyn_' + target">
                                         <div class="dyn-header-content">
                                             <span><t t-esc="target"/> Devices Needed</span>
+                                            <i t-attf-class="fa #{widget.sort_col == 'dyn_' + target ? (widget.sort_dir == 'asc' ? 'fa-sort-asc' : 'fa-sort-desc') : 'fa-sort'} msp-sort-icon"></i>
                                             <i class="fa fa-times btn-remove-dyn" t-att-data-target="target" title="Remove Column"></i>
                                         </div>
                                     </th>
@@ -216,11 +236,12 @@
                                             <span class="ml-auto text-muted" style="font-size: 0.75rem;">
                                                 BOM: <t t-esc="group.bom_name"/>
                                             </span>
+                                            <!-- Show / Hide toggle -->
                                             <button type="button"
-                                                    t-attf-class="btn btn-sm msp-btn-toggle-group ml-2 #{widget.hidden_groups[group.key] ? 'btn-outline-secondary' : 'btn-outline-danger'}"
+                                                    t-attf-class="btn btn-sm msp-btn-toggle-group ml-2 #{widget.hidden_groups[group.key] ? 'msp-btn-group-show' : 'msp-btn-group-hide'}"
                                                     t-att-data-group-key="group.key"
-                                                    t-att-title="widget.hidden_groups[group.key] ? 'Show this BOM group' : 'Hide this BOM group (also hides in Excel export)'"
-                                                    style="padding:1px 8px; font-size:0.75rem;">
+                                                    t-att-title="widget.hidden_groups[group.key] ? 'Show this BOM group' : 'Hide this BOM group (also excluded from Excel export)'"
+                                                    style="padding:1px 10px; font-size:0.75rem; font-weight:600;">
                                                 <t t-if="widget.hidden_groups[group.key]">
                                                     <i class="fa fa-eye mr-1"></i>Show
                                                 </t>
@@ -234,7 +255,10 @@
 
                                 <!-- Product Rows -->
                                 <t t-foreach="group.items" t-as="item">
-                                    <tr t-attf-class="item-row #{widget.hidden_groups[group.key] ? 'msp-group-hidden' : ''}" t-att-data-product-name="item.display_name.toLowerCase()" t-att-data-group="group.key" t-att-style="widget.hidden_groups[group.key] ? 'display:none;' : ''">
+                                    <tr class="item-row"
+                                        t-att-data-product-name="item.display_name.toLowerCase()"
+                                        t-att-data-group="group.key"
+                                        t-att-style="widget.hidden_groups[group.key] ? 'display:none;' : ''">
                                         <!-- Part Code and Name with Sub-BOM toggle -->
                                         <td class="td-product">
                                             <t t-if="item.has_bom">
@@ -266,7 +290,7 @@
                                             <t t-esc="item.bom_qty"/> <small class="text-muted"><t t-esc="item.uom_name"/></small>
                                         </td>
 
-                                        <!-- Net Stock: 0 shown in red, otherwise plain -->
+                                        <!-- Net Stock -->
                                         <td class="td-stock">
                                             <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
                                             <t t-if="s_val &lt;= 0">
@@ -277,7 +301,7 @@
                                             </t>
                                         </td>
 
-                                        <!-- NCR Quantity Info -->
+                                        <!-- NCR -->
                                         <td class="td-ncr">
                                             <t t-set="ncr_val" t-value="(item.ncr_qty !== undefined &amp;&amp; item.ncr_qty !== null &amp;&amp; item.ncr_qty !== false) ? item.ncr_qty : 0"/>
                                             <span t-attf-class="ncr-pill #{ncr_val &gt; 0 ? 'ncr-has-stock' : ''}" t-att-title="ncr_val &gt; 0 ? ncr_val + ' units available in NCR' : 'None in NCR'">
@@ -285,7 +309,7 @@
                                             </span>
                                         </td>
 
-                                        <!-- Producible Devices (Only 0 is red, others have no coloring) -->
+                                        <!-- Producible Devices -->
                                         <td class="td-max-dev">
                                             <t t-if="item.max_devices &lt;= 0">
                                                 <span class="dev-badge dev-critical">0</span>
@@ -329,11 +353,15 @@
         </div>
     </t>
 
-    <!-- Sub-assembly BOM Component Rows Template (Matches Main Table Columns Exactly) -->
+    <!-- Sub-assembly BOM Component Rows Template -->
     <t t-name="MatiaStockPlanning.SubBomRows">
         <t t-foreach="data.items" t-as="item">
-            <tr class="item-row sub-bom-row" t-att-data-parent-id="parent_id">
-                <!-- Part Code & Name (Indented with sub-tree icon) -->
+            <!-- data-group passed from JS so collapse-all and search can filter by group -->
+            <tr class="item-row sub-bom-row"
+                t-att-data-parent-id="parent_id"
+                t-att-data-group="group_key"
+                t-att-data-product-name="item.display_name.toLowerCase()">
+                <!-- Part Code &amp; Name (Indented) -->
                 <td class="td-product td-sub-product">
                     <span class="sub-bom-indent"></span>
                     <i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>
@@ -341,7 +369,7 @@
                     <span class="prod-name"><t t-esc="item.product_name"/></span>
                 </td>
 
-                <!-- Usage Qty: per device (with breakdown if parent qty > 1) -->
+                <!-- Usage Qty -->
                 <td t-if="widget.show_bom_qty" class="td-bom-qty">
                     <span class="font-weight-bold"><t t-esc="item.bom_qty"/></span> <small class="text-muted"><t t-esc="item.uom_name"/></small>
                     <t t-if="item.parent_bom_qty &gt; 1">
@@ -349,7 +377,7 @@
                     </t>
                 </td>
 
-                <!-- Net Stock: 0 in red, otherwise plain -->
+                <!-- Net Stock -->
                 <td class="td-stock">
                     <t t-set="s_val" t-value="(item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false) ? item.stock_qty : 0"/>
                     <t t-if="s_val &lt;= 0">

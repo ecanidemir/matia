@@ -25,6 +25,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             'click .msp-btn-expand-all': '_onExpandAllBoms',
             'click .msp-btn-collapse-all': '_onCollapseAllBoms',
             'click .msp-btn-toggle-group': '_onToggleGroup',
+            'click .msp-th-sortable': '_onSortColumn',
         },
 
         init: function (parent, action) {
@@ -36,7 +37,9 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.groups = [];
             this.sub_bom_cache = {};
             this.expanded_boms = {};
-            this.hidden_groups = {};  // keys: group.key -> true when hidden
+            this.hidden_groups = {};  // group.key -> true when hidden
+            this.sort_col = null;     // currently sorted column key
+            this.sort_dir = 'asc';    // 'asc' | 'desc'
             this.summary = {
                 overall_min_devices: 0,
                 overall_bottleneck: "-",
@@ -45,7 +48,6 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         },
 
         willStart: function () {
-            var self = this;
             return Promise.all([
                 this._super.apply(this, arguments),
                 this._fetchPlanningData()
@@ -94,6 +96,10 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             }).then(function (result) {
                 self.groups = result.groups || [];
                 self.summary = result.summary || {};
+                // Apply current sort state after fresh data
+                if (self.sort_col) {
+                    self._applySortToGroups();
+                }
             }).catch(function (error) {
                 self.displayNotification({
                     title: _t("Data Loading Error"),
@@ -107,7 +113,71 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.renderElement();
         },
 
-        // Event Handlers
+        // ─── Sorting ────────────────────────────────────────────────────────────
+
+        _onSortColumn: function (ev) {
+            var $th = $(ev.currentTarget);
+            var col = $th.data('sort-col');
+            if (this.sort_col === col) {
+                this.sort_dir = (this.sort_dir === 'asc') ? 'desc' : 'asc';
+            } else {
+                this.sort_col = col;
+                this.sort_dir = 'asc';
+            }
+            this._applySortToGroups();
+            this._updateView();
+        },
+
+        _applySortToGroups: function () {
+            var col = this.sort_col;
+            var dir = this.sort_dir;
+            var self = this;
+
+            this.groups.forEach(function (grp) {
+                grp.items.sort(function (a, b) {
+                    var aVal, bVal;
+
+                    if (col === 'name') {
+                        aVal = (a.product_name || '').toLowerCase();
+                        bVal = (b.product_name || '').toLowerCase();
+                    } else if (col === 'code') {
+                        aVal = (a.product_code || '').toLowerCase();
+                        bVal = (b.product_code || '').toLowerCase();
+                    } else if (col === 'bom_qty') {
+                        aVal = parseFloat(a.bom_qty) || 0;
+                        bVal = parseFloat(b.bom_qty) || 0;
+                    } else if (col === 'stock') {
+                        aVal = parseFloat(a.stock_qty) || 0;
+                        bVal = parseFloat(b.stock_qty) || 0;
+                    } else if (col === 'ncr') {
+                        aVal = parseFloat(a.ncr_qty) || 0;
+                        bVal = parseFloat(b.ncr_qty) || 0;
+                    } else if (col === 'max_dev') {
+                        aVal = parseFloat(a.max_devices) || 0;
+                        bVal = parseFloat(b.max_devices) || 0;
+                    } else if (col === 'req_20') {
+                        // OK = 0, NEED values are positive
+                        aVal = (a.req_20_status === 'OK') ? -1 : (a.req_20_val || 0);
+                        bVal = (b.req_20_status === 'OK') ? -1 : (b.req_20_val || 0);
+                    } else if (col && col.startsWith('dyn_')) {
+                        var target = col.replace('dyn_', '');
+                        var aDyn = a.dynamic_needs && a.dynamic_needs[target];
+                        var bDyn = b.dynamic_needs && b.dynamic_needs[target];
+                        aVal = (aDyn && aDyn.status === 'OK') ? -1 : (aDyn ? aDyn.val : 0);
+                        bVal = (bDyn && bDyn.status === 'OK') ? -1 : (bDyn ? bDyn.val : 0);
+                    } else {
+                        return 0;
+                    }
+
+                    if (aVal < bVal) return dir === 'asc' ? -1 : 1;
+                    if (aVal > bVal) return dir === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            });
+        },
+
+        // ─── Event Handlers ─────────────────────────────────────────────────────
+
         _onRefresh: function (ev) {
             ev.preventDefault();
             var self = this;
@@ -167,7 +237,6 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 return;
             }
 
-            // Read value from inline input (no browser native prompt)
             var inputEl = this.$('.msp-col-target-input');
             var inputVal = inputEl.val();
 
@@ -221,7 +290,6 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         },
 
         _onTargetInputKeypress: function (ev) {
-            // Allow pressing Enter in the input field to add the column
             if (ev.which === 13) {
                 ev.preventDefault();
                 this._onAddDynamicColumn(ev);
@@ -235,6 +303,10 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.dynamic_targets = this.dynamic_targets.filter(function (t) {
                 return t !== target;
             });
+            // Clear sort if it was on removed dynamic col
+            if (this.sort_col === 'dyn_' + target) {
+                this.sort_col = null;
+            }
 
             var self = this;
             this._fetchPlanningData().then(function () {
@@ -242,17 +314,40 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             });
         },
 
+        // ─── Search (includes sub-BOM rows) ─────────────────────────────────────
+
         _onSearchInput: function (ev) {
             var query = $(ev.currentTarget).val().toLowerCase().trim();
+
             if (!query) {
                 this.$('.item-row').show();
                 this.$('.group-row').show();
+                this.$('tr.sub-bom-row').each(function () {
+                    // Restore only if parent item is visible
+                    var parentId = $(this).data('parent-id');
+                    var parentExpanded = $(this).closest('tbody').find(
+                        '.msp-btn-sub-bom[data-product-id="' + parentId + '"].expanded'
+                    ).length;
+                    if (parentExpanded) {
+                        $(this).show();
+                    }
+                });
                 return;
             }
 
-            // Filter item rows
-            this.$('.item-row').each(function () {
-                var name = $(this).data('product-name') || '';
+            // Filter item rows (main rows)
+            this.$('.item-row:not(.sub-bom-row)').each(function () {
+                var name = ($(this).data('product-name') || '').toLowerCase();
+                if (name.indexOf(query) !== -1) {
+                    $(this).show();
+                } else {
+                    $(this).hide();
+                }
+            });
+
+            // Filter sub-bom rows
+            this.$('tr.sub-bom-row').each(function () {
+                var name = ($(this).data('product-name') || '').toLowerCase();
                 if (name.indexOf(query) !== -1) {
                     $(this).show();
                 } else {
@@ -265,7 +360,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.$('.group-row').each(function () {
                 var grpKey = $(this).data('group');
                 var visibleItems = self.$('.item-row[data-group="' + grpKey + '"]:visible').length;
-                if (visibleItems === 0) {
+                var visibleSubs = self.$('tr.sub-bom-row[data-group="' + grpKey + '"]:visible').length;
+                if (visibleItems === 0 && visibleSubs === 0) {
                     $(this).hide();
                 } else {
                     $(this).show();
@@ -273,14 +369,17 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             });
         },
 
+        // ─── Sub-BOM Toggle ──────────────────────────────────────────────────────
+
         _onProductClick: function (ev) {
             ev.preventDefault();
             var $target = $(ev.currentTarget);
             var prodId = $target.data('product-id');
             var bomQty = parseFloat($target.data('bom-qty') || 1.0);
+            var grpKey = $target.closest('tr.item-row').data('group');
             var $btn = $target.closest('td').find('.msp-btn-sub-bom');
             if ($btn.length) {
-                this._toggleSubBomForProduct(prodId, bomQty, $btn);
+                this._toggleSubBomForProduct(prodId, bomQty, grpKey, $btn);
             }
         },
 
@@ -290,16 +389,16 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var $btn = $(ev.currentTarget);
             var prodId = $btn.data('product-id');
             var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
-            this._toggleSubBomForProduct(prodId, bomQty, $btn);
+            var grpKey = $btn.closest('tr.item-row').data('group');
+            this._toggleSubBomForProduct(prodId, bomQty, grpKey, $btn);
         },
 
-        _toggleSubBomForProduct: function (prodId, bomQty, $btn) {
+        _toggleSubBomForProduct: function (prodId, bomQty, grpKey, $btn) {
             var self = this;
             var $row = $btn.closest('tr.item-row');
             var $existingSubRows = this.$('tr.sub-bom-row[data-parent-id="' + prodId + '"]');
 
             if ($existingSubRows.length) {
-                // Toggle visibility if already rendered
                 if ($existingSubRows.is(':visible')) {
                     $existingSubRows.hide();
                     $btn.removeClass('expanded');
@@ -312,7 +411,6 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 return Promise.resolve();
             }
 
-            // Otherwise, fetch sub-BOM details from server (or cache)
             $btn.addClass('expanded');
             $btn.find('.msp-bom-arrow').removeClass('fa-caret-right').addClass('fa-spinner fa-spin');
 
@@ -346,11 +444,12 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 self.sub_bom_cache[prodId] = result;
                 self.expanded_boms[prodId] = true;
 
-                // Render Sub-BOM rows (inline matching table columns)
+                // Render sub-BOM rows — pass group key so search/collapse can filter by group
                 var subRowHtml = QWeb.render('MatiaStockPlanning.SubBomRows', {
                     widget: self,
                     data: result,
                     parent_id: prodId,
+                    group_key: grpKey || '',
                 });
 
                 $row.after(subRowHtml);
@@ -365,19 +464,88 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             });
         },
 
+        // ─── Expand / Collapse All ───────────────────────────────────────────────
+
         _onExpandAllBoms: function (ev) {
             ev.preventDefault();
             var self = this;
-            var buttons = this.$('.msp-btn-sub-bom:not(.expanded)').toArray();
-            if (!buttons.length) {
+
+            // Collect all products that need fetching (not cached, not already expanded)
+            var toFetch = [];
+            var toShow = [];
+
+            this.$('.msp-btn-sub-bom').each(function () {
+                var $btn = $(this);
+                var prodId = $btn.data('product-id');
+                var grpKey = $btn.closest('tr.item-row').data('group');
+                var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
+
+                if (self.$('tr.sub-bom-row[data-parent-id="' + prodId + '"]').length) {
+                    // Already rendered — just show if hidden
+                    toShow.push({ $btn: $btn, prodId: prodId });
+                } else if (!$btn.hasClass('expanded')) {
+                    toFetch.push({ $btn: $btn, prodId: parseInt(prodId, 10), bomQty: bomQty, grpKey: grpKey });
+                }
+            });
+
+            // Show already-rendered rows
+            toShow.forEach(function (item) {
+                self.$('tr.sub-bom-row[data-parent-id="' + item.prodId + '"]').show();
+                item.$btn.addClass('expanded');
+                self.expanded_boms[item.prodId] = true;
+            });
+
+            if (!toFetch.length) {
+                if (toShow.length) {
+                    self.displayNotification({ title: _t("Expanded"), message: _t("All sub-assembly BOMs are now visible."), type: 'success' });
+                }
                 return;
             }
 
-            var promises = buttons.map(function (btnEl) {
-                var $btn = $(btnEl);
-                var prodId = $btn.data('product-id');
-                var bomQty = parseFloat($btn.data('bom-qty') || 1.0);
-                return self._toggleSubBomForProduct(prodId, bomQty, $btn);
+            // PERFORMANCE: Batch fetch all uncached products in one RPC call
+            var uncachedIds = toFetch.filter(function (f) { return !self.sub_bom_cache[f.prodId]; });
+            var cachedFetch = toFetch.filter(function (f) { return !!self.sub_bom_cache[f.prodId]; });
+
+            // Render already-cached ones immediately
+            cachedFetch.forEach(function (f) {
+                self._renderSubBomRows(f.$btn, f.prodId, f.grpKey, self.sub_bom_cache[f.prodId]);
+            });
+
+            if (!uncachedIds.length) {
+                self.displayNotification({ title: _t("Expanded"), message: _t("All available sub-assembly BOMs have been expanded."), type: 'success' });
+                return;
+            }
+
+            // Show loading state on all buttons being fetched
+            uncachedIds.forEach(function (f) {
+                f.$btn.addClass('expanded');
+                f.$btn.find('.msp-bom-arrow').removeClass('fa-caret-right').addClass('fa-spinner fa-spin');
+            });
+
+            // Batch: one RPC per unique product (parallel but grouped)
+            var promises = uncachedIds.map(function (f) {
+                return self._rpc({
+                    model: 'matia.stock.planning',
+                    method: 'get_sub_bom_details',
+                    kwargs: {
+                        product_id: f.prodId,
+                        parent_bom_qty: f.bomQty,
+                        dynamic_targets: self.dynamic_targets,
+                        include_tr: self.include_tr,
+                        include_usa: self.include_usa,
+                    }
+                }).then(function (result) {
+                    f.$btn.find('.msp-bom-arrow').removeClass('fa-spinner fa-spin').addClass('fa-caret-right');
+                    if (result && result.has_bom) {
+                        self.sub_bom_cache[f.prodId] = result;
+                        self._renderSubBomRows(f.$btn, f.prodId, f.grpKey, result);
+                    } else {
+                        f.$btn.removeClass('expanded');
+                    }
+                }).catch(function () {
+                    f.$btn.removeClass('expanded');
+                    f.$btn.find('.msp-bom-arrow').removeClass('fa-spinner fa-spin').addClass('fa-caret-right');
+                });
             });
 
             Promise.all(promises).then(function () {
@@ -389,18 +557,27 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             });
         },
 
+        // Helper: render sub-BOM rows after a $btn's parent item-row
+        _renderSubBomRows: function ($btn, prodId, grpKey, result) {
+            var $row = $btn.closest('tr.item-row');
+            this.expanded_boms[prodId] = true;
+            var subRowHtml = QWeb.render('MatiaStockPlanning.SubBomRows', {
+                widget: this,
+                data: result,
+                parent_id: prodId,
+                group_key: grpKey || '',
+            });
+            $row.after(subRowHtml);
+        },
+
         _onCollapseAllBoms: function (ev) {
             ev.preventDefault();
-            // Only collapse sub-BOMs in visible groups
+            // Only collapse sub-BOMs in visible (non-hidden) groups
             var self = this;
             this.$('tr.sub-bom-row').each(function () {
-                var $row = $(this);
-                var parentId = $row.data('parent-id');
-                // Find which group this row's parent item belongs to
-                var $parentRow = self.$('tr.item-row .msp-btn-sub-bom[data-product-id="' + parentId + '"]').closest('tr.item-row');
-                var grpKey = $parentRow.data('group');
+                var grpKey = $(this).data('group');
                 if (!self.hidden_groups[grpKey]) {
-                    $row.hide();
+                    $(this).hide();
                 }
             });
             this.$('.msp-btn-sub-bom').removeClass('expanded');
@@ -412,37 +589,43 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             });
         },
 
+        // ─── Group Show / Hide ───────────────────────────────────────────────────
+
         _onToggleGroup: function (ev) {
             ev.preventDefault();
+            ev.stopPropagation();
             var $btn = $(ev.currentTarget);
             var grpKey = $btn.data('group-key');
+
             if (this.hidden_groups[grpKey]) {
                 // Show
                 delete this.hidden_groups[grpKey];
                 this.$('.item-row[data-group="' + grpKey + '"]').show();
-                this.$('.sub-bom-row[data-group="' + grpKey + '"]').show();
+                // Show expanded sub-bom rows for this group
+                var self = this;
+                Object.keys(this.expanded_boms).forEach(function (prodId) {
+                    if (self.$('tr.item-row[data-group="' + grpKey + '"] .msp-btn-sub-bom[data-product-id="' + prodId + '"]').length) {
+                        self.$('tr.sub-bom-row[data-parent-id="' + prodId + '"]').show();
+                    }
+                });
                 $btn.html('<i class="fa fa-eye-slash mr-1"></i>Hide');
-                $btn.removeClass('btn-outline-secondary').addClass('btn-outline-danger');
+                $btn.removeClass('msp-btn-group-show').addClass('msp-btn-group-hide');
             } else {
                 // Hide
                 this.hidden_groups[grpKey] = true;
                 this.$('.item-row[data-group="' + grpKey + '"]').hide();
-                // Also hide any expanded sub-bom rows whose parent item belongs to this group
-                var self = this;
-                Object.keys(this.expanded_boms).forEach(function (prodId) {
-                    if (self.$('tr.item-row[data-group="' + grpKey + '"] .msp-btn-sub-bom[data-product-id="' + prodId + '"]').length) {
-                        self.$('tr.sub-bom-row[data-parent-id="' + prodId + '"]').hide();
-                    }
-                });
+                // Hide sub-bom rows for this group
+                this.$('tr.sub-bom-row[data-group="' + grpKey + '"]').hide();
                 $btn.html('<i class="fa fa-eye mr-1"></i>Show');
-                $btn.removeClass('btn-outline-danger').addClass('btn-outline-secondary');
+                $btn.removeClass('msp-btn-group-hide').addClass('msp-btn-group-show');
             }
         },
+
+        // ─── Excel Export ────────────────────────────────────────────────────────
 
         _onExportExcel: function (ev) {
             ev.preventDefault();
 
-            // Collect visible headers
             var headers = ['Part Code', 'Part Name'];
             if (this.show_bom_qty) {
                 headers.push('Usage Qty');
@@ -456,14 +639,13 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 headers.push(this.dynamic_targets[i] + ' Devices Needed');
             }
 
-            // Collect groups and rows
             var exportGroups = [];
             var self = this;
 
             for (var g = 0; g < this.groups.length; g++) {
                 var grp = this.groups[g];
 
-                // Skip hidden groups in the export
+                // Skip hidden groups
                 if (this.hidden_groups[grp.key]) {
                     continue;
                 }
@@ -474,31 +656,23 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     var item = grp.items[itmIdx];
                     var cells = [];
 
-                    // Part Code
                     cells.push({ val: item.product_code || '', type: 'text' });
-                    // Part Name
                     cells.push({ val: item.product_name || '', type: 'text' });
-                    // Usage Qty (if visible)
                     if (self.show_bom_qty) {
                         cells.push({ val: item.bom_qty + ' ' + (item.uom_name || ''), type: 'text' });
                     }
-                    // Stock
                     var sVal = (item.stock_qty !== undefined && item.stock_qty !== null && item.stock_qty !== false) ? item.stock_qty : 0;
                     cells.push({ val: sVal, type: 'number' });
-                    // NCR
                     var nVal = (item.ncr_qty !== undefined && item.ncr_qty !== null && item.ncr_qty !== false) ? item.ncr_qty : 0;
                     cells.push({ val: nVal, type: 'number' });
-                    // Producible Devices
                     var dVal = (item.max_devices !== undefined && item.max_devices !== null && item.max_devices !== false) ? item.max_devices : 0;
                     cells.push({ val: dVal, type: 'number' });
-                    // 20 Devices Needed
                     if (item.req_20_status === 'OK') {
                         cells.push({ val: 'OK', type: 'ok' });
                     } else {
                         cells.push({ val: item.req_20_val, type: 'need' });
                     }
 
-                    // Dynamic Targets
                     for (var d = 0; d < self.dynamic_targets.length; d++) {
                         var target = self.dynamic_targets[d];
                         var dynObj = item.dynamic_needs[target.toString()];
@@ -513,39 +687,31 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
                     grpItems.push({ cells: cells, is_sub: false });
 
-                    // If this item has an expanded sub-BOM, export sub-components directly beneath it
+                    // Sub-BOM rows if expanded
                     if (self.expanded_boms[item.product_id] && self.sub_bom_cache[item.product_id]) {
                         var subData = self.sub_bom_cache[item.product_id];
                         for (var sIdx = 0; sIdx < subData.items.length; sIdx++) {
                             var subItem = subData.items[sIdx];
                             var subCells = [];
 
-                            // Sub Part Code (indented)
                             subCells.push({ val: '    ' + (subItem.product_code || ''), type: 'text' });
-                            // Sub Part Name (indented)
                             subCells.push({ val: '    ↳ ' + (subItem.product_name || ''), type: 'text' });
 
-                            // Usage Qty
                             if (self.show_bom_qty) {
                                 subCells.push({ val: subItem.bom_qty + ' ' + (subItem.uom_name || ''), type: 'text' });
                             }
-                            // Stock
                             var subSVal = (subItem.stock_qty !== undefined && subItem.stock_qty !== null && subItem.stock_qty !== false) ? subItem.stock_qty : 0;
                             subCells.push({ val: subSVal, type: 'number' });
-                            // NCR
                             var subNVal = (subItem.ncr_qty !== undefined && subItem.ncr_qty !== null && subItem.ncr_qty !== false) ? subItem.ncr_qty : 0;
                             subCells.push({ val: subNVal, type: 'number' });
-                            // Producible Devices
                             var subDVal = (subItem.max_devices !== undefined && subItem.max_devices !== null && subItem.max_devices !== false) ? subItem.max_devices : 0;
                             subCells.push({ val: subDVal, type: 'number' });
-                            // 20 Devices Needed
                             if (subItem.req_20_status === 'OK') {
                                 subCells.push({ val: 'OK', type: 'ok' });
                             } else {
                                 subCells.push({ val: subItem.req_20_val, type: 'need' });
                             }
 
-                            // Dynamic Targets
                             for (var dt = 0; dt < self.dynamic_targets.length; dt++) {
                                 var dtTarget = self.dynamic_targets[dt];
                                 var subDynObj = subItem.dynamic_needs[dtTarget.toString()];
@@ -580,7 +746,6 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 filter_info: filterInfo.join(' + ') + ' [Excl. NCR]',
             };
 
-            // Trigger file download via form post
             var form = document.createElement('form');
             form.action = '/matia_stock_planning/export_xlsx';
             form.method = 'POST';
