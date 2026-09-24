@@ -37,8 +37,12 @@ class MatiaStockPlanning(models.AbstractModel):
         # Accept at most 3 dynamic targets
         dynamic_targets = [int(t) for t in dynamic_targets if str(t).isdigit() and int(t) > 0][:3]
 
+        # 0. Multi-company context: ensure all company locations and quants are readable
+        all_companies = self.env['res.company'].sudo().search([])
+        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids)).sudo()
+
         # 1. Identify locations
-        all_locs = self.env['stock.location'].search([('usage', '=', 'internal')])
+        all_locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
         
         tr_stock_locs = []
         usa_stock_locs = []
@@ -107,14 +111,14 @@ class MatiaStockPlanning(models.AbstractModel):
             # 1. Try preferred direct ID if exists
             pref_id = cfg.get('preferred_id')
             if pref_id:
-                pref_bom = self.env['mrp.bom'].browse(pref_id)
+                pref_bom = env_sudo['mrp.bom'].browse(pref_id)
                 if pref_bom.exists() and pref_bom.active:
                     bom = pref_bom
 
             # 2. Sequential priority search by exact product template name
             if not bom:
                 for n in cfg['names']:
-                    bom = self.env['mrp.bom'].search([
+                    bom = env_sudo['mrp.bom'].search([
                         ('product_tmpl_id.name', '=', n)
                     ], limit=1)
                     if bom:
@@ -123,7 +127,7 @@ class MatiaStockPlanning(models.AbstractModel):
             # 3. Fallback search with ilike
             if not bom:
                 for n in cfg['names']:
-                    bom = self.env['mrp.bom'].search([
+                    bom = env_sudo['mrp.bom'].search([
                         '|',
                         ('product_tmpl_id.name', 'ilike', n),
                         ('code', 'ilike', n)
@@ -156,13 +160,13 @@ class MatiaStockPlanning(models.AbstractModel):
                 'items': lines_list,
             })
 
-        # 3. Read stock and NCR quantities
+        # 3. Read stock and NCR quantities across all companies
         product_stock = {pid: 0.0 for pid in all_product_ids}
         product_ncr = {pid: 0.0 for pid in all_product_ids}
 
         if all_product_ids:
             if selected_loc_ids:
-                stock_quants = self.env['stock.quant'].read_group(
+                stock_quants = env_sudo['stock.quant'].read_group(
                     [
                         ('product_id', 'in', list(all_product_ids)),
                         ('location_id', 'in', selected_loc_ids)
@@ -175,7 +179,7 @@ class MatiaStockPlanning(models.AbstractModel):
                     product_stock[pid] = float(sq.get('quantity') or 0.0)
 
             if selected_ncr_ids:
-                ncr_quants = self.env['stock.quant'].read_group(
+                ncr_quants = env_sudo['stock.quant'].read_group(
                     [
                         ('product_id', 'in', list(all_product_ids)),
                         ('location_id', 'in', selected_ncr_ids)
@@ -238,7 +242,8 @@ class MatiaStockPlanning(models.AbstractModel):
 
                 s_clean = float(s_qty or 0.0)
                 n_clean = float(n_qty or 0.0)
-                item['stock_qty'] = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
+                s_disp = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
+                item['stock_qty'] = s_disp
                 item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
                 item['max_devices'] = max_dev
                 item['req_20_status'] = req_20_status
@@ -246,15 +251,15 @@ class MatiaStockPlanning(models.AbstractModel):
                 item['req_20_text'] = 'OK' if req_20_status == 'OK' else str(req_20_val)
                 item['dynamic_needs'] = dynamic_needs
 
-                # Group bottleneck
+                # Group bottleneck with stock amount
                 if max_dev < grp_min_devices:
                     grp_min_devices = max_dev
-                    grp_bottleneck_product = item['display_name']
+                    grp_bottleneck_product = f"{item['display_name']} ({s_disp} {item['uom_name']})"
 
-                # Overall bottleneck
+                # Overall bottleneck with stock amount
                 if max_dev < overall_min_devices:
                     overall_min_devices = max_dev
-                    overall_bottleneck_product = item['display_name']
+                    overall_bottleneck_product = f"{item['display_name']} ({s_disp} {item['uom_name']})"
 
             grp['min_devices'] = grp_min_devices if grp_min_devices != 999999 else 0
             grp['bottleneck_product'] = grp_bottleneck_product
@@ -282,7 +287,11 @@ class MatiaStockPlanning(models.AbstractModel):
         Fetches the Bill of Materials (BOM) components and their current stock levels
         for a specific sub-assembly product, scaled to the main device requirements.
         """
-        product = self.env['product.product'].browse(product_id)
+        # Multi-company context: ensure all company locations and quants are readable
+        all_companies = self.env['res.company'].sudo().search([])
+        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids)).sudo()
+
+        product = env_sudo['product.product'].browse(product_id)
         if not product.exists():
             return {'has_bom': False, 'message': 'Product not found'}
 
@@ -292,7 +301,7 @@ class MatiaStockPlanning(models.AbstractModel):
         parent_bom_qty = float(parent_bom_qty or 1.0)
 
         # Find BOM for this product
-        bom = self.env['mrp.bom'].search([
+        bom = env_sudo['mrp.bom'].search([
             '|',
             ('product_id', '=', product.id),
             '&',
@@ -302,7 +311,7 @@ class MatiaStockPlanning(models.AbstractModel):
 
         if not bom:
             # Fallback search by template
-            bom = self.env['mrp.bom'].search([
+            bom = env_sudo['mrp.bom'].search([
                 ('product_tmpl_id', '=', product.product_tmpl_id.id)
             ], limit=1)
 
@@ -313,8 +322,8 @@ class MatiaStockPlanning(models.AbstractModel):
                 'message': 'No BOM defined for this product'
             }
 
-        # 1. Identify locations
-        all_locs = self.env['stock.location'].search([('usage', '=', 'internal')])
+        # 1. Identify locations across all companies
+        all_locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
         selected_loc_ids = []
         selected_ncr_ids = []
 
@@ -357,13 +366,13 @@ class MatiaStockPlanning(models.AbstractModel):
                 'has_bom': bool(p.product_tmpl_id.bom_ids),
             })
 
-        # 3. Read stock
+        # 3. Read stock across all companies
         product_stock = {pid: 0.0 for pid in sub_product_ids}
         product_ncr = {pid: 0.0 for pid in sub_product_ids}
 
         if sub_product_ids:
             if selected_loc_ids:
-                stock_quants = self.env['stock.quant'].read_group(
+                stock_quants = env_sudo['stock.quant'].read_group(
                     [
                         ('product_id', 'in', list(sub_product_ids)),
                         ('location_id', 'in', selected_loc_ids)
@@ -376,7 +385,7 @@ class MatiaStockPlanning(models.AbstractModel):
                     product_stock[pid] = float(sq.get('quantity') or 0.0)
 
             if selected_ncr_ids:
-                ncr_quants = self.env['stock.quant'].read_group(
+                ncr_quants = env_sudo['stock.quant'].read_group(
                     [
                         ('product_id', 'in', list(sub_product_ids)),
                         ('location_id', 'in', selected_ncr_ids)
@@ -434,7 +443,8 @@ class MatiaStockPlanning(models.AbstractModel):
 
             s_clean = float(s_qty or 0.0)
             n_clean = float(n_qty or 0.0)
-            item['stock_qty'] = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
+            s_disp = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
+            item['stock_qty'] = s_disp
             item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
             item['max_devices'] = max_dev
             item['req_20_status'] = req_20_status
@@ -444,7 +454,7 @@ class MatiaStockPlanning(models.AbstractModel):
 
             if max_dev < min_producible:
                 min_producible = max_dev
-                bottleneck_product = item['display_name']
+                bottleneck_product = f"{item['display_name']} ({s_disp} {item['uom_name']})"
 
         if min_producible == 999999:
             min_producible = 0

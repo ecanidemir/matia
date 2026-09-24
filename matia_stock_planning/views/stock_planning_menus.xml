@@ -1,16 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Main Inventory Menu: Device Capacity Plan -->
+    <!-- Top-Level App Menu: accessible to ALL internal users (no groups restriction) -->
+    <!-- Server-side data access is handled via sudo() with allowed_company_ids bypass -->
+    <menuitem id="menu_matia_stock_planning_app"
+              name="Capacity Plan"
+              web_icon="matia_stock_planning,static/description/icon.png"
+              groups="base.group_user"
+              sequence="100"/>
+
+    <menuitem id="menu_matia_stock_planning_app_dashboard"
+              name="TekRMD Device Capacity"
+              parent="menu_matia_stock_planning_app"
+              action="action_matia_stock_planning_dashboard"
+              groups="base.group_user"
+              sequence="10"/>
+
+    <!-- Inventory Menu: Device Capacity Plan (for stock users) -->
     <menuitem id="menu_matia_stock_planning_root"
               name="Device Capacity Plan"
               parent="stock.menu_stock_root"
               action="action_matia_stock_planning_dashboard"
+              groups="base.group_user"
               sequence="15"/>
 
-    <!-- Inventory > Reporting: TekRMD Device Capacity -->
+    <!-- Inventory > Reporting: TekRMD Device Capacity (for stock users) -->
     <menuitem id="menu_matia_stock_planning_report"
               name="TekRMD Device Capacity"
               parent="stock.menu_warehouse_report"
               action="action_matia_stock_planning_dashboard"
+              groups="base.group_user"
               sequence="25"/>
 </odoo>
