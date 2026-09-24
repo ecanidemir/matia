@@ -172,15 +172,31 @@ class MatiaStockPlanningController(http.Controller):
                     c_type = cell.get('type', 'text')
 
                     if c_type == 'ok':
-                        worksheet.write(row, col_idx, val, cell_ok_format)
+                        worksheet.write(row, col_idx, 'OK', cell_ok_format)
                     elif c_type == 'need':
-                        worksheet.write(row, col_idx, val, cell_need_format)
+                        need_val = 0
+                        try:
+                            need_val = int(val) if val not in [False, None, ''] else 0
+                        except:
+                            need_val = val
+                        worksheet.write(row, col_idx, need_val, cell_need_format)
                     elif c_type == 'number':
-                        worksheet.write(row, col_idx, val, cell_num_format)
+                        num_val = 0
+                        try:
+                            if val not in [False, None, '']:
+                                num_val = float(val)
+                                if num_val.is_integer():
+                                    num_val = int(num_val)
+                            else:
+                                num_val = 0
+                        except:
+                            num_val = 0
+                        worksheet.write(row, col_idx, num_val, cell_num_format)
                     else:
-                        worksheet.write(row, col_idx, val, cell_text_format)
+                        text_val = '' if val in [False, None] else str(val)
+                        worksheet.write(row, col_idx, text_val, cell_text_format)
 
-                    val_str = str(val)
+                    val_str = str(val if val not in [False, None] else (0 if c_type == 'number' else ''))
                     if len(val_str) + 3 > col_widths[col_idx]:
                         col_widths[col_idx] = min(len(val_str) + 3, 50)
                 row += 1

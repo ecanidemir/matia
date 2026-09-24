@@ -197,13 +197,17 @@
 
                                         <!-- Net Stock -->
                                         <td class="td-stock">
-                                            <t t-esc="item.stock_qty"/>
+                                            <t t-if="item.stock_qty !== undefined &amp;&amp; item.stock_qty !== null &amp;&amp; item.stock_qty !== false">
+                                                <t t-esc="item.stock_qty"/>
+                                            </t>
+                                            <t t-else="">0</t>
                                         </td>
 
                                         <!-- NCR Quantity Info -->
                                         <td class="td-ncr">
-                                            <span t-attf-class="ncr-pill #{item.ncr_qty > 0 ? 'ncr-has-stock' : ''}" t-att-title="item.ncr_qty > 0 ? item.ncr_qty + ' units available in NCR' : 'None in NCR'">
-                                                <t t-esc="item.ncr_qty"/>
+                                            <t t-set="ncr_val" t-value="(item.ncr_qty !== undefined &amp;&amp; item.ncr_qty !== null &amp;&amp; item.ncr_qty !== false) ? item.ncr_qty : 0"/>
+                                            <span t-attf-class="ncr-pill #{ncr_val &gt; 0 ? 'ncr-has-stock' : ''}" t-att-title="ncr_val &gt; 0 ? ncr_val + ' units available in NCR' : 'None in NCR'">
+                                                <t t-esc="ncr_val"/>
                                             </span>
                                         </td>
 

@@ -278,11 +278,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                         cells.push({ val: item.bom_qty + ' ' + (item.uom_name || ''), type: 'text' });
                     }
                     // Stock
-                    cells.push({ val: item.stock_qty, type: 'number' });
+                    var sVal = (item.stock_qty !== undefined && item.stock_qty !== null && item.stock_qty !== false) ? item.stock_qty : 0;
+                    cells.push({ val: sVal, type: 'number' });
                     // NCR
-                    cells.push({ val: item.ncr_qty, type: 'number' });
+                    var nVal = (item.ncr_qty !== undefined && item.ncr_qty !== null && item.ncr_qty !== false) ? item.ncr_qty : 0;
+                    cells.push({ val: nVal, type: 'number' });
                     // Producible Devices
-                    cells.push({ val: item.max_devices, type: 'number' });
+                    var dVal = (item.max_devices !== undefined && item.max_devices !== null && item.max_devices !== false) ? item.max_devices : 0;
+                    cells.push({ val: dVal, type: 'number' });
                     // 20 Devices Needed
                     if (item.req_20_status === 'OK') {
                         cells.push({ val: 'OK', type: 'ok' });

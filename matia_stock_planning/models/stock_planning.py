@@ -140,7 +140,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 )
                 for sq in stock_quants:
                     pid = sq['product_id'][0]
-                    product_stock[pid] = sq['quantity']
+                    product_stock[pid] = float(sq.get('quantity') or 0.0)
 
             if selected_ncr_ids:
                 ncr_quants = self.env['stock.quant'].read_group(
@@ -153,7 +153,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 )
                 for nq in ncr_quants:
                     pid = nq['product_id'][0]
-                    product_ncr[pid] = nq['quantity']
+                    product_ncr[pid] = float(nq.get('quantity') or 0.0)
 
         # 4. Compute items and KPIs
         overall_min_devices = 999999
@@ -204,8 +204,10 @@ class MatiaStockPlanning(models.AbstractModel):
                             'text': str(c_val)
                         }
 
-                item['stock_qty'] = s_qty
-                item['ncr_qty'] = n_qty
+                s_clean = float(s_qty or 0.0)
+                n_clean = float(n_qty or 0.0)
+                item['stock_qty'] = int(s_clean) if s_clean.is_integer() else round(s_clean, 2)
+                item['ncr_qty'] = int(n_clean) if n_clean.is_integer() else round(n_clean, 2)
                 item['max_devices'] = max_dev
                 item['req_20_status'] = req_20_status
                 item['req_20_val'] = req_20_val
