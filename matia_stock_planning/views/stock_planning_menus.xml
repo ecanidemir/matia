@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Ana Envanter Menüsü Altında Cihaz Kapasite Planı -->
+    <menuitem id="menu_matia_stock_planning_root"
+              name="Cihaz Kapasite Planı"
+              parent="stock.menu_stock_root"
+              action="action_matia_stock_planning_dashboard"
+              sequence="15"/>
+
+    <!-- Envanter > Raporlama Altında da Erişilebilirlik -->
+    <menuitem id="menu_matia_stock_planning_report"
+              name="TekRMD Cihaz Kapasitesi"
+              parent="stock.menu_warehouse_report"
+              action="action_matia_stock_planning_dashboard"
+              sequence="25"/>
+</odoo>

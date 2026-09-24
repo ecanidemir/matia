@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_matia_stock_planning_user,matia.stock.planning.user,model_matia_stock_planning,stock.group_stock_user,1,1,1,1
+access_matia_stock_planning_manager,matia.stock.planning.manager,model_matia_stock_planning,stock.group_stock_manager,1,1,1,1

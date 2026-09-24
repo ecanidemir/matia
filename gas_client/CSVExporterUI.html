@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: 'Google Sans', 'Segoe UI', Arial, sans-serif;
+        padding: 20px;
+        text-align: center;
+      }
+      .btn {
+        display: inline-block;
+        background-color: #1a73e8;
+        color: white;
+        padding: 10px 24px;
+        text-decoration: none;
+        border-radius: 6px;
+        margin-top: 12px;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 14px;
+      }
+      .btn:hover { background-color: #1558b0; }
+      .info { color: #5f6368; font-size: 13px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div>CSV dosyası hazırlandı.</div>
+    <a id="downloadBtn" class="btn">📥 Dosyayı İndir</a>
+    <div class="info" id="fileName"></div>
+
+    <script>
+      window.onload = function() {
+        var csvContent = "<?= csvData ?>";
+        var fileName = "<?= fileName ?>";
+        var btn = document.getElementById('downloadBtn');
+        document.getElementById('fileName').textContent = fileName;
+
+        // Base64'ten Blob
+        var binary = atob(csvContent);
+        var array = [];
+        for (var i = 0; i < binary.length; i++) {
+          array.push(binary.charCodeAt(i));
+        }
+        var blob = new Blob([new Uint8Array(array)], {type: 'text/csv;charset=utf-8;'});
+
+        var url = URL.createObjectURL(blob);
+        btn.href = url;
+        btn.download = fileName;
+
+        btn.onclick = function() {
+          setTimeout(function() {
+            google.script.host.close();
+          }, 1000);
+        };
+      };
+    </script>
+  </body>
+</html>

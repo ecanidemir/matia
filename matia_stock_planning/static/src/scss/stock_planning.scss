@@ -1,0 +1,517 @@
+/* Matia TekRMD Stock Planning Styles */
+
+.o_matia_stock_planning {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+    background-color: #f8fafc;
+    padding: 1.5rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #1e293b;
+
+    /* Header Bar */
+    .msp-header {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        color: #ffffff;
+        padding: 1.25rem 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        margin-bottom: 1.25rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+
+        .msp-title-area {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+
+            i {
+                font-size: 1.75rem;
+                color: #38bdf8;
+            }
+
+            h2 {
+                margin: 0;
+                font-size: 1.35rem;
+                font-weight: 700;
+                letter-spacing: -0.025em;
+            }
+
+            p {
+                margin: 0;
+                font-size: 0.825rem;
+                color: #94a3b8;
+            }
+        }
+
+        .msp-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+    }
+
+    /* Filters & Controls Card */
+    .msp-controls-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1.25rem;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+
+        .msp-filter-group {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+            flex-wrap: wrap;
+
+            .msp-filter-label {
+                font-size: 0.875rem;
+                font-weight: 600;
+                color: #475569;
+                margin-right: 0.25rem;
+            }
+
+            .form-check {
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+                margin-bottom: 0;
+                user-select: none;
+                cursor: pointer;
+
+                input[type="checkbox"] {
+                    width: 1.15rem;
+                    height: 1.15rem;
+                    cursor: pointer;
+                }
+
+                .badge-loc {
+                    padding: 0.35rem 0.65rem;
+                    border-radius: 6px;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                }
+                .badge-tr {
+                    background-color: #fee2e2;
+                    color: #991b1b;
+                    border: 1px solid #fecaca;
+                }
+                .badge-usa {
+                    background-color: #dbeafe;
+                    color: #1e40af;
+                    border: 1px solid #bfdbfe;
+                }
+            }
+        }
+
+        .msp-tool-buttons {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+    }
+
+    /* KPI Summary Cards */
+    .msp-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1.25rem;
+
+        .msp-kpi-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: relative;
+            overflow: hidden;
+
+            &::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 4px;
+                height: 100%;
+            }
+
+            &.kpi-overall::before { background-color: #0284c7; }
+            &.kpi-base::before { background-color: #3b82f6; }
+            &.kpi-outdoor::before { background-color: #10b981; }
+            &.kpi-seat::before { background-color: #8b5cf6; }
+
+            .kpi-info {
+                .kpi-title {
+                    font-size: 0.775rem;
+                    font-weight: 600;
+                    text-transform: uppercase;
+                    color: #64748b;
+                    letter-spacing: 0.05em;
+                }
+                .kpi-value {
+                    font-size: 1.65rem;
+                    font-weight: 800;
+                    color: #0f172a;
+                    margin-top: 0.2rem;
+                }
+                .kpi-sub {
+                    font-size: 0.75rem;
+                    color: #94a3b8;
+                    margin-top: 0.1rem;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    max-width: 170px;
+                }
+            }
+
+            .kpi-icon {
+                font-size: 1.85rem;
+                opacity: 0.25;
+            }
+        }
+    }
+
+    /* Dynamic Target Chips Bar */
+    .msp-dynamic-chips-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+
+        .chips-label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #64748b;
+        }
+
+        .target-chip {
+            background-color: #e0e7ff;
+            color: #3730a3;
+            border: 1px solid #c7d2fe;
+            border-radius: 9999px;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+
+            .chip-remove {
+                cursor: pointer;
+                color: #4f46e5;
+                font-weight: bold;
+                &:hover {
+                    color: #dc2626;
+                }
+            }
+        }
+    }
+
+    /* Table Container */
+    .msp-table-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        overflow: hidden;
+
+        .msp-table-search {
+            padding: 0.75rem 1.25rem;
+            border-bottom: 1px solid #e2e8f0;
+            background-color: #f8fafc;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+
+            .search-input-box {
+                position: relative;
+                max-width: 320px;
+                width: 100%;
+
+                i {
+                    position: absolute;
+                    left: 0.75rem;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    color: #94a3b8;
+                }
+
+                input {
+                    padding-left: 2.25rem;
+                    border-radius: 6px;
+                    border: 1px solid #cbd5e1;
+                    font-size: 0.85rem;
+                    width: 100%;
+                    height: 34px;
+
+                    &:focus {
+                        border-color: #0284c7;
+                        outline: none;
+                        box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.2);
+                    }
+                }
+            }
+
+            .table-legend {
+                display: flex;
+                gap: 1rem;
+                font-size: 0.75rem;
+                color: #64748b;
+
+                span {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.3rem;
+                }
+                .dot-ok {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background-color: #10b981;
+                }
+                .dot-need {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background-color: #ef4444;
+                }
+            }
+        }
+
+        .table-responsive {
+            margin: 0;
+            max-height: calc(100vh - 380px);
+            overflow-y: auto;
+        }
+
+        table.msp-table {
+            width: 100%;
+            margin-bottom: 0;
+            border-collapse: separate;
+            border-spacing: 0;
+
+            thead {
+                position: sticky;
+                top: 0;
+                z-index: 10;
+                background-color: #0f172a;
+                color: #ffffff;
+
+                th {
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                    letter-spacing: 0.03em;
+                    padding: 0.75rem 0.85rem;
+                    border: none;
+                    text-align: center;
+                    vertical-align: middle;
+                    white-space: nowrap;
+
+                    &.th-product {
+                        text-align: left;
+                        min-width: 260px;
+                    }
+                    &.th-dynamic {
+                        background-color: #1e1b4b;
+                        color: #c7d2fe;
+                        border-left: 1px solid #312e81;
+
+                        .dyn-header-content {
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 0.4rem;
+
+                            .btn-remove-dyn {
+                                color: #f87171;
+                                cursor: pointer;
+                                font-size: 0.9rem;
+                                &:hover {
+                                    color: #ef4444;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            tbody {
+                /* Group Header Row */
+                tr.group-row {
+                    background-color: #f1f5f9;
+                    font-weight: 700;
+                    font-size: 0.85rem;
+                    cursor: pointer;
+                    user-select: none;
+
+                    &.group-base {
+                        background-color: #eff6ff;
+                        color: #1e40af;
+                        border-top: 2px solid #bfdbfe;
+                    }
+                    &.group-outdoor {
+                        background-color: #ecfdf5;
+                        color: #065f46;
+                        border-top: 2px solid #a7f3d0;
+                    }
+                    &.group-seat {
+                        background-color: #faf5ff;
+                        color: #6b21a8;
+                        border-top: 2px solid #e9d5ff;
+                    }
+
+                    td {
+                        padding: 0.6rem 0.85rem;
+                        vertical-align: middle;
+
+                        .group-title-badge {
+                            font-size: 0.825rem;
+                            font-weight: 700;
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 0.5rem;
+                        }
+
+                        .group-count {
+                            font-size: 0.75rem;
+                            font-weight: 500;
+                            opacity: 0.8;
+                        }
+                    }
+                }
+
+                /* Data Rows */
+                tr.item-row {
+                    border-bottom: 1px solid #f1f5f9;
+                    transition: background-color 0.15s ease;
+
+                    &:hover {
+                        background-color: #f8fafc;
+                    }
+
+                    td {
+                        padding: 0.55rem 0.85rem;
+                        font-size: 0.825rem;
+                        vertical-align: middle;
+                        text-align: center;
+                        border-bottom: 1px solid #f1f5f9;
+
+                        &.td-product {
+                            text-align: left;
+                            .prod-code {
+                                font-weight: 600;
+                                color: #0284c7;
+                                margin-right: 0.35rem;
+                            }
+                            .prod-name {
+                                color: #334155;
+                            }
+                        }
+
+                        &.td-bom-qty {
+                            font-weight: 600;
+                            color: #475569;
+                        }
+
+                        &.td-stock {
+                            font-weight: 700;
+                            color: #0f172a;
+                        }
+
+                        &.td-ncr {
+                            color: #64748b;
+                            .ncr-pill {
+                                background-color: #f1f5f9;
+                                border: 1px solid #e2e8f0;
+                                padding: 0.15rem 0.45rem;
+                                border-radius: 4px;
+                                font-size: 0.75rem;
+                                font-weight: 500;
+                            }
+                            .ncr-has-stock {
+                                background-color: #fef3c7;
+                                color: #92400e;
+                                border-color: #fde68a;
+                                font-weight: 600;
+                            }
+                        }
+
+                        &.td-max-dev {
+                            .dev-badge {
+                                display: inline-block;
+                                padding: 0.25rem 0.6rem;
+                                border-radius: 6px;
+                                font-weight: 700;
+                                min-width: 44px;
+                            }
+                            .dev-critical {
+                                background-color: #fee2e2;
+                                color: #b91c1c;
+                                border: 1px solid #fca5a5;
+                            }
+                            .dev-warning {
+                                background-color: #fef3c7;
+                                color: #b45309;
+                                border: 1px solid #fcd34d;
+                            }
+                            .dev-good {
+                                background-color: #d1fae5;
+                                color: #047857;
+                                border: 1px solid #6ee7b7;
+                            }
+                        }
+
+                        &.td-req {
+                            .badge-req-ok {
+                                background-color: #dcfce7;
+                                color: #15803d;
+                                border: 1px solid #86efac;
+                                font-weight: 700;
+                                padding: 0.25rem 0.65rem;
+                                border-radius: 6px;
+                                display: inline-flex;
+                                align-items: center;
+                                gap: 0.25rem;
+                            }
+                            .badge-req-need {
+                                background-color: #fee2e2;
+                                color: #b91c1c;
+                                border: 1px solid #fca5a5;
+                                font-weight: 700;
+                                padding: 0.25rem 0.65rem;
+                                border-radius: 6px;
+                                display: inline-block;
+                                min-width: 40px;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Modal / Alert Prompt */
+    .msp-add-col-input {
+        max-width: 140px;
+        display: inline-block;
+    }
+}

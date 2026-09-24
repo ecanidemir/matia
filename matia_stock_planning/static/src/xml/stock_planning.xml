@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <!-- Ana Dashboard Şablonu -->
+    <t t-name="MatiaStockPlanning.Dashboard">
+        <div class="o_matia_stock_planning">
+
+            <!-- 1. Header Bar -->
+            <div class="msp-header">
+                <div class="msp-title-area">
+                    <i class="fa fa-cubes"></i>
+                    <div>
+                        <h2>TekRMD Cihaz Kapasite &amp; Stok Planı</h2>
+                        <p>BOM Reçetelerine Dayalı Net Stok ve Üretim İhtiyaç Analizi</p>
+                    </div>
+                </div>
+                <div class="msp-actions">
+                    <button class="btn btn-outline-light btn-sm msp-btn-refresh" title="Verileri Yenile">
+                        <i class="fa fa-refresh mr-1"></i> Yenile
+                    </button>
+                    <button class="btn btn-success btn-sm msp-btn-excel" title="Ekranda Görünen Tabloyu Excel Olarak İndir">
+                        <i class="fa fa-file-excel-o mr-1"></i> Excel İndir
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. Controls & Filters Card -->
+            <div class="msp-controls-card">
+                <!-- Sol: Lokasyon / Şirket Seçimi -->
+                <div class="msp-filter-group">
+                    <span class="msp-filter-label"><i class="fa fa-building-o mr-1"></i> Hesaplamaya Dahil Lokasyonlar:</span>
+                    <label class="form-check">
+                        <input type="checkbox" class="form-check-input msp-check-tr" t-att-checked="widget.include_tr ? 'checked' : undefined"/>
+                        <span class="badge-loc badge-tr"><i class="fa fa-map-marker mr-1"></i> TR (WHTR/Stock)</span>
+                    </label>
+                    <label class="form-check">
+                        <input type="checkbox" class="form-check-input msp-check-usa" t-att-checked="widget.include_usa ? 'checked' : undefined"/>
+                        <span class="badge-loc badge-usa"><i class="fa fa-map-marker mr-1"></i> USA (WHUS/Stock)</span>
+                    </label>
+                </div>
+
+                <!-- Sağ: Görünüm & Dinamik Sütun Araçları -->
+                <div class="msp-tool-buttons">
+                    <button class="btn btn-secondary btn-sm msp-btn-toggle-bom" t-att-title="widget.show_bom_qty ? 'Kullanım Miktarını Gizle' : 'Kullanım Miktarını Göster'">
+                        <i t-attf-class="fa #{widget.show_bom_qty ? 'fa-eye-slash' : 'fa-eye'} mr-1"></i>
+                        <span t-if="widget.show_bom_qty">Kullanım Miktarını Gizle</span>
+                        <span t-else="">Kullanım Miktarını Göster</span>
+                    </button>
+
+                    <button class="btn btn-primary btn-sm msp-btn-add-col" t-att-disabled="widget.dynamic_targets.length >= 3 ? 'disabled' : undefined" title="Yeni Hedef Cihaz Sütunu Ekle (En fazla 3 adet)">
+                        <i class="fa fa-plus-circle mr-1"></i> Hedef Sütunu Ekle
+                    </button>
+                </div>
+            </div>
+
+            <!-- 3. Dynamic Chips Bar (Varsa) -->
+            <div class="msp-dynamic-chips-bar" t-if="widget.dynamic_targets.length > 0">
+                <span class="chips-label"><i class="fa fa-columns mr-1"></i> Eklenen Dinamik Sütunlar:</span>
+                <t t-foreach="widget.dynamic_targets" t-as="target">
+                    <span class="target-chip">
+                        <t t-esc="target"/> Cihaz İhtiyacı
+                        <i class="fa fa-times-circle chip-remove" t-att-data-target="target" title="Bu sütunu kaldır"></i>
+                    </span>
+                </t>
+                <small class="text-muted ml-2">(Maksimum 3 sütun eklenebilir, kalan: <t t-esc="3 - widget.dynamic_targets.length"/>)</small>
+            </div>
+
+            <!-- 4. KPI Summary Cards -->
+            <div class="msp-kpi-grid">
+                <!-- Genel Darboğaz -->
+                <div class="msp-kpi-card kpi-overall">
+                    <div class="kpi-info">
+                        <div class="kpi-title">Üretilebilir TekRMD</div>
+                        <div class="kpi-value text-primary"><t t-esc="widget.summary.overall_min_devices"/> Adet</div>
+                        <div class="kpi-sub" t-att-title="'Darboğaz Parçası: ' + widget.summary.overall_bottleneck">
+                            Darboğaz: <t t-esc="widget.summary.overall_bottleneck"/>
+                        </div>
+                    </div>
+                    <div class="kpi-icon text-primary"><i class="fa fa-cogs"></i></div>
+                </div>
+
+                <!-- Base Darboğazı -->
+                <t t-set="base_grp" t-value="widget.get_group('base')"/>
+                <div class="msp-kpi-card kpi-base">
+                    <div class="kpi-info">
+                        <div class="kpi-title">Base (Common Parts)</div>
+                        <div class="kpi-value" style="color: #2563eb;">
+                            <t t-if="base_grp"><t t-esc="base_grp.min_devices"/> Adet</t>
+                            <t t-else="">-</t>
+                        </div>
+                        <div class="kpi-sub" t-if="base_grp" t-att-title="'Darboğaz: ' + base_grp.bottleneck_product">
+                            Darboğaz: <t t-esc="base_grp.bottleneck_product"/>
+                        </div>
+                    </div>
+                    <div class="kpi-icon" style="color: #2563eb;"><i class="fa fa-cube"></i></div>
+                </div>
+
+                <!-- Outdoor Darboğazı -->
+                <t t-set="outdoor_grp" t-value="widget.get_group('outdoor')"/>
+                <div class="msp-kpi-card kpi-outdoor">
+                    <div class="kpi-info">
+                        <div class="kpi-title">Outdoor Parts</div>
+                        <div class="kpi-value" style="color: #059669;">
+                            <t t-if="outdoor_grp"><t t-esc="outdoor_grp.min_devices"/> Adet</t>
+                            <t t-else="">-</t>
+                        </div>
+                        <div class="kpi-sub" t-if="outdoor_grp" t-att-title="'Darboğaz: ' + outdoor_grp.bottleneck_product">
+                            Darboğaz: <t t-esc="outdoor_grp.bottleneck_product"/>
+                        </div>
+                    </div>
+                    <div class="kpi-icon" style="color: #059669;"><i class="fa fa-sun-o"></i></div>
+                </div>
+
+                <!-- Seat Darboğazı -->
+                <t t-set="seat_grp" t-value="widget.get_group('seat')"/>
+                <div class="msp-kpi-card kpi-seat">
+                    <div class="kpi-info">
+                        <div class="kpi-title">Seat Parts</div>
+                        <div class="kpi-value" style="color: #7c3aed;">
+                            <t t-if="seat_grp"><t t-esc="seat_grp.min_devices"/> Adet</t>
+                            <t t-else="">-</t>
+                        </div>
+                        <div class="kpi-sub" t-if="seat_grp" t-att-title="'Darboğaz: ' + seat_grp.bottleneck_product">
+                            Darboğaz: <t t-esc="seat_grp.bottleneck_product"/>
+                        </div>
+                    </div>
+                    <div class="kpi-icon" style="color: #7c3aed;"><i class="fa fa-wheelchair"></i></div>
+                </div>
+            </div>
+
+            <!-- 5. Main Table Card -->
+            <div class="msp-table-card">
+                <!-- Search & Legend Bar -->
+                <div class="msp-table-search">
+                    <div class="search-input-box">
+                        <i class="fa fa-search"></i>
+                        <input type="text" class="msp-input-search" placeholder="Tabloda parça kodu veya adı ara..."/>
+                    </div>
+                    <div class="table-legend">
+                        <span><span class="dot-ok"></span> OK = Stok İhtiyacı Karşılıyor</span>
+                        <span><span class="dot-need"></span> Kırmızı Sayı = Üretim İçin Eksik Parça Adedi</span>
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="msp-table">
+                        <thead>
+                            <tr>
+                                <th class="th-product">Parça Adı &amp; Kodu</th>
+                                <th t-if="widget.show_bom_qty" class="th-bom-qty">Kullanım Miktarı</th>
+                                <th class="th-stock">Net Stok</th>
+                                <th class="th-ncr">NCR Alanı</th>
+                                <th class="th-max-dev">Üretilebilir Cihaz</th>
+                                <th class="th-req-20">20 Cihaz İhtiyacı</th>
+                                <t t-foreach="widget.dynamic_targets" t-as="target">
+                                    <th class="th-dynamic">
+                                        <div class="dyn-header-content">
+                                            <span><t t-esc="target"/> Cihaz İhtiyacı</span>
+                                            <i class="fa fa-times btn-remove-dyn" t-att-data-target="target" title="Sütunu Kaldır"></i>
+                                        </div>
+                                    </th>
+                                </t>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Reçete Grupları -->
+                            <t t-foreach="widget.groups" t-as="group">
+                                <!-- Grup Başlık Satırı -->
+                                <tr t-attf-class="group-row group-#{group.key}" t-att-data-group="group.key">
+                                    <td t-att-colspan="widget.get_total_columns_count()">
+                                        <div class="group-title-badge">
+                                            <i t-if="group.key == 'base'" class="fa fa-cube mr-1 text-primary"></i>
+                                            <i t-if="group.key == 'outdoor'" class="fa fa-sun-o mr-1 text-success"></i>
+                                            <i t-if="group.key == 'seat'" class="fa fa-wheelchair mr-1 text-warning"></i>
+                                            <span><t t-esc="group.title"/></span>
+                                            <span class="group-count ml-2">(<t t-esc="group.items.length"/> Parça)</span>
+                                            <span class="ml-auto text-muted" style="font-size: 0.75rem;">
+                                                Reçete: <t t-esc="group.bom_name"/>
+                                            </span>
+                                        </div>
+                                    </td>
+                                </tr>
+
+                                <!-- Ürün Satırları -->
+                                <t t-foreach="group.items" t-as="item">
+                                    <tr class="item-row" t-att-data-product-name="item.display_name.toLowerCase()" t-att-data-group="group.key">
+                                        <!-- Parça Kodu ve Adı -->
+                                        <td class="td-product">
+                                            <span t-if="item.product_code" class="prod-code">[<t t-esc="item.product_code"/>]</span>
+                                            <span class="prod-name"><t t-esc="item.product_name"/></span>
+                                        </td>
+
+                                        <!-- Kullanım Miktarı (Gizlenebilir) -->
+                                        <td t-if="widget.show_bom_qty" class="td-bom-qty">
+                                            <t t-esc="item.bom_qty"/> <small class="text-muted"><t t-esc="item.uom_name"/></small>
+                                        </td>
+
+                                        <!-- Eldeki Net Stok -->
+                                        <td class="td-stock">
+                                            <t t-esc="item.stock_qty"/>
+                                        </td>
+
+                                        <!-- NCR Bilgi Miktarı -->
+                                        <td class="td-ncr">
+                                            <span t-attf-class="ncr-pill #{item.ncr_qty > 0 ? 'ncr-has-stock' : ''}" t-att-title="item.ncr_qty > 0 ? 'NCR alanında ' + item.ncr_qty + ' adet mevcut' : 'NCR alanında yok'">
+                                                <t t-esc="item.ncr_qty"/>
+                                            </span>
+                                        </td>
+
+                                        <!-- Üretilebilecek Cihaz Sayısı -->
+                                        <td class="td-max-dev">
+                                            <span t-attf-class="dev-badge #{item.max_devices &lt; 20 ? 'dev-critical' : (item.max_devices &lt; 50 ? 'dev-warning' : 'dev-good')}">
+                                                <t t-esc="item.max_devices"/>
+                                            </span>
+                                        </td>
+
+                                        <!-- 20 Cihaz İhtiyacı -->
+                                        <td class="td-req td-req-20">
+                                            <t t-if="item.req_20_status == 'OK'">
+                                                <span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>
+                                            </t>
+                                            <t t-else="">
+                                                <span class="badge-req-need"><t t-esc="item.req_20_val"/></span>
+                                            </t>
+                                        </td>
+
+                                        <!-- Dinamik Hedef Sütunları -->
+                                        <t t-foreach="widget.dynamic_targets" t-as="target">
+                                            <t t-set="dyn_need" t-value="item.dynamic_needs[target.toString()]"/>
+                                            <td class="td-req td-dynamic">
+                                                <t t-if="dyn_need and dyn_need.status == 'OK'">
+                                                    <span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>
+                                                </t>
+                                                <t t-elif="dyn_need">
+                                                    <span class="badge-req-need"><t t-esc="dyn_need.val"/></span>
+                                                </t>
+                                                <t t-else="">-</t>
+                                            </td>
+                                        </t>
+                                    </tr>
+                                </t>
+                            </t>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </t>
+
+</templates>
