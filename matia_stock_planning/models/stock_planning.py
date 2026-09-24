@@ -38,9 +38,12 @@ class MatiaStockPlanning(models.AbstractModel):
         dynamic_targets = [int(t) for t in dynamic_targets if str(t).isdigit() and int(t) > 0][:3]
 
         # 0. Multi-company context: include ALL companies (even inactive/archived ones)
-        # active_test=False ensures pasif/archived USA company is still queried
-        all_companies = self.env(context={'active_test': False})['res.company'].sudo().search([])
-        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids, active_test=False)).sudo()
+        # Odoo 15 pattern: use with_context().sudo().env — Environment has no .sudo()
+        all_company_ids = self.env['res.company'].with_context(active_test=False).sudo().search([]).ids
+        env_sudo = self.with_context(
+            allowed_company_ids=all_company_ids,
+            active_test=False
+        ).sudo().env
 
         # 1. Identify locations
         all_locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
@@ -289,9 +292,12 @@ class MatiaStockPlanning(models.AbstractModel):
         for a specific sub-assembly product, scaled to the main device requirements.
         """
         # Multi-company context: include ALL companies (even inactive/archived ones)
-        # active_test=False ensures pasif/archived USA company is still queried
-        all_companies = self.env(context={'active_test': False})['res.company'].sudo().search([])
-        env_sudo = self.env(context=dict(self.env.context, allowed_company_ids=all_companies.ids, active_test=False)).sudo()
+        # Odoo 15 pattern: use with_context().sudo().env — Environment has no .sudo()
+        all_company_ids = self.env['res.company'].with_context(active_test=False).sudo().search([]).ids
+        env_sudo = self.with_context(
+            allowed_company_ids=all_company_ids,
+            active_test=False
+        ).sudo().env
 
         product = env_sudo['product.product'].browse(product_id)
         if not product.exists():
