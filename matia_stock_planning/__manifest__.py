@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 {
-    'name': 'Matia TekRMD Stok & Kapasite Planlama',
+    'name': 'Matia TekRMD Stock & Capacity Planning',
     'version': '15.0.1.0.0',
     'category': 'Inventory/Inventory',
-    'summary': 'TekRMD Reçeteleri ve Stok Miktarları ile Cihaz Kapasite Analizi',
+    'summary': 'Device Production Capacity & Stock Analysis based on TekRMD BOMs',
     'description': """
-Matia TekRMD Stok & Kapasite Planlama
-====================================
-Bu modül TekRMD Common Parts (Base), Outdoor Parts ve Seat Parts reçetelerindeki
-parçaların TR ve USA lokasyonlarındaki stok miktarlarını analiz ederek:
-- Üretilebilecek maksimum cihaz sayısını,
-- 20 cihaz için gerekli eksik ürün adetlerini,
-- Kullanıcı tanımlı 3 adede kadar dinamik hedef cihaz ihtiyacını,
-- TR (WHTR/Stock/*) ve USA (WHUS/Stock/*) konum filtrelemesini (NCR hariç),
-- NCR alanındaki stok miktarını bilgilendirme olarak,
-- Kullanım miktarı gizleme/gösterme seçeneğini,
-- Ekranda görülen yapıyı koruyarak Excel (.xlsx) indirme özelliğini sunar.
+Matia TekRMD Stock & Capacity Planning
+======================================
+This module analyzes parts from TekRMD Common Parts (Base), Outdoor Parts, and Seat Parts BOMs
+across TR and USA warehouse locations to calculate:
+- Maximum producible device count,
+- Missing part quantities needed for 20 devices,
+- Up to 3 customizable dynamic device target columns,
+- TR (WHTR/Stock/*) and USA (WHUS/Stock/*) location filtering (excluding NCR),
+- NCR storage stock quantities for informational purposes,
+- BOM usage quantity toggle (hide/show),
+- Direct Excel (.xlsx) export matching screen layout and visibility.
     """,
     'author': 'Matia Robotics',
     'website': 'https://matiamobility.com',

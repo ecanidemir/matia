@@ -50,7 +50,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             });
         },
 
-        // Helper: Grup verisine kolay erişim
+        // Helper: Access group by key
         get_group: function (key) {
             if (!this.groups) return null;
             for (var i = 0; i < this.groups.length; i++) {
@@ -61,9 +61,9 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             return null;
         },
 
-        // Helper: Tablo toplam kolon sayısı
+        // Helper: Total column count
         get_total_columns_count: function () {
-            var count = 5; // Ürün Adı, Stok, NCR, Üretilebilir Cihaz, 20 Cihaz İhtiyacı
+            var count = 5; // Product, Stock, NCR, Producible Devices, 20 Devices Needed
             if (this.show_bom_qty) {
                 count += 1;
             }
@@ -71,7 +71,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             return count;
         },
 
-        // Backend'den veri çekme
+        // Fetch data from backend
         _fetchPlanningData: function () {
             var self = this;
             return this._rpc({
@@ -87,8 +87,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 self.summary = result.summary || {};
             }).catch(function (error) {
                 self.displayNotification({
-                    title: _t("Veri Yükleme Hatası"),
-                    message: error.message || _t("Stok verileri alınırken bir hata oluştu."),
+                    title: _t("Data Loading Error"),
+                    message: error.message || _t("An error occurred while fetching stock data."),
                     type: 'danger'
                 });
             });
@@ -105,8 +105,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this._fetchPlanningData().then(function () {
                 self._updateView();
                 self.displayNotification({
-                    title: _t("Başarılı"),
-                    message: _t("Stok verileri güncellendi."),
+                    title: _t("Success"),
+                    message: _t("Stock data updated successfully."),
                     type: 'success'
                 });
             });
@@ -117,10 +117,9 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var usaChecked = this.$('.msp-check-usa').is(':checked');
 
             if (!trChecked && !usaChecked) {
-                // Kullanıcı ikisini de kapattıysa uyar ve son tıklananı geri aç
                 this.displayNotification({
-                    title: _t("Konum Seçimi Gerekli"),
-                    message: _t("Hesaplama yapılabilmesi için en az bir konum (TR veya USA) seçilmelidir!"),
+                    title: _t("Location Required"),
+                    message: _t("At least one location (TR or USA) must be selected for calculation!"),
                     type: 'warning'
                 });
                 $(ev.currentTarget).prop('checked', true);
@@ -148,14 +147,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
             if (this.dynamic_targets.length >= 3) {
                 this.displayNotification({
-                    title: _t("Sınır Aşıldı"),
-                    message: _t("En fazla 3 adet dinamik hedef cihaz sütunu ekleyebilirsiniz."),
+                    title: _t("Limit Exceeded"),
+                    message: _t("You can add a maximum of 3 dynamic target device columns."),
                     type: 'warning'
                 });
                 return;
             }
 
-            var inputVal = window.prompt(_t("İhtiyaç hesaplamak istediğiniz hedef cihaz adedini giriniz (Örn: 50, 100):"));
+            var inputVal = window.prompt(_t("Enter the target device quantity to calculate requirements for (e.g. 50, 100):"));
             if (!inputVal) {
                 return;
             }
@@ -163,8 +162,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var target = parseInt(inputVal.trim(), 10);
             if (isNaN(target) || target <= 0) {
                 this.displayNotification({
-                    title: _t("Geçersiz Değer"),
-                    message: _t("Lütfen sıfırdan büyük geçerli bir tamsayı giriniz."),
+                    title: _t("Invalid Input"),
+                    message: _t("Please enter a valid positive integer greater than zero."),
                     type: 'warning'
                 });
                 return;
@@ -172,8 +171,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
             if (target === 20) {
                 this.displayNotification({
-                    title: _t("Mevcut Sütun"),
-                    message: _t("20 Cihaz için ihtiyaç sütunu tabloda zaten varsayılan olarak bulunmaktadır."),
+                    title: _t("Column Exists"),
+                    message: _t("The 20 Devices requirement column is already present by default."),
                     type: 'info'
                 });
                 return;
@@ -181,8 +180,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
             if (this.dynamic_targets.indexOf(target) !== -1) {
                 this.displayNotification({
-                    title: _t("Zaten Eklendi"),
-                    message: _t(target + " Cihaz hedef sütunu zaten tabloda ekli."),
+                    title: _t("Already Added"),
+                    message: _t(target + " Devices target column is already in the table."),
                     type: 'info'
                 });
                 return;
@@ -218,7 +217,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 return;
             }
 
-            // Satırları filtrele
+            // Filter item rows
             this.$('.item-row').each(function () {
                 var name = $(this).data('product-name') || '';
                 if (name.indexOf(query) !== -1) {
@@ -228,7 +227,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 }
             });
 
-            // Boş kalan grup satırlarını gizle
+            // Hide empty group headers
             var self = this;
             this.$('.group-row').each(function () {
                 var grpKey = $(this).data('group');
@@ -244,21 +243,21 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         _onExportExcel: function (ev) {
             ev.preventDefault();
 
-            // Ekranda o an görünen başlıkları topla
-            var headers = ['Parça Kodu', 'Parça Adı'];
+            // Collect visible headers
+            var headers = ['Part Code', 'Part Name'];
             if (this.show_bom_qty) {
-                headers.push('Kullanım Miktarı');
+                headers.push('Usage Qty');
             }
-            headers.push('Net Eldeki Stok');
-            headers.push('NCR Bilgi');
-            headers.push('Üretilebilir Cihaz');
-            headers.push('20 Cihaz İhtiyacı');
+            headers.push('Net On Hand Stock');
+            headers.push('NCR Storage');
+            headers.push('Producible Devices');
+            headers.push('20 Devices Needed');
 
             for (var i = 0; i < this.dynamic_targets.length; i++) {
-                headers.push(this.dynamic_targets[i] + ' Cihaz İhtiyacı');
+                headers.push(this.dynamic_targets[i] + ' Devices Needed');
             }
 
-            // Grupları ve satırları topla
+            // Collect groups and rows
             var exportGroups = [];
             var self = this;
 
@@ -270,28 +269,28 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     var item = grp.items[itmIdx];
                     var cells = [];
 
-                    // Parça Kodu
+                    // Part Code
                     cells.push({ val: item.product_code || '', type: 'text' });
-                    // Parça Adı
+                    // Part Name
                     cells.push({ val: item.product_name || '', type: 'text' });
-                    // Kullanım Miktarı (varsa)
+                    // Usage Qty (if visible)
                     if (self.show_bom_qty) {
                         cells.push({ val: item.bom_qty + ' ' + (item.uom_name || ''), type: 'text' });
                     }
-                    // Stok
+                    // Stock
                     cells.push({ val: item.stock_qty, type: 'number' });
                     // NCR
                     cells.push({ val: item.ncr_qty, type: 'number' });
-                    // Üretilebilir Cihaz
+                    // Producible Devices
                     cells.push({ val: item.max_devices, type: 'number' });
-                    // 20 Cihaz İhtiyacı
+                    // 20 Devices Needed
                     if (item.req_20_status === 'OK') {
                         cells.push({ val: 'OK', type: 'ok' });
                     } else {
                         cells.push({ val: item.req_20_val, type: 'need' });
                     }
 
-                    // Dinamik Hedefler
+                    // Dynamic Targets
                     for (var d = 0; d < self.dynamic_targets.length; d++) {
                         var target = self.dynamic_targets[d];
                         var dynObj = item.dynamic_needs[target.toString()];
@@ -321,10 +320,10 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var payload = {
                 headers: headers,
                 groups: exportGroups,
-                filter_info: filterInfo.join(' + ') + ' [NCR Hariç]',
+                filter_info: filterInfo.join(' + ') + ' [Excl. NCR]',
             };
 
-            // İndirme formunu oluştur ve submit et
+            // Trigger file download via form post
             var form = document.createElement('form');
             form.action = '/matia_stock_planning/export_xlsx';
             form.method = 'POST';

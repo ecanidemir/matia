@@ -15,7 +15,7 @@ class MatiaStockPlanningController(http.Controller):
     @http.route('/matia_stock_planning/export_xlsx', type='http', auth='user', methods=['POST'], csrf=False)
     def export_xlsx(self, **kwargs):
         """
-        Ekranda o an görünen sütun ve verileri birebir temsil eden şık bir Excel dosyası oluşturur.
+        Generates an Excel sheet exactly matching the visible screen columns and rows.
         """
         data_json = kwargs.get('data')
         if not data_json:
@@ -28,7 +28,7 @@ class MatiaStockPlanningController(http.Controller):
 
         if not xlsxwriter:
             # Fallback to UTF-8 BOM CSV if xlsxwriter is missing
-            csv_lines = ['\ufeff' + f"Matia TekRMD Cihaz Stok ve Kapasite Planı - {filter_info}"]
+            csv_lines = ['\ufeff' + f"Matia TekRMD Device Stock & Capacity Plan - {filter_info}"]
             csv_lines.append(';'.join(headers))
             for grp in groups:
                 csv_lines.append(f"--- {grp.get('title', '')} ---")
@@ -36,7 +36,7 @@ class MatiaStockPlanningController(http.Controller):
                     vals = [str(c.get('val', '')) for c in itm.get('cells', [])]
                     csv_lines.append(';'.join(vals))
             content = '\r\n'.join(csv_lines).encode('utf-8')
-            filename = f"TekRMD_Stok_Kapasite_Plani_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+            filename = f"TekRMD_Stock_Capacity_Plan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
             return request.make_response(
                 content,
                 headers=[
@@ -47,10 +47,10 @@ class MatiaStockPlanningController(http.Controller):
 
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-        worksheet = workbook.add_worksheet('TekRMD Kapasite Plani')
+        worksheet = workbook.add_worksheet('TekRMD Capacity Plan')
         worksheet.hide_gridlines(False)
 
-        # Stiller
+        # Styles
         title_format = workbook.add_format({
             'bold': True,
             'font_size': 14,
@@ -130,15 +130,15 @@ class MatiaStockPlanningController(http.Controller):
             'valign': 'vcenter',
         })
 
-        # Başlık ve Tarih
+        # Header Title and Date
         row = 0
-        worksheet.write(row, 0, 'Matia TekRMD Cihaz Stok ve Kapasite Planı', title_format)
+        worksheet.write(row, 0, 'Matia TekRMD Device Stock & Capacity Plan', title_format)
         row += 1
-        now_str = datetime.now().strftime('%d.%m.%Y %H:%M')
-        worksheet.write(row, 0, f"Rapor Tarihi: {now_str} | Filtre: {filter_info}", info_format)
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        worksheet.write(row, 0, f"Report Date: {now_str} | Filter: {filter_info}", info_format)
         row += 2
 
-        # Sütun Başlıkları
+        # Column Headers
         worksheet.set_row(row, 28)
         col_widths = [15] * len(headers)
         for col_idx, h in enumerate(headers):
@@ -147,13 +147,12 @@ class MatiaStockPlanningController(http.Controller):
                 col_widths[col_idx] = len(h) + 4
         row += 1
 
-        # Satırlar ve Gruplar
+        # Groups and Items
         for grp in groups:
             grp_key = grp.get('key', '')
-            grp_title = grp.get('title', 'Grup')
+            grp_title = grp.get('title', 'Group')
             items = grp.get('items', [])
 
-            # Grup stilini seç
             if grp_key == 'outdoor':
                 g_fmt = group_outdoor_format
             elif grp_key == 'seat':
@@ -161,9 +160,8 @@ class MatiaStockPlanningController(http.Controller):
             else:
                 g_fmt = group_base_format
 
-            # Grup başlık satırı
             worksheet.set_row(row, 24)
-            worksheet.merge_range(row, 0, row, len(headers) - 1, f"  {grp_title} ({len(items)} Parça)", g_fmt)
+            worksheet.merge_range(row, 0, row, len(headers) - 1, f"  {grp_title} ({len(items)} Parts)", g_fmt)
             row += 1
 
             for itm in items:
@@ -182,20 +180,18 @@ class MatiaStockPlanningController(http.Controller):
                     else:
                         worksheet.write(row, col_idx, val, cell_text_format)
 
-                    # Otomatik genişlik
                     val_str = str(val)
                     if len(val_str) + 3 > col_widths[col_idx]:
                         col_widths[col_idx] = min(len(val_str) + 3, 50)
                 row += 1
 
-        # Sütun genişliklerini ayarla
         for col_idx, w in enumerate(col_widths):
             worksheet.set_column(col_idx, col_idx, w)
 
         workbook.close()
         output.seek(0)
 
-        filename = f"TekRMD_Stok_Kapasite_Plani_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        filename = f"TekRMD_Stock_Capacity_Plan_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         return request.make_response(
             output.getvalue(),
             headers=[

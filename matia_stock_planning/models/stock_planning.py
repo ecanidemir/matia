@@ -5,23 +5,23 @@ from odoo.exceptions import UserError
 
 class MatiaStockPlanning(models.AbstractModel):
     _name = 'matia.stock.planning'
-    _description = 'Matia TekRMD Cihaz Kapasite ve Stok Planlama'
+    _description = 'Matia TekRMD Device Capacity and Stock Planning'
 
     @api.model
     def get_capacity_planning_data(self, include_tr=True, include_usa=True, dynamic_targets=None):
         """
-        TekRMD Common Parts v2, Outdoor Parts ve Seat Parts reçeteleri üzerinden
-        TR ve USA lokasyonlarındaki stokları ve üretilebilir cihaz kapasitelerini hesaplar.
+        Calculates available stock and producible device capacity across TR and USA locations
+        for TekRMD Common Parts v2, Outdoor Parts, and Seat Parts BOMs.
         """
         if not include_tr and not include_usa:
-            raise UserError(_("En az bir lokasyon (TR veya USA) seçilmelidir!"))
+            raise UserError(_("At least one location (TR or USA) must be selected!"))
 
         if dynamic_targets is None:
             dynamic_targets = []
-        # En fazla 3 dinamik hedef kabul et
+        # Accept at most 3 dynamic targets
         dynamic_targets = [int(t) for t in dynamic_targets if str(t).isdigit() and int(t) > 0][:3]
 
-        # 1. Konumları belirle
+        # 1. Identify locations
         all_locs = self.env['stock.location'].search([('usage', '=', 'internal')])
         
         tr_stock_locs = []
@@ -55,7 +55,7 @@ class MatiaStockPlanning(models.AbstractModel):
             selected_loc_ids.extend(usa_stock_locs)
             selected_ncr_ids.extend(usa_ncr_locs)
 
-        # 2. Reçeteleri tanımla
+        # 2. Define BOM configurations
         bom_configs = [
             {
                 'key': 'base',
@@ -91,7 +91,6 @@ class MatiaStockPlanning(models.AbstractModel):
             ], limit=1)
 
             if not bom:
-                # İkincil arama (ilike)
                 for n in cfg['names']:
                     bom = self.env['mrp.bom'].search([
                         '|',
@@ -112,7 +111,7 @@ class MatiaStockPlanning(models.AbstractModel):
                         'product_name': p.name or '',
                         'display_name': p.display_name or p.name,
                         'bom_qty': line.product_qty or 1.0,
-                        'uom_name': line.product_uom_id.name or 'Adet',
+                        'uom_name': line.product_uom_id.name or 'Units',
                     })
 
             groups_data.append({
@@ -125,12 +124,11 @@ class MatiaStockPlanning(models.AbstractModel):
                 'items': lines_list,
             })
 
-        # 3. Stok ve NCR Miktarlarını oku
+        # 3. Read stock and NCR quantities
         product_stock = {pid: 0.0 for pid in all_product_ids}
         product_ncr = {pid: 0.0 for pid in all_product_ids}
 
         if all_product_ids:
-            # Geçerli internal stok miktarları
             if selected_loc_ids:
                 stock_quants = self.env['stock.quant'].read_group(
                     [
@@ -144,7 +142,6 @@ class MatiaStockPlanning(models.AbstractModel):
                     pid = sq['product_id'][0]
                     product_stock[pid] = sq['quantity']
 
-            # NCR miktarları (bilgi amaçlı)
             if selected_ncr_ids:
                 ncr_quants = self.env['stock.quant'].read_group(
                     [
@@ -158,7 +155,7 @@ class MatiaStockPlanning(models.AbstractModel):
                     pid = nq['product_id'][0]
                     product_ncr[pid] = nq['quantity']
 
-        # 4. Tablo satırlarını ve KPI'ları hesapla
+        # 4. Compute items and KPIs
         overall_min_devices = 999999
         overall_bottleneck_product = "-"
         
@@ -172,7 +169,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 s_qty = product_stock.get(pid, 0.0)
                 n_qty = product_ncr.get(pid, 0.0)
 
-                # Üretilebilecek maksimum cihaz sayısı
+                # Maximum devices producible
                 if b_qty > 0:
                     max_dev = math.floor(s_qty / b_qty)
                     if max_dev < 0:
@@ -180,7 +177,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 else:
                     max_dev = 0
 
-                # 20 Cihaz için ihtiyaç hesabı: (20 * bom_qty) - stock_qty
+                # Requirement for 20 devices: (20 * bom_qty) - stock_qty
                 needed_20 = (20.0 * b_qty) - s_qty
                 if needed_20 <= 0:
                     req_20_status = 'OK'
@@ -189,7 +186,7 @@ class MatiaStockPlanning(models.AbstractModel):
                     req_20_status = 'NEED'
                     req_20_val = int(math.ceil(needed_20))
 
-                # Dinamik sütun hesapları
+                # Dynamic columns
                 dynamic_needs = {}
                 for target in dynamic_targets:
                     needed_target = (float(target) * b_qty) - s_qty
@@ -215,12 +212,12 @@ class MatiaStockPlanning(models.AbstractModel):
                 item['req_20_text'] = 'OK' if req_20_status == 'OK' else str(req_20_val)
                 item['dynamic_needs'] = dynamic_needs
 
-                # Grup darboğazı
+                # Group bottleneck
                 if max_dev < grp_min_devices:
                     grp_min_devices = max_dev
                     grp_bottleneck_product = item['display_name']
 
-                # Genel darboğaz
+                # Overall bottleneck
                 if max_dev < overall_min_devices:
                     overall_min_devices = max_dev
                     overall_bottleneck_product = item['display_name']

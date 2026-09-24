@@ -1,37 +1,37 @@
-# Matia TekRMD Stok & Kapasite Planlama Modülü (`matia_stock_planning`)
+# Matia TekRMD Stock & Capacity Planning Module (`matia_stock_planning`)
 
-Bu modül, **Odoo 15** için geliştirilmiş olup, Stok (Envanter) menüsü altında TekRMD cihazı için BOM reçetelerini ve eldeki güncel stokları analiz eden etkileşimli bir kapasite planlama ekranı sunar.
+This module is designed for **Odoo 15** and provides an interactive dashboard under the Inventory menu to analyze TekRMD BOMs and on-hand stock for production capacity planning.
 
-## Temel Özellikler
+## Key Features
 
-1. **Reçete Bazlı Gruplandırma:**
-   - **Base (Mavi):** `TekRMD Common Parts v2` (84 bileşen)
-   - **Outdoor (Yeşil):** `TekRMD Outdoor Parts` (9 bileşen)
-   - **Seat (Mor):** `TekRMD Seat Parts` (7 bileşen)
+1. **BOM Grouping:**
+   - **Base (Blue):** `TekRMD Common Parts v2` (84 components)
+   - **Outdoor (Green):** `TekRMD Outdoor Parts` (9 components)
+   - **Seat (Purple):** `TekRMD Seat Parts` (7 components)
 
-2. **Gelişmiş Lokasyon ve Çoklu Şirket Filtrelemesi:**
-   - **TR Lokasyonları:** `WHTR/Stock/*` altındaki tüm internal stok konumları (149 lokasyon).
-   - **USA Lokasyonları:** `WHUS/Stock/*` altındaki internal stok konumları.
-   - **NCR Hariç Tutma:** `WHTR/NCR Alanı` ve `WHUS/NCR Storage` net stok hesabına katılmaz; sadece bilgi olarak ayrı sütunda gösterilir.
-   - Tek tıkla sadece TR, sadece USA veya TR + USA birleşik hesaplama. En az bir konum seçilmesi zorunludur.
+2. **Advanced Location & Multi-Company Filtering:**
+   - **TR Locations:** All internal stock locations under `WHTR/Stock/*` (149 locations).
+   - **USA Locations:** Internal stock locations under `WHUS/Stock/*`.
+   - **NCR Exclusion:** `WHTR/NCR Alanı` and `WHUS/NCR Storage` are excluded from net usable stock calculations; displayed separately as informational badges.
+   - One-click filtering for TR only, USA only, or TR + USA combined. At least one location must be selected.
 
-3. **Hesaplamalar ve Sütunlar:**
-   - **Kullanım Miktarı:** Reçetedeki ihtiyaç adedi. İstenildiğinde tek tıkla gizlenebilir/gösterilebilir.
-   - **Üretilebilecek Cihaz Sayısı:** `floor(stok_miktari / kullanim_miktari)`. Kritik darboğazlar renkli rozetlerle vurgulanır.
-   - **20 Cihaz İhtiyacı:** `(20 * kullanim_miktari) - stok_miktari`. Stok yeterliyse yeşil `OK`, yetersizse eksik parça sayısı gösterilir.
-   - **Dinamik Hedef Cihaz Sütunları:** Kullanıcı arayüzdeki `+ Hedef Sütunu Ekle` butonuyla en fazla 3 adet özel hedef cihaz sütunu (örn. 10, 50, 100, 200) ekleyebilir veya başlığındaki `[x]` butonu ile kaldırabilir.
+3. **Calculations and Columns:**
+   - **Usage Qty:** Required quantity per BOM. Can be hidden or shown at any time with a single toggle.
+   - **Producible Devices:** `floor(stock_qty / bom_qty)`. Bottlenecks are visually highlighted with color-coded badges (<20 Red, 20-50 Yellow, >50 Green).
+   - **20 Devices Needed:** `(20 * bom_qty) - stock_qty`. Displays green `OK` if stock is sufficient, or the exact missing quantity in red.
+   - **Dynamic Target Columns:** Users can add up to 3 custom target columns (e.g. 10, 50, 100, 200) via `+ Add Target Column` and remove them anytime with the `[x]` button.
 
-4. **Birebir Excel (.xlsx) Dışa Aktarma:**
-   - Ekranda o an hangi sütunlar görünüyorsa (gizlenen sütunlar hariç, eklenen dinamik sütunlar dahil) aynı renk ve yapıda Excel (.xlsx) olarak anında indirilir.
+4. **WYSWIG Excel (.xlsx) Export:**
+   - Exports the exact visible table (excluding hidden columns, including dynamic targets) with formatted headers, group styling, and status colors.
 
-5. **Performans ve Hız:**
-   - Tek bir `read_group` RPC çağrısıyla 103 tekil ürünün stokları milisaniyeler içinde çekilir.
-   - Dinamik sütun ekleme ve parça arama anında tepki verir.
+5. **Performance & Speed:**
+   - Uses optimized `read_group` RPC queries to fetch stock across all 103 unique products in milliseconds.
+   - Real-time client-side table search and column updates.
 
-## Kurulum
+## Installation
 
-1. `matia_stock_planning` klasörünü Odoo sunucusundaki `addons` dizinine kopyalayın.
-2. Odoo arayüzünde Geliştirici Modunu (Developer Mode) açın.
-3. **Uygulamalar > Uygulama Listesini Güncelle** yapın.
-4. **Uygulamalar** menüsünde `matia_stock_planning` aratıp **Yükle (Install)** butonuna tıklayın.
-5. Menüden **Stok > Cihaz Kapasite Planı** veya **Stok > Raporlama > TekRMD Cihaz Kapasitesi** seçeneğine tıklayarak kullanmaya başlayın.
+1. Deploy the repository to your Odoo server using Cloudpepper or copy `matia_stock_planning` into your `addons` directory.
+2. Enable Developer Mode in Odoo.
+3. Navigate to **Apps > Update Apps List**.
+4. Search for `matia_stock_planning` and click **Install**.
+5. Access the dashboard from **Inventory > Device Capacity Plan** or **Inventory > Reporting > TekRMD Device Capacity**.
