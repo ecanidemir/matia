@@ -783,8 +783,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                             var subItem = subData.items[sIdx];
                             var subCells = [];
 
-                            subCells.push({ val: '    ' + (subItem.product_code || ''), type: 'text' });
-                            subCells.push({ val: '    ↳ ' + (subItem.product_name || ''), type: 'text' });
+                            subCells.push({ val: (subItem.product_code || ''), type: 'text' });
+                            subCells.push({ val: (subItem.product_name || ''), type: 'text' });
 
                             if (self.show_bom_qty) {
                                 subCells.push({ val: subItem.bom_qty + ' ' + (subItem.uom_name || ''), type: 'text' });

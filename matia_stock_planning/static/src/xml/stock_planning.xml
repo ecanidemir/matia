@@ -29,14 +29,16 @@
                 <!-- Left: Locations &amp; Companies Selection -->
                 <div class="msp-filter-group">
                     <span class="msp-filter-label"><i class="fa fa-building-o mr-1"></i> Included Locations:</span>
-                    <label class="form-check">
-                        <input type="checkbox" class="form-check-input msp-check-tr" t-att-checked="widget.include_tr ? 'checked' : undefined"/>
-                        <span class="badge-loc badge-tr"><i class="fa fa-map-marker mr-1"></i> TR (WHTR/Stock)</span>
-                    </label>
-                    <label class="form-check">
-                        <input type="checkbox" class="form-check-input msp-check-usa" t-att-checked="widget.include_usa ? 'checked' : undefined"/>
-                        <span class="badge-loc badge-usa"><i class="fa fa-map-marker mr-1"></i> USA (WHUS/Stock)</span>
-                    </label>
+                    <div class="msp-loc-options">
+                        <label class="form-check">
+                            <input type="checkbox" class="form-check-input msp-check-tr" t-att-checked="widget.include_tr ? 'checked' : undefined"/>
+                            <span class="badge-loc badge-tr"><i class="fa fa-map-marker mr-1"></i> TR <span class="loc-sub">(WHTR/Stock)</span></span>
+                        </label>
+                        <label class="form-check">
+                            <input type="checkbox" class="form-check-input msp-check-usa" t-att-checked="widget.include_usa ? 'checked' : undefined"/>
+                            <span class="badge-loc badge-usa"><i class="fa fa-map-marker mr-1"></i> USA <span class="loc-sub">(WHUS/Stock)</span></span>
+                        </label>
+                    </div>
                 </div>
 
                 <!-- Right: View &amp; Dynamic Column Tools -->
@@ -278,7 +280,7 @@
                                                 </button>
                                             </t>
                                             <t t-else="">
-                                                <span class="msp-bom-spacer mr-1"></span>
+                                                <span class="msp-bom-spacer mr-1"><i class="fa fa-circle msp-no-bom-dot"></i></span>
                                             </t>
                                             <span t-if="item.product_code" class="prod-code">[<t t-esc="item.product_code"/>]</span>
                                             <span class="prod-name" t-att-class="item.has_bom ? 'cursor-pointer msp-clickable-prod' : ''"
@@ -378,7 +380,6 @@
                 t-att-data-product-name="item.display_name.toLowerCase()">
                 <!-- Part Code &amp; Name (Indented) -->
                 <td class="td-product td-sub-product">
-                    <span class="sub-bom-indent"></span>
                     <i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>
                     <span t-if="item.product_code" class="prod-code sub-prod-code">[<t t-esc="item.product_code"/>]</span>
                     <span class="prod-name"><t t-esc="item.product_name"/></span>
