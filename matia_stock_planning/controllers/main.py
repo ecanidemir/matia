@@ -137,18 +137,21 @@ class MatiaStockPlanningController(http.Controller):
             'align': 'center',
             'valign': 'vcenter',
         })
-        # Per-level sub-BOM formats (match page colors: L1 blue, L2 purple,
-        # L3 green, L4 orange, L5+ pink). Level 0 = main rows.
+        # Per-level sub-BOM formats (match page colors L1-L8).
+        # Level 0 = main rows.
         sub_level_bg = {
             1: '#f0f9ff',
             2: '#faf5ff',
             3: '#ecfdf5',
             4: '#fff7ed',
             5: '#fdf2f8',
+            6: '#fefce8',
+            7: '#ecfeff',
+            8: '#f1f5f9',
         }
         sub_text_by_level = {}
         sub_num_by_level = {}
-        for lvl in range(1, 6):
+        for lvl in range(1, 9):
             sub_text_by_level[lvl] = workbook.add_format({
                 'border': 1,
                 'border_color': '#e2e8f0',
@@ -209,8 +212,8 @@ class MatiaStockPlanningController(http.Controller):
                     lvl = int(itm.get('level') or 0)
                 except (TypeError, ValueError):
                     lvl = 0
-                if lvl < 1 or lvl > 5:
-                    lvl = 5 if itm.get('is_sub') else 0
+                if lvl < 1 or lvl > 8:
+                    lvl = 8 if itm.get('is_sub') else 0
 
                 for col_idx, cell in enumerate(cells):
                     val = cell.get('val', '')

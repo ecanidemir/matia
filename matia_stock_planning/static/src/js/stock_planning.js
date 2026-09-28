@@ -444,7 +444,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         // when their parent is expanded, so deep BOMs never slow down the page.
         // MAX_SUB_DEPTH guards against cyclic BOMs together with the _is_cycle
         // flag (products already present higher in the path get no expand btn).
-        MAX_SUB_DEPTH: 6,
+        MAX_SUB_DEPTH: 8,
 
         // Cache key includes effective qty: the same product can appear in
         // different branches with different per-device quantities.
@@ -711,7 +711,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                 parent_id: prodId,
                 group_key: grpKey || '',
                 level: childLevel,
-                lvl: Math.min(childLevel, 5),
+                lvl: Math.min(childLevel, 8),
                 parent_node: nodeId,
                 path: path,
             });
