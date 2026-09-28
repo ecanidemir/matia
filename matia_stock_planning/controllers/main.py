@@ -137,22 +137,34 @@ class MatiaStockPlanningController(http.Controller):
             'align': 'center',
             'valign': 'vcenter',
         })
-        cell_sub_text_format = workbook.add_format({
-            'border': 1,
-            'border_color': '#e2e8f0',
-            'bg_color': '#f8fafc',
-            'align': 'left',
-            'valign': 'vcenter',
-            'font_size': 9,
-        })
-        cell_sub_num_format = workbook.add_format({
-            'border': 1,
-            'border_color': '#e2e8f0',
-            'bg_color': '#f8fafc',
-            'align': 'center',
-            'valign': 'vcenter',
-            'font_size': 9,
-        })
+        # Per-level sub-BOM formats (match page colors: L1 blue, L2 purple,
+        # L3 green, L4 orange, L5+ pink). Level 0 = main rows.
+        sub_level_bg = {
+            1: '#f0f9ff',
+            2: '#faf5ff',
+            3: '#ecfdf5',
+            4: '#fff7ed',
+            5: '#fdf2f8',
+        }
+        sub_text_by_level = {}
+        sub_num_by_level = {}
+        for lvl in range(1, 6):
+            sub_text_by_level[lvl] = workbook.add_format({
+                'border': 1,
+                'border_color': '#e2e8f0',
+                'bg_color': sub_level_bg[lvl],
+                'align': 'left',
+                'valign': 'vcenter',
+                'font_size': 9,
+            })
+            sub_num_by_level[lvl] = workbook.add_format({
+                'border': 1,
+                'border_color': '#e2e8f0',
+                'bg_color': sub_level_bg[lvl],
+                'align': 'center',
+                'valign': 'vcenter',
+                'font_size': 9,
+            })
 
         # Header Title and Date
         row = 0
@@ -193,7 +205,12 @@ class MatiaStockPlanningController(http.Controller):
             for itm in items:
                 worksheet.set_row(row, 20)
                 cells = itm.get('cells', [])
-                is_sub = itm.get('is_sub', False)
+                try:
+                    lvl = int(itm.get('level') or 0)
+                except (TypeError, ValueError):
+                    lvl = 0
+                if lvl < 1 or lvl > 5:
+                    lvl = 5 if itm.get('is_sub') else 0
 
                 for col_idx, cell in enumerate(cells):
                     val = cell.get('val', '')
@@ -219,11 +236,11 @@ class MatiaStockPlanningController(http.Controller):
                                 num_val = 0
                         except:
                             num_val = 0
-                        fmt = cell_sub_num_format if is_sub else cell_num_format
+                        fmt = sub_num_by_level[lvl] if lvl else cell_num_format
                         worksheet.write(row, col_idx, num_val, fmt)
                     else:
                         text_val = '' if val in [False, None] else str(val)
-                        fmt = cell_sub_text_format if is_sub else cell_text_format
+                        fmt = sub_text_by_level[lvl] if lvl else cell_text_format
                         worksheet.write(row, col_idx, text_val, fmt)
 
                     val_str = str(val if val not in [False, None] else (0 if c_type == 'number' else ''))
