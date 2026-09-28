@@ -183,6 +183,7 @@
                             <i class="fa fa-info-circle mr-1"></i> Reserved &amp; NCR quantities are excluded from capacity calculations
                         </span>
                         <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
+                        <span class="text-muted" style="font-size:0.7rem;"><span class="msp-level-badge msp-lvl-2">L2</span> Deeper BOM levels have their own colors</span>
                     </div>
                 </div>
 
@@ -267,6 +268,11 @@
                                     <tr class="item-row"
                                         t-att-data-product-name="item.display_name.toLowerCase()"
                                         t-att-data-group="group.key"
+                                        data-level="0"
+                                        t-att-data-node-id="'g-' + group.key + '-' + item.product_id"
+                                        t-att-data-path="'' + item.product_id"
+                                        t-att-data-product-id="item.product_id"
+                                        t-att-data-bom-qty="item.bom_qty"
                                         t-att-style="widget.hidden_groups[group.key] ? 'display:none;' : ''">
                                         <!-- Part Code and Name with Sub-BOM toggle -->
                                         <td class="td-product">
@@ -370,19 +376,50 @@
         </div>
     </t>
 
-    <!-- Sub-assembly BOM Component Rows Template -->
+    <!-- Sub-assembly BOM Component Rows Template (recursive: supports unlimited nesting) -->
     <t t-name="MatiaStockPlanning.SubBomRows">
         <t t-foreach="data.items" t-as="item">
             <!-- data-group passed from JS so collapse-all and search can filter by group -->
-            <tr class="item-row sub-bom-row"
+            <!-- level starts at 1 for first sub-level; lvl is clamped to 5 for CSS classes -->
+            <tr t-attf-class="item-row sub-bom-row sub-level-#{lvl}"
                 t-att-data-parent-id="parent_id"
+                t-att-data-parent-node="parent_node"
+                t-att-data-node-id="parent_node + '/' + item.product_id"
+                t-att-data-level="level"
                 t-att-data-group="group_key"
-                t-att-data-product-name="item.display_name.toLowerCase()">
-                <!-- Part Code &amp; Name (Indented) -->
+                t-att-data-path="path + '/' + item.product_id"
+                t-att-data-product-name="item.display_name.toLowerCase()"
+                t-att-data-product-id="item.product_id"
+                t-att-data-bom-qty="item.bom_qty">
+                <!-- Part Code &amp; Name (Indented per level) -->
                 <td class="td-product td-sub-product">
+                    <t t-if="item._is_cycle">
+                        <span class="msp-bom-spacer mr-1" title="Döngüsel BOM — bu ürün üst seviyede zaten mevcut, daha derine inilmedi"><i class="fa fa-refresh msp-cycle-icon"></i></span>
+                    </t>
+                    <t t-elif="item.has_bom">
+                        <button type="button" class="btn btn-sm btn-link msp-btn-sub-bom p-0 mr-1 text-primary"
+                                t-att-data-product-id="item.product_id"
+                                t-att-data-product-name="item.display_name"
+                                t-att-data-bom-qty="item.bom_qty"
+                                title="Click to view sub-assembly BOM components">
+                            <i class="fa fa-caret-right msp-bom-arrow"></i>
+                        </button>
+                    </t>
+                    <t t-else="">
+                        <span class="msp-bom-spacer mr-1"><i class="fa fa-circle msp-no-bom-dot"></i></span>
+                    </t>
                     <i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>
                     <span t-if="item.product_code" class="prod-code sub-prod-code">[<t t-esc="item.product_code"/>]</span>
-                    <span class="prod-name"><t t-esc="item.product_name"/></span>
+                    <span class="prod-name" t-att-class="(!item._is_cycle and item.has_bom) ? 'cursor-pointer msp-clickable-prod' : ''"
+                          t-att-data-product-id="item.product_id"
+                          t-att-data-bom-qty="item.bom_qty"
+                          t-att-title="(!item._is_cycle and item.has_bom) ? 'Click to show BOM components' : ''">
+                        <t t-esc="item.product_name"/>
+                    </span>
+                    <t t-if="!item._is_cycle and item.has_bom">
+                        <span class="badge badge-light text-muted border ml-1" style="font-size:0.65rem;" title="Has Sub-Assembly BOM">BOM</span>
+                    </t>
+                    <span t-attf-class="msp-level-badge msp-lvl-#{lvl}" t-att-title="'BOM Level ' + level">L<t t-esc="level"/></span>
                 </td>
 
                 <!-- Usage Qty -->
