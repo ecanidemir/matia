@@ -482,7 +482,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _sortIcon: function (col) {
             if (this.treeSort.key === col) {
-                return this.treeSort.dir === 'asc' ?
+                return this.treeSort.dir === 1 ?
                     'fa-sort-asc' : 'fa-sort-desc';
             }
             return 'fa-sort';

@@ -65,8 +65,64 @@ class MatiaProcurementPlanController(http.Controller):
                 headers=[
                     ('Content-Type', 'text/csv; charset=utf-8'),
                     ('Content-Disposition',
-                     'attachment; filename=%s' % filename),
+                      'attachment; filename=%s' % filename),
                 ])
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        ws = workbook.add_worksheet('Supplier Preview')
+        title_fmt = workbook.add_format(
+            {'bold': True, 'font_size': 14})
+        header_fmt = workbook.add_format(
+            {'bold': True, 'bg_color': '#7c2d12', 'font_color': '#ffffff',
+             'border': 1})
+        num_fmt = workbook.add_format({'border': 1, 'align': 'center'})
+        text_fmt = workbook.add_format({'border': 1})
+        row = 0
+        ws.write(row, 0, 'Supplier Preview - %s' % plan_name, title_fmt)
+        row += 1
+        ws.write(row, 0, 'Total: %.2f' % (total or 0))
+        row += 1
+        ws.write(row, 0, 'Rolled total (USD): %s' % rolled_total)
+        row += 1
+        for kit in kits:
+            ws.write(row, 0, 'Kit: %s (%s) - %s' % (
+                kit.get('name', ''), kit.get('count', 0),
+                kit.get('cost', 0)))
+            row += 1
+        row += 1
+        for grp in groups:
+            ws.write(row, 0, '%s (%.2f)' % (
+                grp.get('title', ''), grp.get('cost', 0)), header_fmt)
+            row += 1
+            ws.write_row(row, 0, ['Code', 'Product', 'Order', 'Last Price',
+                                  'USD', 'Last Buy', 'Unit USD',
+                                  'Rolled USD', 'Subtotal'],
+                         header_fmt)
+            row += 1
+            for itm in grp.get('items', []):
+                ws.write(row, 0, itm.get('code', ''), text_fmt)
+                ws.write(row, 1, itm.get('name', ''), text_fmt)
+                ws.write(row, 2, itm.get('order_qty', 0) or 0, num_fmt)
+                ws.write(row, 3, _last_str(itm), text_fmt)
+                ws.write(row, 4, itm.get('last_usd', 0) or 0, num_fmt)
+                ws.write(row, 5, itm.get('last_date', ''), text_fmt)
+                ws.write(row, 6, itm.get('unit_usd', 0) or 0, num_fmt)
+                ws.write(row, 7, itm.get('rolled_usd', 0) or 0, num_fmt)
+                ws.write(row, 8, itm.get('subtotal', 0) or 0, num_fmt)
+                row += 1
+            row += 1
+        workbook.close()
+        output.seek(0)
+        filename = 'Supplier_Preview_%s.xlsx' % datetime.now().strftime(
+            '%Y%m%d_%H%M')
+        return request.make_response(
+            output.getvalue(),
+            headers=[
+                ('Content-Type', 'application/vnd.openxmlformats-officedocument'
+                 '.spreadsheetml.sheet'),
+                ('Content-Disposition',
+                 'attachment; filename=%s' % filename),
+            ])
 
     def _export_tree(self, data, plan_name, kits, rolled_total):
         """Capacity-style indented tree export (visible rows only).
@@ -160,62 +216,6 @@ class MatiaProcurementPlanController(http.Controller):
         workbook.close()
         output.seek(0)
         filename = 'Tree_%s.xlsx' % datetime.now().strftime('%Y%m%d_%H%M')
-        return request.make_response(
-            output.getvalue(),
-            headers=[
-                ('Content-Type', 'application/vnd.openxmlformats-officedocument'
-                 '.spreadsheetml.sheet'),
-                ('Content-Disposition',
-                 'attachment; filename=%s' % filename),
-            ])
-        output = io.BytesIO()
-        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-        ws = workbook.add_worksheet('Supplier Preview')
-        title_fmt = workbook.add_format(
-            {'bold': True, 'font_size': 14})
-        header_fmt = workbook.add_format(
-            {'bold': True, 'bg_color': '#7c2d12', 'font_color': '#ffffff',
-             'border': 1})
-        num_fmt = workbook.add_format({'border': 1, 'align': 'center'})
-        text_fmt = workbook.add_format({'border': 1})
-        row = 0
-        ws.write(row, 0, 'Supplier Preview - %s' % plan_name, title_fmt)
-        row += 1
-        ws.write(row, 0, 'Total: %.2f' % (total or 0))
-        row += 1
-        ws.write(row, 0, 'Rolled total (USD): %s' % rolled_total)
-        row += 1
-        for kit in kits:
-            ws.write(row, 0, 'Kit: %s (%s) - %s' % (
-                kit.get('name', ''), kit.get('count', 0),
-                kit.get('cost', 0)))
-            row += 1
-        row += 1
-        for grp in groups:
-            ws.write(row, 0, '%s (%.2f)' % (
-                grp.get('title', ''), grp.get('cost', 0)), header_fmt)
-            row += 1
-            ws.write_row(row, 0, ['Code', 'Product', 'Order', 'Last Price',
-                                  'USD', 'Last Buy', 'Unit USD',
-                                  'Rolled USD', 'Subtotal'],
-                         header_fmt)
-            row += 1
-            for itm in grp.get('items', []):
-                ws.write(row, 0, itm.get('code', ''), text_fmt)
-                ws.write(row, 1, itm.get('name', ''), text_fmt)
-                ws.write(row, 2, itm.get('order_qty', 0) or 0, num_fmt)
-                ws.write(row, 3, _last_str(itm), text_fmt)
-                ws.write(row, 4, itm.get('last_usd', 0) or 0, num_fmt)
-                ws.write(row, 5, itm.get('last_date', ''), text_fmt)
-                ws.write(row, 6, itm.get('unit_usd', 0) or 0, num_fmt)
-                ws.write(row, 7, itm.get('rolled_usd', 0) or 0, num_fmt)
-                ws.write(row, 8, itm.get('subtotal', 0) or 0, num_fmt)
-                row += 1
-            row += 1
-        workbook.close()
-        output.seek(0)
-        filename = 'Supplier_Preview_%s.xlsx' % datetime.now().strftime(
-            '%Y%m%d_%H%M')
         return request.make_response(
             output.getvalue(),
             headers=[
