@@ -5,7 +5,7 @@
             <div class="mpp-header">
                 <div>
                     <h2>Production Plan (TR)</h2>
-                    <p>Admin only. Preview creates no records. Draft RFQs create no confirmation.</p>
+                    <p>Admin only. RFQs/MOs are created as drafts; nothing is confirmed automatically.</p>
                 </div>
                 <div>
                     <button class="btn btn-outline-light btn-sm mpp-btn-reload">Refresh</button>
@@ -14,15 +14,30 @@
                 </div>
             </div>
 
-            <div class="mpp-step mpp-entry-wrap">
-                <h4>1. Enter quantities (USA+TR stock shown)</h4>
+            <ul class="nav nav-tabs mpp-nav-tabs mt-2">
+                <li class="nav-item">
+                    <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">1. Enter Quantities</a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link mpp-nav-tab" data-tab="2">2. Tree + Cost</a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link mpp-nav-tab" data-tab="3">3. Suppliers &amp; Production</a>
+                </li>
+            </ul>
+
+            <!-- TAB 1: flat entry, NO expandable rows -->
+            <div class="mpp-pane" data-pane="1">
+                <h4 class="mt-2">Enter quantities (TR+USA on-hand shown)</h4>
                 <div class="mpp-entry-toolbar mb-2">
                     <label>Fill to N:
                         <input type="number" min="0" value="50"
                             class="form-control form-control-sm mpp-fill-n d-inline-block"
                             style="width:90px;"/>
                     </label>
-                    <button class="btn btn-secondary btn-sm mpp-btn-fill">Fill to N (avail → N)</button>
+                    <button class="btn btn-secondary btn-sm mpp-btn-fill"
+                        title="Fills qty = N − (TR on-hand + USA on-hand). Reserves are ignored.">
+                        Fill to N (TR+USA on-hand)</button>
                     <button class="btn btn-outline-secondary btn-sm mpp-btn-clear">Clear</button>
                     <button class="btn btn-primary btn-sm mpp-btn-calc">Calculate tree + cost</button>
                 </div>
@@ -30,48 +45,43 @@
                     <thead>
                         <tr>
                             <th>Code</th><th>Product</th><th>Kit</th>
-                            <th>TR Available</th><th>USA Stock</th><th>Qty</th>
+                            <th>TR Avail.</th><th>USA Stock</th><th>On-Hand Base</th><th>Qty</th>
                         </tr>
                     </thead>
                     <tbody class="mpp-entry-body"/>
                 </table>
             </div>
 
-            <div class="mpp-step mpp-tree-wrap" style="display:none;">
-                <h4>2. Tree + cost — <span class="mpp-tree-title"/></h4>
-                <div class="mpp-tree-toolbar mb-2">
-                    <input type="text" placeholder="Search code/name…"
-                        class="form-control form-control-sm mpp-tree-search d-inline-block"
-                        style="width:240px;"/>
-                    <button class="btn btn-outline-secondary btn-sm mpp-btn-expand-all">Expand all</button>
-                    <button class="btn btn-outline-secondary btn-sm mpp-btn-collapse-all">Collapse all</button>
+            <!-- TAB 2: capacity-identical tree -->
+            <div class="mpp-pane d-none" data-pane="2">
+                <div class="msp-table-card mt-2">
+                    <div class="msp-table-search">
+                        <div class="search-input-box">
+                            <i class="fa fa-search"></i>
+                            <input type="text" class="mpp-tree-search" placeholder="Search part code or name..."/>
+                        </div>
+                        <div class="table-legend">
+                            <span><span class="dot-ok"></span> OK = covered by stock</span>
+                            <span><span class="dot-need"></span> Red = net shortage after stock netting</span>
+                            <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
+                        </div>
+                        <div class="msp-tool-buttons">
+                            <button class="btn btn-outline-primary btn-sm msp-btn-expand-all">Expand All BOMs</button>
+                            <button class="btn btn-outline-secondary btn-sm msp-btn-collapse-all">Collapse All BOMs</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive mpp-tree-body"/>
                 </div>
-                <div class="mpp-tree-body"/>
+                <button class="btn btn-primary mt-2 mpp-btn-to-suppliers">Continue to Suppliers &amp; Production →</button>
             </div>
 
-            <div class="mpp-step mpp-rfq-wrap" style="display:none;">
-                <h4>3. Supplier preview + draft RFQs</h4>
-                <div>Total: <strong class="mpp-total">0</strong></div>
-                <div class="mt-2 mb-2">
-                    <button class="btn btn-info btn-sm mpp-btn-rfq-preview">Preview Draft RFQs</button>
-                    <button class="btn btn-success btn-sm mpp-btn-rfq-create">Create Draft RFQs</button>
-                </div>
-                <div class="mpp-rfq-preview mt-2 mb-2"/>
-                <div class="mpp-tabs mt-2 mb-2"/>
-                <table class="table table-sm table-striped">
-                    <thead>
-                        <tr>
-                            <th>Code</th><th>Product</th><th>Level</th><th>Gross</th>
-                            <th>TR Avail.</th><th>Net</th><th>Order</th>
-                            <th>Supplier</th><th>Last Price</th><th>USD</th><th>Last Buy</th><th>Subtotal</th>
-                        </tr>
-                    </thead>
-                    <tbody class="mpp-summary-body"/>
-                </table>
-                <div class="mpp-kits mt-2 mb-2"/>
-                <div class="mpp-suppliers"/>
-                <h5 class="mt-2">Created RFQs</h5>
-                <div class="mpp-rfqs"/>
+            <!-- TAB 3: suppliers + production -->
+            <div class="mpp-pane d-none" data-pane="3">
+                <div class="msp-kpi-grid mpp-sup-cards mt-2"/>
+                <h4 class="mt-2">Suppliers (estimated USD)</h4>
+                <div class="mpp-sup-body"/>
+                <h4 class="mt-3">Production — Make &amp; Subcontract</h4>
+                <div class="mpp-prod-body"/>
             </div>
         </div>
     </t>

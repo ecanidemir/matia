@@ -114,6 +114,11 @@ class MatiaProcurementPlan(models.Model):
     line_count = fields.Integer(compute='_compute_line_count', store=True)
     note = fields.Text()
     line_ids = fields.One2many('matia.procurement.plan.line', 'plan_id')
+    mo_ids = fields.Many2many(
+        'mrp.production', string='Manufacturing Orders', readonly=True,
+        help='Draft MOs created from this plan (make lines). '
+             'Existing records are never deleted by this module.')
+    mo_count = fields.Integer(compute='_compute_mo_count', store=True)
     create_date = fields.Datetime(readonly=True)
     create_uid = fields.Many2one('res.users', readonly=True)
 
@@ -126,6 +131,16 @@ class MatiaProcurementPlan(models.Model):
     def _compute_line_count(self):
         for plan in self:
             plan.line_count = len(plan.line_ids)
+
+    @api.depends('mo_ids')
+    def _compute_mo_count(self):
+        """Count linked manufacturing orders.
+
+        @param self: plan recordset.
+        @return: None (sets mo_count).
+        """
+        for plan in self:
+            plan.mo_count = len(plan.mo_ids)
 
     # ------------------------------------------------------------------
     # Screen 1: entry products (125 top products, TR+USA stock indicators)
@@ -188,12 +203,16 @@ class MatiaProcurementPlan(models.Model):
                 key=lambda kv: kv[1]['display_name'] or ''):
             t = tr_qty.get(pid, 0.0)
             r = reserved.get(pid, 0.0)
+            u = usa_qty.get(pid, 0.0)
             items.append(dict(
                 info,
                 stock_tr=t,
                 reserved_tr=r,
                 avail_tr=max(0.0, t - r),
-                stock_usa=usa_qty.get(pid, 0.0),
+                stock_usa=u,
+                # Fill-to-N base: physical on-hand TR+USA, reserves
+                # ignored (user rule for the Fill-to-N button).
+                fill_base=max(0.0, t + u),
                 qty_input=0,
             ))
         return {'items': items, 'total': len(items)}
@@ -256,6 +275,7 @@ class MatiaProcurementPlan(models.Model):
         need = {}       # pid -> gross
         meta = {}       # pid -> {'level':min, 'paths':set, 'route':..}
         edges = {}      # parent pid -> {child pid: qty per parent unit}
+        btype = {}      # pid -> bom type ('phantom' passes demand through)
         stack = [(pid, float(qty), 0, 'root')
                  for pid, qty in targets.items()]
 
@@ -302,6 +322,8 @@ class MatiaProcurementPlan(models.Model):
             if bom.type == 'phantom':
                 # Kit: not a line, carry the multiplier.
                 # Edges still recorded so rolled cost flows through.
+                # Phantom passes the FULL demand down (no stock held).
+                btype[pid] = 'phantom'
                 edge = edges.setdefault(pid, {})
                 for bl in bom.bom_line_ids:
                     edge.setdefault(bl.product_id.id,
@@ -312,6 +334,7 @@ class MatiaProcurementPlan(models.Model):
                 continue
             # normal / subcontract: record need + explode below
             need[pid] = need.get(pid, 0.0) + mult
+            btype[pid] = bom.type or 'normal'
             m = meta.setdefault(pid, {'level': level, 'paths': set()})
             m['level'] = min(m['level'], level)
             m['paths'].add(path)
@@ -341,6 +364,62 @@ class MatiaProcurementPlan(models.Model):
                 pid = sq['product_id'][0]
                 onhand[pid] = float(sq.get('quantity') or 0.0)
                 reserv[pid] = float(sq.get('reserved_quantity') or 0.0)
+
+        # Net cascade (user rule): targets seed demand; nodes are
+        # processed parent-first (Kahn topological order over edges).
+        # Each node deducts its own avail from its demand, and children
+        # receive only the NET qty x usage. Phantom nodes hold no stock
+        # and pass the full demand through. Shared sub-products
+        # accumulate demand from every parent before they are netted.
+        all_net_pids = set(need) | set(edges)
+        for _ep, _ech in edges.items():
+            all_net_pids.update(_ech)
+        avail_map = {}
+        for _ap in all_net_pids:
+            _oh = max(0.0, onhand.get(_ap, 0.0))
+            _rs = max(0.0, reserv.get(_ap, 0.0))
+            avail_map[_ap] = max(0.0, _oh - _rs)
+        demand = {pid: 0.0 for pid in all_net_pids}
+        for pid, qty in targets.items():
+            if pid in demand:
+                demand[pid] += float(qty)
+        indeg = {pid: 0 for pid in all_net_pids}
+        for _pp, _ch in edges.items():
+            if _pp not in indeg:
+                continue
+            for _cc in _ch:
+                if _cc in indeg:
+                    indeg[_cc] += 1
+        _queue = [pid for pid in all_net_pids if indeg[pid] == 0]
+        topo = []
+        while _queue:
+            _p = _queue.pop(0)
+            topo.append(_p)
+            for _c in edges.get(_p, {}):
+                if _c not in indeg:
+                    continue
+                indeg[_c] -= 1
+                if indeg[_c] == 0:
+                    _queue.append(_c)
+        for _p in all_net_pids:  # cycle leftovers go last
+            if _p not in topo:
+                topo.append(_p)
+        net_map = {}
+        for _p in topo:
+            _d = demand.get(_p, 0.0)
+            if btype.get(_p) == 'phantom':
+                _n = _d
+            else:
+                _n = _d - avail_map.get(_p, 0.0)
+                if _n < 0:
+                    _n = 0.0
+            net_map[_p] = _n
+            for _c, _q in edges.get(_p, {}).items():
+                if _c in demand:
+                    try:
+                        demand[_c] += _n * float(_q or 0.0)
+                    except (TypeError, ValueError):
+                        continue
 
         # Info: confirmed incoming POs + open MO output (NOT netted, display only)
         incoming, mo_out = {}, {}
@@ -393,8 +472,10 @@ class MatiaProcurementPlan(models.Model):
             oh = max(0.0, onhand.get(pid, 0.0))
             rs = max(0.0, reserv.get(pid, 0.0))
             avail = max(0.0, oh - rs)
-            net = gross - avail
-            net_qty = int(math.ceil(net)) if net > 0 else 0
+            # Net comes from the cascade (demand minus own avail,
+            # children already fed with this net). Gross stays raw.
+            netf = net_map.get(pid, max(0.0, gross - avail))
+            net_qty = int(math.ceil(netf)) if netf > 0 else 0
             rnames = [route_names.get(rid, '')
                       for rid in (info.get('route_ids') or [])]
             if any('Subcontract' in (n or '') for n in rnames):
@@ -443,45 +524,26 @@ class MatiaProcurementPlan(models.Model):
 
         POLine = env_sudo['purchase.order.line']
         Supplier = env_sudo['product.supplierinfo']
-        # Price snapshot for every purchased line (buy + subcontract),
-        # seller assignment only for buy lines with an order qty.
+        # Price snapshot for every purchased line (buy + subcontract).
+        # Seller assignment for buy AND subcontract lines with an order
+        # qty: buy lines are ordered directly, subcontract lines are
+        # ordered from the subcontractor via a PO (confirming that PO
+        # triggers Odoo's standard subcontract receipt + MO chain).
         cost_lines = plan.line_ids.filtered(
             lambda l: l.route_type in ('buy', 'subcontract')
             and (l.gross_qty or 0) > 0)
         buy_pids = cost_lines.mapped('product_id').ids
-        # Last purchase per product (TR confirmed POs first).
-        # pid -> {partner_id, price_unit, currency_id, order_id, date_planned}
-        last_buy = {}
-        order_ids = set()
-        if buy_pids:
-            for pid in buy_pids:
-                found = POLine.search_read([
-                    ('product_id', '=', pid),
-                    ('order_id.company_id', '=', _MPP_TR_COMPANY_ID),
-                    ('order_id.state', '!=', 'cancel'),
-                ], ['partner_id', 'date_planned', 'price_unit',
-                    'currency_id', 'order_id'],
-                    limit=1, order='date_planned desc, id desc')
-                if not found:
-                    found = POLine.search_read([
-                        ('product_id', '=', pid),
-                        ('order_id.state', '!=', 'cancel'),
-                    ], ['partner_id', 'date_planned', 'price_unit',
-                        'currency_id', 'order_id'],
-                        limit=1, order='date_planned desc, id desc')
-                if found:
-                    last_buy[pid] = found[0]
-                    if found[0].get('order_id'):
-                        order_ids.add(found[0]['order_id'][0])
-        # PO date (date_order) in one batch; fallback to line date_planned.
+        # Last purchase per product across TR+USA: the latest order
+        # wins regardless of company (battery last bought from the USA
+        # shows the USA price/supplier/company).
+        # pid -> {partner_id, price_unit, currency_id, product_uom,
+        #         order_id, buy_dt, company_id, company_name}
+        last_buy = self._mpp_last_buys(env_sudo, buy_pids)
+        # PO date (date_order) in one map; fallback to line date_planned.
         order_dates = {}
-        if order_ids:
-            for o in env_sudo['purchase.order'].browse(
-                    list(order_ids)).read(['date_order']):
-                if o.get('date_order'):
-                    order_dates[o['id']] = fields.Datetime.from_string(
-                        o['date_order']) if isinstance(
-                        o['date_order'], str) else o['date_order']
+        for _lb in last_buy.values():
+            if _lb.get('order_id') and _lb.get('buy_dt') is not None:
+                order_dates[_lb['order_id']] = _lb['buy_dt']
 
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
@@ -497,11 +559,14 @@ class MatiaProcurementPlan(models.Model):
             lb = last_buy.get(pid, {})
             vals = self._last_buy_vals(
                 env_sudo, plan, usd, lb, order_dates)
-            if line.route_type != 'buy' or not (line.order_qty or 0) > 0:
+            if line.route_type not in ('buy', 'subcontract') or not (
+                    line.order_qty or 0) > 0:
                 # Price snapshot only (no seller / no order).
                 line.write(vals)
                 continue
-            seller = False
+            seller_pid = False
+            price = 0.0
+            warn = ''
             lp = lb.get('partner_id')
             sellers = Supplier.search_read([
                 ('product_tmpl_id', '=', pr.get('product_tmpl_id', [0])[0]
@@ -509,45 +574,69 @@ class MatiaProcurementPlan(models.Model):
             ], ['name', 'price', 'min_qty', 'currency_id',
                 'product_uom', 'sequence'])
             if lp:
+                # Real purchase history wins: order from the last
+                # supplier (TR or USA) at the last price. The pricelist
+                # is consulted only for the min-qty warning.
+                seller_pid = lp[0]
+                price = float(lb.get('price_unit') or 0.0)
+                pou = lb.get('product_uom')
+                if pou and line.uom_id and pou[0] != line.uom_id.id:
+                    try:
+                        pou_rec = env_sudo['uom.uom'].browse(pou[0])
+                        price = line.uom_id._compute_quantity(
+                            1.0, pou_rec, round=False) * price \
+                            if price else 0.0
+                    except Exception:
+                        price = float(lb.get('price_unit') or 0.0)
+                cur = lb.get('currency_id')
+                if cur and plan.currency_id \
+                        and cur[0] != plan.currency_id.id:
+                    cur_rec = env_sudo['res.currency'].browse(cur[0])
+                    price = cur_rec._convert(
+                        price, plan.currency_id, plan.company_id,
+                        fields.Date.today())
                 cand = [s for s in sellers if s['name'][0] == lp[0]]
-                if cand:
-                    seller = sorted(
-                        cand, key=lambda s: s['price'])[0]
-            if not seller and sellers:
+                if cand and cand[0].get('min_qty') \
+                        and line.order_qty < cand[0]['min_qty']:
+                    warn = _('Min. order %s') % cand[0]['min_qty']
+            elif sellers:
                 seller = sorted(
                     sellers,
                     key=lambda s: (s.get('sequence') or 99,
                                    s['price']))[0]
-            if not seller:
+                price = float(seller['price'] or 0.0)
+                s_uom = seller.get('product_uom')
+                if s_uom and line.uom_id and s_uom[0] != line.uom_id.id:
+                    s_uom_rec = env_sudo['uom.uom'].browse(s_uom[0])
+                    price = line.uom_id._compute_quantity(
+                        1.0, s_uom_rec, round=False) * price \
+                        if price else 0.0
+                    # Note: price is per seller UoM; qty is product UoM.
+                if seller.get('min_qty') \
+                        and line.order_qty < seller['min_qty']:
+                    warn = _('Min. order %s') % seller['min_qty']
+                cur = seller.get('currency_id')
+                if cur and plan.currency_id \
+                        and cur[0] != plan.currency_id.id:
+                    cur_rec = env_sudo['res.currency'].browse(cur[0])
+                    price = cur_rec._convert(
+                        price, plan.currency_id, plan.company_id,
+                        fields.Date.today())
+                seller_pid = seller['name'][0]
+            if not seller_pid:
                 vals['note'] = _('No supplier (no seller defined).')
                 line.write(vals)
                 continue
-            # UoM-converted unit price
-            price = float(seller['price'] or 0.0)
-            s_uom = seller.get('product_uom')
-            if s_uom and line.uom_id and s_uom[0] != line.uom_id.id:
-                s_uom_rec = env_sudo['uom.uom'].browse(s_uom[0])
-                price = line.uom_id._compute_quantity(
-                    1.0, s_uom_rec, round=False) * price \
-                    if price else 0.0
-                # Note: price is per seller UoM; qty is in product UoM.
-                # Amount = order_qty(product UoM) * converted price.
-            warn = ''
-            if seller.get('min_qty') and line.order_qty < seller['min_qty']:
-                warn = _('Min. order %s') % seller['min_qty']
-            # Currency: convert to the company currency
-            cur = seller.get('currency_id')
-            if cur and plan.currency_id and cur[0] != plan.currency_id.id:
-                cur_rec = env_sudo['res.currency'].browse(cur[0])
-                price = cur_rec._convert(
-                    price, plan.currency_id, plan.company_id,
-                    fields.Date.today())
             vals.update({
-                'seller_id': seller['name'][0],
+                'seller_id': seller_pid,
                 'unit_price': price,
-                'subtotal': price * float(line.order_qty or 0.0),
                 'min_qty_warn': warn,
             })
+            # Subtotal (TRY order value) is written for buy lines only:
+            # make/subcontract/sellerless lines keep 0, which is why the
+            # tree shows Est. USD (rolled_usd x order) instead.
+            if line.route_type == 'buy':
+                vals['subtotal'] = price * float(line.order_qty or 0.0)
             line.write(vals)
         plan.state = 'supplier_review'
         rollup = self._compute_rollup(env_sudo, plan)
@@ -685,11 +774,98 @@ class MatiaProcurementPlan(models.Model):
                 'total_try': grand_try}
 
     @api.model
+    def _mpp_company_code(self, env_sudo, company_id):
+        """Short TR/USA label for the source-company column.
+
+        @param env_sudo Sudo env.
+        @param company_id res.company ID (or False).
+        @return 'TR', 'USA', or the company name as fallback.
+        """
+        try:
+            cid = int(company_id)
+        except (TypeError, ValueError):
+            return ''
+        if cid == _MPP_TR_COMPANY_ID:
+            return 'TR'
+        comp = env_sudo['res.company'].browse(cid)
+        if comp.exists():
+            if (comp.currency_id.name or '').upper() == 'USD':
+                return 'USA'
+            return comp.name or ''
+        return ''
+
+    @api.model
+    def _mpp_last_buys(self, env_sudo, pids):
+        """Latest purchase per product across TR+USA companies.
+
+        The most recent PO (by order date) wins regardless of company,
+        so a battery last bought from the USA shows the USA price,
+        supplier and company. Cancelled orders are ignored.
+        @param env_sudo Sudo env.
+        @param pids Product IDs.
+        @return {pid: {partner_id, price_unit, currency_id, product_uom,
+            order_id, buy_dt, company_id, company_name}}; pids without
+            any purchase are omitted.
+        """
+        res = {}
+        if not pids:
+            return res
+        POLine = env_sudo['purchase.order.line']
+        for pid in pids:
+            cands = POLine.search_read([
+                ('product_id', '=', pid),
+                ('order_id.state', '!=', 'cancel'),
+            ], ['partner_id', 'date_planned', 'price_unit',
+                'currency_id', 'product_uom', 'order_id'],
+                limit=5, order='date_planned desc, id desc')
+            if not cands:
+                continue
+            oids = list({
+                c['order_id'][0] for c in cands if c.get('order_id')})
+            omap = {}
+            if oids:
+                for o in env_sudo['purchase.order'].browse(oids).read(
+                        ['date_order', 'company_id']):
+                    dt = o.get('date_order')
+                    omap[o['id']] = (
+                        fields.Datetime.from_string(dt)
+                        if isinstance(dt, str) else dt,
+                        o.get('company_id'),
+                    )
+            best, best_dt = False, False
+            for c in cands:
+                _oid = c['order_id'][0] if c.get('order_id') else 0
+                dt, _comp = omap.get(_oid, (False, False))
+                if not dt and c.get('date_planned'):
+                    dp = c['date_planned']
+                    dt = fields.Datetime.from_string(dp) \
+                        if isinstance(dp, str) else dp
+                if not best or (dt and (not best_dt or dt > best_dt)):
+                    best, best_dt = c, dt
+            if not best:
+                continue
+            _oid = best['order_id'][0] if best.get('order_id') else 0
+            _dt, comp = omap.get(_oid, (False, False))
+            cid = comp[0] if comp else False
+            res[pid] = {
+                'partner_id': best.get('partner_id'),
+                'price_unit': float(best.get('price_unit') or 0.0),
+                'currency_id': best.get('currency_id'),
+                'product_uom': best.get('product_uom'),
+                'order_id': _oid or False,
+                'buy_dt': best_dt,
+                'company_id': cid,
+                'company_name': comp[1] if comp else '',
+            }
+        return res
+
+    @api.model
     def _last_buy_vals(self, env_sudo, plan, usd, lb, order_dates):
         """Last-purchase snapshot: price in own currency, USD at the
         historical rate of the purchase date, and date as 'Mon YYYY'."""
         vals = {'last_price': 0.0, 'last_currency_id': False,
-                'last_price_usd': 0.0, 'last_date': False}
+                'last_price_usd': 0.0, 'last_date': False,
+                'last_company_id': False}
         if not lb:
             return vals
         price = float(lb.get('price_unit') or 0.0)
@@ -714,6 +890,7 @@ class MatiaProcurementPlan(models.Model):
             'last_currency_id': cur_id,
             'last_price_usd': usd_price,
             'last_date': buy_date,
+            'last_company_id': lb.get('company_id') or False,
         })
         return vals
 
@@ -757,6 +934,10 @@ class MatiaProcurementPlan(models.Model):
                 if line.last_currency_id else '',
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
+                'last_company': self._mpp_company_code(
+                    env_sudo,
+                    line.last_company_id.id
+                    if line.last_company_id else False),
                 'unit_usd': line.rolled_usd,
                 'rolled_usd': line.rolled_total_usd,
                 'rolled_try': line.rolled_try,
@@ -789,6 +970,10 @@ class MatiaProcurementPlan(models.Model):
                 if line.last_currency_id else '',
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
+                'last_company': self._mpp_company_code(
+                    env_sudo,
+                    line.last_company_id.id
+                    if line.last_company_id else False),
                 'unit_usd': line.rolled_usd,
                 'rolled_usd': line.rolled_total_usd,
                 'warn': line.min_qty_warn or '',
@@ -881,13 +1066,20 @@ class MatiaProcurementPlan(models.Model):
                     'reserved_tr': line.reserved_tr if line else 0.0,
                     'avail_tr': avail,
                     'gross': line.gross_qty if line else targets.get(pid, 0),
-                    'planned': targets.get(pid, 0),
+                    # Planned = net cascade value for tops: target minus
+                    # own avail (level-0 nodes have no parents, so this is
+                    # exact). Children show their own net via sub-BOM.
+                    'planned': max(
+                        0.0, float(targets.get(pid, 0)) - avail),
                     'producible': int(math.floor(avail))
                     if avail > 0 else 0,
                     'net': line.net_qty if line else 0.0,
                     'order_qty': line.order_qty if line else 0.0,
                     'seller': line.seller_id.display_name
                     if line and line.seller_id else '',
+                    'last_company': self._mpp_company_code(
+                        env_sudo, line.last_company_id.id)
+                    if line and line.last_company_id else '',
                     'last_price': line.last_price if line else 0.0,
                     'last_currency':
                         line.last_currency_id.name
@@ -1090,29 +1282,15 @@ class MatiaProcurementPlan(models.Model):
                     lambda l: l.product_id.id in child_ids):
                 snap[line.product_id.id] = line
         missing = [c for c in child_ids if c not in snap]
-        POLine = env_sudo['purchase.order.line']
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
+        # Latest purchase across TR+USA per missing child: the latest
+        # order wins regardless of company (same rule as the tree).
+        last_buy = self._mpp_last_buys(env_sudo, missing)
         order_dates = {}
-        last_buy = {}
-        for pid in missing:
-            found = POLine.search_read([
-                ('product_id', '=', pid),
-                ('order_id.company_id', '=', _MPP_TR_COMPANY_ID),
-                ('order_id.state', '!=', 'cancel'),
-            ], ['partner_id', 'date_planned', 'price_unit',
-                'currency_id', 'order_id'],
-                limit=1, order='date_planned desc, id desc')
-            if found:
-                last_buy[pid] = found[0]
-                if found[0].get('order_id'):
-                    oid = found[0]['order_id'][0]
-                    if oid not in order_dates:
-                        o = env_sudo['purchase.order'].browse(oid)
-                        if o.exists() and o.date_order:
-                            order_dates[oid] = fields.Datetime.from_string(
-                                o.date_order) if isinstance(
-                                o.date_order, str) else o.date_order
+        for _lb in last_buy.values():
+            if _lb.get('order_id') and _lb.get('buy_dt') is not None:
+                order_dates[_lb['order_id']] = _lb['buy_dt']
         items = []
         for bl in bom.bom_line_ids:
             cp = bl.product_id
@@ -1133,18 +1311,15 @@ class MatiaProcurementPlan(models.Model):
                 rusd = float(line.rolled_usd or 0.0)
                 seller = line.seller_id.display_name \
                     if line.seller_id else ''
+                lcompany = self._mpp_company_code(
+                    env_sudo, line.last_company_id.id) \
+                    if line.last_company_id else ''
             else:
                 lb = last_buy.get(pid, {})
                 lp = float(lb.get('price_unit') or 0.0)
                 cur = lb.get('currency_id')
                 lcur = cur[1] if cur else ''
-                buy_dt = None
-                if lb.get('order_id') and lb['order_id'][0] in order_dates:
-                    buy_dt = order_dates[lb['order_id'][0]]
-                elif lb.get('date_planned'):
-                    dp = lb['date_planned']
-                    buy_dt = fields.Datetime.from_string(dp) \
-                        if isinstance(dp, str) else dp
+                buy_dt = lb.get('buy_dt')
                 buy_date = buy_dt.date() if buy_dt else False
                 lusd, ltry = lp, lp
                 if cur and buy_date:
@@ -1162,7 +1337,10 @@ class MatiaProcurementPlan(models.Model):
                         pass
                 ldate = self._mpp_month_year(buy_date) if buy_date else ''
                 rtry, rusd = ltry, lusd
-                seller = ''
+                _lp = lb.get('partner_id')
+                seller = _lp[1] if _lp else ''
+                lcompany = self._mpp_company_code(
+                    env_sudo, lb.get('company_id'))
             has_bom = bool(env_sudo['mrp.bom'].search(
                 [('product_tmpl_id', '=', cp.product_tmpl_id.id)],
                 limit=1))
@@ -1172,6 +1350,10 @@ class MatiaProcurementPlan(models.Model):
                 'name': cp.display_name,
                 'bom_qty': bqty,
                 'gross': bqty * mult,
+                # Branch demand = parent NET x usage; net deducts own
+                # avail (same cascade rule as the explosion).
+                'planned': bqty * mult,
+                'net': max(0.0, bqty * mult - avail),
                 'uom': bl.product_uom_id.name
                 if bl.product_uom_id else '',
                 'has_bom': has_bom,
@@ -1181,6 +1363,7 @@ class MatiaProcurementPlan(models.Model):
                 'producible': int(math.floor(avail / bqty))
                 if bqty > 0 and avail > 0 else 0,
                 'seller': seller,
+                'last_company': lcompany,
                 'last_price': lp,
                 'last_currency': lcur,
                 'last_usd': lusd,
@@ -1191,6 +1374,282 @@ class MatiaProcurementPlan(models.Model):
             })
         items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
         return {'items': items}
+
+    # ------------------------------------------------------------------
+    # Tab 3: supplier summary + MO creation (fulfillment, writes POs/MOs).
+    # Subcontract chain: subcontract lines are ordered from their seller
+    # via a normal PO (per-seller Create RFQ). Confirming that PO runs
+    # Odoo's standard subcontract receipt + subcontract-MO chain, so the
+    # subcontract MO is never created here. Make lines get draft MOs
+    # below, linked by one procurement.group per plan + origin=plan.
+    # ------------------------------------------------------------------
+    @api.model
+    def get_supplier_summary(self, plan_id):
+        """Tab 3 data: suppliers with estimated USD + production lines.
+
+        Supplier rows are split per (seller, source company): a seller
+        whose lines were last bought from the USA gets its own USA row
+        (TR RFQ / US RFQ buttons), because the draft RFQ is created in
+        that company. Totals: total_usd = SUM(rolled_usd(unit, children
+        included) x order_qty). No TRY, no product rows.
+        @param plan_id Plan ID.
+        @return Dict with suppliers, supplier_count, grand_total_usd,
+            production rows (make/subcontract with linked docs),
+            rfq/mo counts and lists.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        suppliers = {}
+        for line in plan.line_ids.filtered(
+                lambda l: l.route_type in ('buy', 'subcontract')
+                and (l.order_qty or 0) > 0 and l.seller_id):
+            sid = line.seller_id.id
+            cid = line.last_company_id.id if line.last_company_id \
+                else plan.company_id.id
+            key = (sid, cid)
+            s = suppliers.setdefault(key, {
+                'seller_id': sid,
+                'seller_name': line.seller_id.display_name,
+                'company_id': cid,
+                'company': self._mpp_company_code(env_sudo, cid),
+                'line_count': 0, 'total_usd': 0.0,
+                'route_types': set(), 'currency_names': set(),
+            })
+            s['line_count'] += 1
+            s['total_usd'] += float(line.rolled_usd or 0.0) * float(
+                line.order_qty or 0.0)
+            s['route_types'].add(line.route_type or '')
+            if line.last_currency_id:
+                s['currency_names'].add(line.last_currency_id.name)
+        po_by_seller = {}
+        for po in plan.purchase_order_ids:
+            po_by_seller.setdefault(
+                (po.partner_id.id, po.company_id.id), []).append({
+                    'id': po.id, 'name': po.name, 'state': po.state,
+                    'amount_total': po.amount_total,
+                    'currency': po.currency_id.name
+                    if po.currency_id else '',
+                })
+        sup_list = []
+        for (sid, cid), s in sorted(
+                suppliers.items(),
+                key=lambda kv: ((kv[1]['seller_name'] or '').lower(),
+                               kv[1]['company'] or '')):
+            rfqs = po_by_seller.get((sid, cid), [])
+            sup_list.append({
+                'seller_id': sid,
+                'seller_name': s['seller_name'],
+                'company_id': cid,
+                'company': s['company'],
+                # Button label: TR RFQ / US RFQ.
+                'rfq_label': '%s RFQ' % (
+                    'TR' if s['company'] == 'TR' else 'US'),
+                'line_count': s['line_count'],
+                'total_usd': round(s['total_usd'], 2),
+                'routes': sorted(s['route_types']),
+                'currencies': sorted(s['currency_names']),
+                'rfqs': rfqs,
+                'has_draft_rfq': any(
+                    r['state'] == 'draft' for r in rfqs),
+            })
+        # Make lines: is a normal-type BOM available (MO creatable)?
+        make_lines = plan.line_ids.filtered(
+            lambda l: l.route_type == 'make'
+            and (l.order_qty or 0) > 0)
+        tmpl_ok = set()
+        if make_lines:
+            tmpl_of = {}
+            for pr in env_sudo['product.product'].browse(
+                    make_lines.mapped('product_id').ids).read(
+                    ['product_tmpl_id']):
+                tmpl_of[pr['id']] = pr['product_tmpl_id'][0]
+            for b in env_sudo['mrp.bom'].search(
+                    [('product_tmpl_id', 'in', list(set(
+                        tmpl_of.values()))),
+                     ('type', '=', 'normal')]):
+                tmpl_ok.add(b.product_tmpl_id.id)
+            prod_tmpl = tmpl_of
+        else:
+            prod_tmpl = {}
+        production = []
+        for line in plan.line_ids.filtered(
+                lambda l: l.route_type in ('make', 'subcontract')
+                and (l.order_qty or 0) > 0):
+            mo = False
+            if line.mo_id:
+                mo = {'id': line.mo_id.id, 'name': line.mo_id.name,
+                      'state': line.mo_id.state}
+            po = False
+            if line.purchase_order_id:
+                _po = line.purchase_order_id
+                po = {'id': _po.id, 'name': _po.name,
+                      'state': _po.state}
+            production.append({
+                'line_id': line.id,
+                'code': line.product_id.default_code or '',
+                'name': line.product_id.display_name,
+                'route': line.route_type,
+                'order_qty': line.order_qty,
+                'uom': line.uom_id.name if line.uom_id else '',
+                'seller': line.seller_id.display_name
+                if line.seller_id else '',
+                'mo': mo,
+                'mo_creatable': line.route_type == 'make' and not mo
+                and prod_tmpl.get(line.product_id.id) in tmpl_ok,
+                'po': po,
+            })
+        production.sort(key=lambda r: (r['route'] or '',
+                                       r['code'] or '',
+                                       r['name'] or ''))
+        grand = sum(s['total_usd'] for s in sup_list)
+        return {
+            'plan_id': plan.id,
+            'plan_name': plan.name,
+            'state': plan.state,
+            'suppliers': sup_list,
+            'supplier_count': len({s['seller_id']
+                                   for s in sup_list}),
+            'grand_total_usd': round(grand, 2),
+            'production': production,
+            'rfq_count': len(plan.purchase_order_ids),
+            'mo_count': len(plan.mo_ids),
+            'mos': [{
+                'id': m.id, 'name': m.name, 'state': m.state,
+                'product': m.product_id.display_name,
+            } for m in plan.mo_ids],
+        }
+
+    @api.model
+    def action_create_mos(self, plan_id, line_ids=None):
+        """Create draft MOs for make lines (idempotent).
+
+        Lines already linked to an MO are skipped; lines without a
+        normal-type BOM are reported, never forced.
+        @param plan_id Plan ID.
+        @param line_ids Optional line IDs (None = all make lines).
+        @return Dict with created/skipped plus a fresh supplier summary.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        lines = plan.line_ids.filtered(
+            lambda l: l.route_type == 'make'
+            and (l.order_qty or 0) > 0)
+        if line_ids:
+            want = set()
+            for _i in line_ids:
+                try:
+                    want.add(int(_i))
+                except (TypeError, ValueError):
+                    continue
+            lines = lines.filtered(lambda l: l.id in want)
+        if not lines:
+            raise UserError(_('No make lines to manufacture.'))
+        picking = env_sudo['stock.picking.type'].search([
+            ('code', '=', 'mrp_operation'),
+            ('company_id', '=', plan.company_id.id),
+        ], limit=1)
+        if not picking:
+            raise UserError(_(
+                'No manufacturing operation type found for TR.'))
+        group = env_sudo['procurement.group'].search(
+            [('name', '=', plan.name)], limit=1)
+        if not group:
+            group = env_sudo['procurement.group'].create({
+                'name': plan.name, 'move_type': 'direct',
+            })
+        src = picking.default_location_src_id
+        if not src:
+            src = env_sudo['stock.location'].search([
+                ('usage', '=', 'internal'),
+                ('company_id', '=', plan.company_id.id),
+            ], limit=1)
+        dst = picking.default_location_dest_id
+        if not dst:
+            dst = env_sudo['stock.location'].search([
+                ('usage', '=', 'production'),
+                ('company_id', '=', plan.company_id.id),
+            ], limit=1)
+        if not src or not dst:
+            raise UserError(_(
+                'Manufacturing source/destination locations not found.'))
+        bom_cache = {}
+
+        def _normal_bom(pid):
+            prod = env_sudo['product.product'].browse(pid)
+            if not prod.exists():
+                return False
+            tid = prod.product_tmpl_id.id
+            if tid not in bom_cache:
+                b = env_sudo['mrp.bom'].search([
+                    ('product_tmpl_id', '=', tid),
+                    ('product_id', '=', pid),
+                    ('type', '=', 'normal'),
+                ], limit=1)
+                if not b:
+                    b = env_sudo['mrp.bom'].search([
+                        ('product_tmpl_id', '=', tid),
+                        ('type', '=', 'normal'),
+                    ], limit=1)
+                bom_cache[tid] = b
+            return bom_cache[tid]
+
+        created, skipped = [], []
+        for line in lines:
+            if line.mo_id:
+                skipped.append({
+                    'line_id': line.id,
+                    'code': line.product_id.default_code or '',
+                    'reason': _('MO already linked: %s')
+                    % line.mo_id.name,
+                })
+                continue
+            bom = _normal_bom(line.product_id.id)
+            if not bom:
+                skipped.append({
+                    'line_id': line.id,
+                    'code': line.product_id.default_code or '',
+                    'reason': _('No normal-type BOM found.'),
+                })
+                continue
+            try:
+                mo = env_sudo['mrp.production'].create({
+                    'product_id': line.product_id.id,
+                    'product_qty': float(line.order_qty),
+                    'product_uom_id': line.uom_id.id
+                    if line.uom_id else line.product_id.uom_id.id,
+                    'bom_id': bom.id,
+                    'picking_type_id': picking.id,
+                    'location_src_id': src.id,
+                    'location_dest_id': dst.id,
+                    'company_id': plan.company_id.id,
+                    'date_planned_start': fields.Datetime.now(),
+                    'origin': plan.name,
+                    'procurement_group_id': group.id,
+                })
+            except Exception as exc:
+                skipped.append({
+                    'line_id': line.id,
+                    'code': line.product_id.default_code or '',
+                    'reason': str(exc),
+                })
+                continue
+            line.write({'mo_id': mo.id})
+            created.append({
+                'id': mo.id, 'name': mo.name,
+                'product': line.product_id.display_name,
+                'qty': float(line.order_qty),
+            })
+        if created:
+            plan.write({'mo_ids': [(4, c['id']) for c in created]})
+        return {
+            'created': created,
+            'skipped': skipped,
+            'supplier_summary': self.get_supplier_summary(plan.id),
+        }
 
 
 class MatiaProcurementPlanLine(models.Model):
@@ -1233,6 +1692,10 @@ class MatiaProcurementPlanLine(models.Model):
              'of the last purchase date (snapshot).')
     last_date = fields.Date(
         help='Last purchase date (shown as Mon YYYY).')
+    last_company_id = fields.Many2one(
+        'res.company', readonly=True,
+        help='Company of the last purchase (TR or USA). The draft RFQ '
+             'for this line is created in this company.')
     rolled_usd = fields.Float(
         digits=(16, 4),
         help='Rolled-up USD unit cost: own last-buy USD price plus '
@@ -1249,3 +1712,6 @@ class MatiaProcurementPlanLine(models.Model):
         help='Rolled TRY unit cost x gross qty.')
     min_qty_warn = fields.Char()
     note = fields.Text()
+    mo_id = fields.Many2one(
+        'mrp.production', readonly=True,
+        help='Draft MO created from this make line (if any).')

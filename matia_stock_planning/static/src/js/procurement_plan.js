@@ -5,26 +5,32 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
     var core = require('web.core');
     var _t = core._t;
 
+    // Production Plan dashboard: 3 tabs in ONE client action (no navigation).
+    // Tab 1: flat quantity entry (TR+USA on-hand base, no expandable rows).
+    // Tab 2: capacity-identical tree (same msp- CSS classes, open/close BOMs).
+    // Tab 3: suppliers with estimated USD + production (RFQ/MO creation).
     var ProcurementPlanDashboard = AbstractAction.extend({
         template: 'MatiaProcurementPlan.Dashboard',
         events: {
             'click .mpp-btn-reload': '_onReload',
-            'click .mpp-btn-calc': '_onCalc',
+            'click .mpp-nav-tab': '_onNavTab',
             'click .mpp-btn-fill': '_onFill',
             'click .mpp-btn-clear': '_onClear',
+            'click .mpp-btn-calc': '_onCalc',
+            'click .mpp-btn-to-suppliers': '_onToSuppliers',
             'click .mpp-btn-excel': '_onExportExcel',
             'click .mpp-btn-excel-tree': '_onExportTree',
-            'click .mpp-btn-expand-all': '_onExpandAll',
-            'click .mpp-btn-collapse-all': '_onCollapseAll',
-            'click .mpp-group-toggle': '_onGroupToggle',
-            'click .mpp-tree-toggle': '_onRowToggle',
-            'click .mpp-sort': '_onSort',
-            'click .mpp-tab': '_onTab',
-            'click .mpp-btn-rfq-preview': '_onRfqPreview',
-            'click .mpp-btn-rfq-create': '_onCreateRfqs',
-            'click .mpp-btn-rfq-confirm': '_onConfirmRfqs',
+            'click .mpp-btn-create-rfq': '_onCreateRfq',
+            'click .mpp-btn-confirm-rfq': '_onConfirmRfq',
+            'click .mpp-btn-create-mo': '_onCreateMo',
             'input .mpp-qty': '_onQtyInput',
             'input .mpp-tree-search': '_onTreeSearch',
+            'click .msp-btn-expand-all': '_onExpandAll',
+            'click .msp-btn-collapse-all': '_onCollapseAll',
+            'click .msp-btn-toggle-group': '_onGroupToggle',
+            'click .msp-btn-sub-bom': '_onSubBom',
+            'click .msp-clickable-prod': '_onSubBom',
+            'click .msp-th-sortable': '_onSort',
         },
 
         init: function (parent, action) {
@@ -40,10 +46,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.treeSearch = '';
             this.treeSort = {key: 'planned', dir: -1};
             this.fillN = 50;
-            this.activeGroup = 'buy';
-            this.rfqPreview = null;
-            this.createdRfqs = [];
-            this.rfqConfirm = false;
+            this.activeTab = 1;
+            this.supSummary = null;
+            this.pendingRfqSeller = null;
         },
 
         willStart: function () {
@@ -56,7 +61,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         start: function () {
             var self = this;
             return this._super.apply(this, arguments).then(function () {
-                self._updateView();
+                self._showTab(1);
+                self._renderEntry();
             });
         },
 
@@ -68,6 +74,66 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
+        _planId: function () {
+            if (this.plan && this.plan.plan_id) return this.plan.plan_id;
+            if (this.summary && this.summary.plan_id) {
+                return this.summary.plan_id;
+            }
+            return false;
+        },
+
+        // ---------------- tabs ----------------
+        _showTab: function (n) {
+            this.activeTab = n;
+            var self = this;
+            this.$('.mpp-nav-tab').each(function () {
+                var t = parseInt(this.dataset.tab, 10);
+                if (t === n) {
+                    this.classList.add('active');
+                } else {
+                    this.classList.remove('active');
+                }
+            });
+            this.$('.mpp-pane').each(function () {
+                var t = parseInt(this.dataset.pane, 10);
+                if (t === n) {
+                    this.classList.remove('d-none');
+                } else {
+                    this.classList.add('d-none');
+                }
+            });
+            if (n === 2) this._renderTree();
+            if (n === 3) this._renderSup();
+        },
+
+        _onNavTab: function (ev) {
+            ev.preventDefault();
+            var n = parseInt(ev.currentTarget.dataset.tab, 10) || 1;
+            if (n === 2 && !this.summary) {
+                this.displayNotification({
+                    title: _t('Warning'),
+                    message: _t('Calculate the tree first (Tab 1 → Calculate tree + cost).'),
+                    type: 'warning',
+                });
+                return;
+            }
+            if (n === 3) {
+                if (!this.plan && !this.summary) {
+                    this.displayNotification({
+                        title: _t('Warning'),
+                        message: _t('Calculate the tree first.'),
+                        type: 'warning',
+                    });
+                    return;
+                }
+                this._showTab(3);
+                if (!this.supSummary) this._fetchSupSummary();
+                return;
+            }
+            this._showTab(n);
+        },
+
+        // ---------------- tab 1: entry ----------------
         _fetchEntry: function () {
             var self = this;
             return this._rpcPlan('get_entry_products').then(function (res) {
@@ -77,7 +143,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onReload: function () {
             var self = this;
-            this._fetchEntry().then(function () { self._updateView(); });
+            this._fetchEntry().then(function () {
+                self._renderEntry();
+            });
         },
 
         _onQtyInput: function (ev) {
@@ -98,20 +166,22 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // Fill-to-N: qty = max(0, N - avail_tr) for every entry row.
+        // Fill-to-N: qty = max(0, N - (TR on-hand + USA on-hand)).
+        // Reserves are deliberately ignored (user rule).
         _onFill: function () {
             var nInput = this.$('.mpp-fill-n').val();
             var n = parseInt(nInput, 10);
             if (isNaN(n) || n < 0) n = 50;
             this.fillN = n;
             for (var i = 0; i < this.items.length; i++) {
-                var avail = parseFloat(this.items[i].avail_tr) || 0;
-                this.items[i].qty_input = Math.max(0, Math.ceil(n - avail));
+                var base = parseFloat(this.items[i].fill_base) || 0;
+                this.items[i].qty_input = Math.max(0, Math.ceil(n - base));
             }
             this._renderEntry();
             this.displayNotification({
                 title: _t('Filled'),
-                message: _t('Quantities filled to ') + n + '.',
+                message: _t('Quantities filled to ') + n +
+                    _t(' (TR+USA on-hand, reserves ignored).'),
                 type: 'success',
             });
         },
@@ -123,7 +193,29 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._renderEntry();
         },
 
-        // Single-screen flow: create plan -> tree + cost in one call.
+        _renderEntry: function () {
+            var html = '';
+            for (var i = 0; i < this.items.length; i++) {
+                var r = this.items[i];
+                html += '<tr>' +
+                    '<td>' + (r.product_code || '') + '</td>' +
+                    '<td>' + (r.display_name || '') + '</td>' +
+                    '<td><span class="badge badge-info">' + (r.kit_key || '') +
+                    '</span></td>' +
+                    '<td class="text-center">' + (r.avail_tr || 0) + '</td>' +
+                    '<td class="text-center">' + (r.stock_usa || 0) + '</td>' +
+                    '<td class="text-center"><strong>' +
+                    (r.fill_base || 0) + '</strong></td>' +
+                    '<td><input type="number" min="0" class="form-control form-control-sm mpp-qty" ' +
+                    'data-pid="' + r.product_id + '" value="' +
+                    (r.qty_input || 0) + '"/></td>' +
+                    '</tr>';
+            }
+            this.$('.mpp-entry-body').html(html);
+            this.$('.mpp-fill-n').val(this.fillN);
+        },
+
+        // Calculate -> creates the plan, builds the tree, jumps to Tab 2.
         _onCalc: function () {
             var self = this;
             var sel = this._selectedItems();
@@ -145,32 +237,50 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 self.expanded = {};
                 self.subCache = {};
                 self.collapsedGroups = {};
-                self.activeGroup = 'buy';
-                self._updateView();
+                self.supSummary = null;
+                self.pendingRfqSeller = null;
+                self._showTab(2);
             }, function (err) {
-                var msg = (err && err.data && err.data.message) ||
-                    (err && err.message) || _t('Calculation failed.');
-                self.displayNotification({
-                    title: _t('Error'),
-                    message: msg,
-                    type: 'danger',
-                });
+                self._notifyErr(err);
             });
         },
 
-        _onTab: function (ev) {
-            this.activeGroup = ev.currentTarget.dataset.group;
-            this._renderSuppliers();
+        _onToSuppliers: function () {
+            if (!this._planId()) return;
+            this._showTab(3);
+            if (!this.supSummary) this._fetchSupSummary();
         },
 
+        _fetchSupSummary: function () {
+            var self = this;
+            var pid = this._planId();
+            if (!pid) return Promise.resolve();
+            return this._rpcPlan('get_supplier_summary', [pid]).then(
+                function (res) {
+                    self.supSummary = res;
+                    if (self.activeTab === 3) self._renderSup();
+                }, function (err) {
+                    self._notifyErr(err);
+                });
+        },
+
+        _notifyErr: function (err) {
+            var msg = (err && err.data && err.data.message) ||
+                (err && err.message) || _t('Operation failed.');
+            this.displayNotification({
+                title: _t('Error'), message: msg, type: 'danger',
+            });
+        },
+
+        // ---------------- tab 2: tree (msp-identical) ----------------
         _onTreeSearch: function (ev) {
             this.treeSearch = (ev.currentTarget.value || '').toLowerCase();
             this._renderTree();
         },
 
         _onSort: function (ev) {
-            ev.preventDefault();
-            var key = ev.currentTarget.dataset.sort;
+            var key = ev.currentTarget.dataset.sortCol;
+            if (!key) return;
             if (this.treeSort.key === key) {
                 this.treeSort.dir *= -1;
             } else {
@@ -180,59 +290,73 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         _onGroupToggle: function (ev) {
-            var key = ev.currentTarget.dataset.group;
+            var key = ev.currentTarget.dataset.groupKey;
             this.collapsedGroups[key] = !this.collapsedGroups[key];
             this._renderTree();
         },
 
-        _onRowToggle: function (ev) {
+        _onSubBom: function (ev) {
             var self = this;
-            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
-            var qty = parseFloat(ev.currentTarget.dataset.qty || '1') || 1;
-            if (this.expanded[pid]) {
-                delete this.expanded[pid];
+            var el = ev.currentTarget;
+            var uid = el.dataset.uid;
+            var pid = parseInt(el.dataset.pid, 10);
+            var net = parseFloat(el.dataset.net || '0') || 0;
+            if (!uid || !pid) return;
+            if (this.expanded[uid]) {
+                Object.keys(this.expanded).forEach(function (k) {
+                    if (k === uid || k.indexOf(uid + '/') === 0) {
+                        delete self.expanded[k];
+                    }
+                });
                 this._renderTree();
                 return;
             }
-            if (this.subCache[pid]) {
-                this.expanded[pid] = true;
+            if (this.subCache[uid]) {
+                this.expanded[uid] = true;
                 this._renderTree();
                 return;
             }
-            var planId = this.plan ? this.plan.plan_id :
-                (this.summary ? this.summary.plan_id : false);
-            this._rpcPlan('get_sub_bom_cost', [pid, qty, planId || false])
+            this._rpcPlan('get_sub_bom_cost', [pid, net, this._planId()])
                 .then(function (res) {
-                    self.subCache[pid] = (res && res.items) || [];
-                    self.expanded[pid] = true;
+                    self.subCache[uid] = {
+                        items: (res && res.items) || [],
+                        level: parseInt(el.dataset.level, 10) + 1 || 1,
+                        groupKey: el.dataset.group,
+                    };
+                    self.expanded[uid] = true;
                     self._renderTree();
+                }, function (err) {
+                    self._notifyErr(err);
                 });
         },
 
         _onExpandAll: function () {
             var self = this;
-            var planId = this.plan ? this.plan.plan_id :
-                (this.summary ? this.summary.plan_id : false);
+            var pid = this._planId();
             var todo = [];
             this.treeGroups.forEach(function (g) {
                 (g.items || []).forEach(function (it) {
-                    if (it.has_bom && !self.subCache[it.product_id]) {
-                        todo.push(it);
+                    var uid = g.key + ':' + it.product_id;
+                    if (it.has_bom && !self.subCache[uid]) {
+                        todo.push({g: g, it: it, uid: uid});
                     } else if (it.has_bom) {
-                        self.expanded[it.product_id] = true;
+                        self.expanded[uid] = true;
                     }
                 });
             });
             var chain = Promise.resolve();
-            todo.forEach(function (it) {
+            todo.forEach(function (t) {
                 chain = chain.then(function () {
+                    var net = self._rowNet(t.it);
                     return self._rpcPlan('get_sub_bom_cost',
-                        [it.product_id, it.bom_qty || 1, planId || false]
-                    ).then(function (res) {
-                        self.subCache[it.product_id] =
-                            (res && res.items) || [];
-                        self.expanded[it.product_id] = true;
-                    });
+                        [t.it.product_id, net, pid || false]).then(
+                        function (res) {
+                            self.subCache[t.uid] = {
+                                items: (res && res.items) || [],
+                                level: 1, groupKey: t.g.key,
+                            };
+                            self.expanded[t.uid] = true;
+                        });
                 });
             });
             chain.then(function () { self._renderTree(); });
@@ -249,17 +373,27 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return s.indexOf(this.treeSearch) !== -1;
         },
 
+        _subtreeMatch: function (uid, r) {
+            if (this._matchSearch(r)) return true;
+            var cached = this.subCache[uid];
+            if (!cached) return false;
+            for (var i = 0; i < cached.items.length; i++) {
+                var k = cached.items[i];
+                if (this._subtreeMatch(uid + '/' + k.product_id, k)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+
         _sortItems: function (rows) {
             var k = this.treeSort.key, d = this.treeSort.dir;
-            var num = {avail_tr: 1, planned: 1, gross: 1, rolled_try: 1,
-                rolled_total_try: 1, last_usd: 1, order_qty: 1};
+            var num = {onhand: 1, reserved: 1, avail: 1, producible: 1,
+                planned: 1, est: 1};
+            var self = this;
             rows.sort(function (a, b) {
-                var av = a[k], bv = b[k];
-                if (num[k]) {
-                    av = parseFloat(av) || 0;
-                    bv = parseFloat(bv) || 0;
-                    return (av - bv) * d;
-                }
+                var av = self._sortVal(a, k), bv = self._sortVal(b, k);
+                if (num[k]) return (av - bv) * d;
                 av = (av || '').toString().toLowerCase();
                 bv = (bv || '').toString().toLowerCase();
                 if (av < bv) return -1 * d;
@@ -267,6 +401,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 return 0;
             });
             return rows;
+        },
+
+        _sortVal: function (r, k) {
+            if (k === 'code') return (r.code || '') + ' ' + (r.name || '');
+            if (k === 'onhand') return this._onhand(r);
+            if (k === 'reserved') return parseFloat(r.reserved_tr) || 0;
+            if (k === 'avail') return parseFloat(r.avail_tr) || 0;
+            if (k === 'producible') return this._producible(r);
+            if (k === 'planned') return this._rowNet(r);
+            if (k === 'est') return this._estUsd(r);
+            return 0;
         },
 
         _fmtNum: function (v, dec) {
@@ -284,64 +429,318 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 (l.last_currency ? ' ' + l.last_currency : '');
         },
 
-        _rowHtml: function (r, level, isChild) {
-            var self = this;
-            var hasKids = r.has_bom;
-            var isOpen = !!this.expanded[r.product_id];
-            var toggle = '';
-            if (hasKids) {
-                toggle = '<span class="mpp-tree-toggle" data-pid="' +
-                    r.product_id + '" data-qty="' + (r.bom_qty || 1) +
-                    '" title="Expand/collapse">' +
-                    (isOpen ? '&#9660;' : '&#9654;') + '</span> ';
-            } else {
-                toggle = '<span class="mpp-tree-leaf">&#183;</span> ';
+        _onhand: function (r) {
+            if (r.onhand !== undefined && r.onhand !== null) {
+                return parseFloat(r.onhand) || 0;
             }
-            var indent = '';
-            for (var i = 0; i < level; i++) indent += '<span class="mpp-indent"></span>';
-            var availCls = (parseFloat(r.avail_tr) || 0) > 0 ?
-                'badge badge-success' : 'badge badge-secondary';
+            if (r.stock_tr !== undefined && r.stock_tr !== null) {
+                return parseFloat(r.stock_tr) || 0;
+            }
+            return (parseFloat(r.avail_tr) || 0) +
+                (parseFloat(r.reserved_tr) || 0);
+        },
+
+        _producible: function (r) {
+            if (r.producible !== undefined && r.producible !== null &&
+                    r.producible !== '') {
+                return parseFloat(r.producible) || 0;
+            }
+            var avail = parseFloat(r.avail_tr) || 0;
+            var bq = parseFloat(r.bom_qty) || 0;
+            if (bq > 0) return Math.floor(avail / bq);
+            return avail;
+        },
+
+        // Net shortage after the cascade (tops: planned; subs: net).
+        _rowNet: function (r) {
+            if (r.net !== undefined && r.net !== null && r.net !== '') {
+                return parseFloat(r.net) || 0;
+            }
+            if (r.planned !== undefined && r.planned !== null &&
+                    r.planned !== '') {
+                return parseFloat(r.planned) || 0;
+            }
+            return parseFloat(r.gross) || 0;
+        },
+
+        _estUsd: function (r) {
+            var qty = (r.order_qty !== undefined && r.order_qty !== null &&
+                r.order_qty !== '') ? parseFloat(r.order_qty) || 0 :
+                this._rowNet(r);
+            return (parseFloat(r.rolled_usd) || 0) * qty;
+        },
+
+        _groupIcon: function (key) {
+            var map = {
+                base: 'fa-cube text-primary',
+                outdoor: 'fa-sun-o text-success',
+                seat: 'fa-wheelchair text-warning',
+                screws: 'fa-wrench',
+            };
+            return map[key] || 'fa-cube text-primary';
+        },
+
+        _sortIcon: function (col) {
+            if (this.treeSort.key === col) {
+                return this.treeSort.dir === 'asc' ?
+                    'fa-sort-asc' : 'fa-sort-desc';
+            }
+            return 'fa-sort';
+        },
+
+        _rowHtml: function (r, level, groupKey, uid) {
+            var self = this;
+            var lvl = Math.min(level, 5);
+            var hasKids = !!r.has_bom && !r._is_cycle;
+            var isOpen = !!this.expanded[uid];
+            var net = this._rowNet(r);
+            var prodCls = hasKids ? 'cursor-pointer msp-clickable-prod' : '';
+            var prodTitle = hasKids ? 'Click to show BOM components' : '';
+            var toggle;
+            if (hasKids) {
+                toggle = '<button type="button" class="btn btn-sm btn-link msp-btn-sub-bom p-0 mr-1 text-primary"' +
+                    ' data-uid="' + uid + '" data-pid="' + r.product_id + '"' +
+                    ' data-net="' + net + '" data-level="' + level + '"' +
+                    ' data-group="' + groupKey + '"' +
+                    ' title="Click to view sub-assembly BOM components">' +
+                    '<i class="fa ' + (isOpen ? 'fa-caret-down' : 'fa-caret-right') +
+                    ' msp-bom-arrow"></i></button>';
+            } else {
+                toggle = '<span class="msp-bom-spacer mr-1">' +
+                    '<i class="fa fa-circle msp-no-bom-dot"></i></span>';
+            }
+            var oh = this._onhand(r);
+            var rs = parseFloat(r.reserved_tr) || 0;
+            var avail = parseFloat(r.avail_tr) || 0;
+            var prod = this._producible(r);
+            var order = (r.order_qty !== undefined && r.order_qty !== null &&
+                r.order_qty !== '') ? this._fmtNum(r.order_qty, 0) : '';
             var breakdown = r.top_breakdown ?
                 ' title="Per-top: ' + r.top_breakdown + '"' : '';
-            var html = '<tr class="mpp-level-' + level +
-                (isChild ? ' mpp-child-row' : '') + '">' +
-                '<td><div class="mpp-part">' + indent + toggle +
-                '<span><strong>' + (r.code || '') + '</strong><br/>' +
-                '<span class="text-muted">' + (r.name || '') + '</span> ' +
-                (level === 0 ? '<span class="badge badge-info">L0</span>' :
-                    '<span class="badge badge-light">L' + level + '</span>') +
-                '</span></div></td>' +
-                '<td class="text-center">' +
-                self._fmtNum(r.bom_qty, 2) + ' ' + (r.uom || '') + '</td>' +
-                '<td class="text-center"><span class="' + availCls + '">' +
-                self._fmtNum(r.avail_tr, 0) + '</span>' +
-                '<div class="text-muted small">res ' +
-                self._fmtNum(r.reserved_tr, 0) + '</div></td>' +
-                '<td class="text-center"' + breakdown + '><strong>' +
-                self._fmtNum(r.planned !== undefined ? r.planned : r.gross, 0) +
-                '</strong>' +
+            var trCls = 'item-row' +
+                (level > 0 ? ' sub-bom-row sub-level-' + lvl : '');
+            var html = '<tr class="' + trCls + '"' +
+                ' data-product-name="' +
+                ((r.name || '').toLowerCase()) + '"' +
+                ' data-group="' + groupKey + '" data-level="' + level + '"' +
+                ' data-uid="' + uid + '"' +
+                ' data-product-id="' + r.product_id + '"' +
+                ' data-bom-qty="' + (r.bom_qty || 0) + '">' +
+                '<td class="td-product' +
+                (level > 0 ? ' td-sub-product' : '') + '">' +
+                toggle;
+            if (level > 0) {
+                html += '<i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>';
+            }
+            html += (r.code ?
+                '<span class="prod-code' +
+                (level > 0 ? ' sub-prod-code' : '') + '">[' + r.code +
+                ']</span> ' : '') +
+                '<span class="prod-name ' + prodCls + '"' +
+                (hasKids ? ' data-uid="' + uid + '" data-pid="' +
+                    r.product_id + '" data-net="' + net +
+                    '" data-level="' + level + '" data-group="' + groupKey +
+                    '"' : '') +
+                (prodTitle ? ' title="' + prodTitle + '"' : '') + '>' +
+                (r.name || '') + '</span>' +
+                (hasKids ? ' <span class="badge badge-light text-muted border ml-1" ' +
+                    'style="font-size:0.65rem;" title="Has Sub-Assembly BOM">BOM</span>' : '') +
+                (level > 0 ?
+                    ' <span class="msp-level-badge msp-lvl-' + lvl +
+                    '" title="BOM Level ' + level + '">L' + level + '</span>' : '') +
+                '</td>' +
+                '<td class="td-bom-qty">' + this._fmtNum(r.bom_qty, 2) +
+                ' <small class="text-muted">' + (r.uom || '') + '</small></td>' +
+                '<td class="td-stock" title="Total On-Hand: ' + oh +
+                (rs ? ' (Reserved: ' + rs + ', Usable: ' + avail + ')' : '') +
+                '">' + (oh <= 0 ?
+                    '<span class="stock-zero">0</span>' : this._fmtNum(oh, 0)) +
+                '</td>' +
+                '<td class="td-reserved"><span class="reserved-pill' +
+                (rs > 0 ? ' reserved-has-qty' : '') + '" title="' +
+                (rs > 0 ? rs + ' units reserved' : 'None reserved') + '">' +
+                this._fmtNum(rs, 0) + '</span></td>' +
+                '<td class="td-stock"><strong>' + this._fmtNum(avail, 0) +
+                '</strong></td>' +
+                '<td class="td-max-dev">' + (prod <= 0 ?
+                    '<span class="dev-badge dev-critical">0</span>' :
+                    '<span class="dev-normal">' + this._fmtNum(prod, 0) +
+                    '</span>') + '</td>' +
+                '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
+                    '<span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>' :
+                    '<span class="badge-req-need">' + this._fmtNum(net, 0) +
+                    '</span>') +
                 (r.top_breakdown ?
                     '<div class="text-muted small" style="max-width:220px;">' +
                     r.top_breakdown + '</div>' : '') + '</td>' +
-                '<td class="text-center">' +
-                self._fmtNum(r.net !== undefined ? r.net : '', 0) +
-                ' / <strong>' +
-                self._fmtNum(r.order_qty, 0) + '</strong></td>' +
-                '<td>' + (r.seller || '') + '</td>' +
-                '<td class="text-right">' + self._fmtLast(r) + '</td>' +
-                '<td class="text-right">' + self._fmtNum(r.last_try, 2) +
+                '<td class="td-req">' + this._fmtNum(net, 0) +
+                (order !== '' ? ' / <strong>' + order + '</strong>' : '') +
                 '</td>' +
-                '<td class="text-right">' + self._fmtNum(r.last_usd, 4) +
+                '<td>' + (r.seller || '') + '</td>' +
+                '<td class="text-center">' + this._srcBadge(r) + '</td>' +
+                '<td class="text-right">' + this._fmtLast(r) + '</td>' +
+                '<td class="text-right">' + this._fmtNum(r.last_usd, 4) +
                 '</td>' +
                 '<td class="text-center">' + (r.last_date || '') + '</td>' +
-                '<td class="text-right">' + self._fmtNum(r.rolled_try, 2) +
+                '<td class="text-right">' + this._fmtNum(r.rolled_usd, 2) +
                 '</td>' +
-                '<td class="text-right">' + self._fmtNum(r.rolled_usd, 4) +
-                '</td>' +
-                '<td class="text-right">' + self._fmtNum(r.subtotal, 2) +
-                '</td>' +
+                '<td class="text-right"><strong>' +
+                this._fmtNum(this._estUsd(r), 2) + '</strong></td>' +
                 '</tr>';
             return html;
+        },
+
+        // Source badge: TR (blue) / USA (orange) from the last PO's company.
+        _srcBadge: function (r) {
+            var c = r.last_company || '';
+            if (!c) return '<span class="text-muted">—</span>';
+            var cls = c === 'USA' ? 'badge-warning' :
+                (c === 'TR' ? 'badge-primary' : 'badge-secondary');
+            return '<span class="badge ' + cls + '">' + c + '</span>';
+        },
+
+        _theadHtml: function () {
+            var self = this;
+            var cols = [
+                ['code', 'Part Name &amp; Code', 'th-product', 1],
+                [null, 'Usage Qty', 'th-bom-qty', 0],
+                ['onhand', 'On Hand', 'th-stock', 1],
+                ['reserved', 'Reserved', 'th-reserved', 1],
+                ['avail', 'Unreserved', 'th-stock', 1],
+                ['producible', 'Producible', 'th-max-dev', 1],
+                ['planned', 'Planned', 'th-req', 1],
+                [null, 'Net / Order', 'th-req', 0],
+                [null, 'Seller', '', 0],
+                [null, 'Source', '', 0],
+                [null, 'Last Price', '', 0],
+                [null, 'USD', '', 0],
+                [null, 'Last Buy', '', 0],
+                [null, 'Rolled USD', '', 0],
+                ['est', 'Est. USD', '', 1],
+            ];
+            var html = '<thead><tr>';
+            cols.forEach(function (c) {
+                var cls = c[2] + (c[3] ? ' msp-th-sortable' : '');
+                html += '<th class="' + cls + '"' +
+                    (c[3] ? ' data-sort-col="' + c[0] + '"' : '') + '>' +
+                    c[1] + (c[3] ?
+                        ' <i class="fa ml-1 ' + self._sortIcon(c[0]) +
+                        ' msp-sort-icon"></i>' : '') + '</th>';
+            });
+            return html + '</tr></thead>';
+        },
+
+        _walkRows: function (items, level, groupKey, parentUid, out) {
+            var self = this;
+            items.forEach(function (r) {
+                var uid = parentUid + '/' + r.product_id;
+                if (!self._subtreeMatch(uid, r)) return;
+                out.push(self._rowHtml(r, level, groupKey, uid));
+                var cached = self.subCache[uid];
+                if (self.expanded[uid] && cached) {
+                    self._walkRows(cached.items, cached.level,
+                        cached.groupKey, uid, out);
+                }
+            });
+        },
+
+        _renderTree: function () {
+            var self = this;
+            if (!this.summary) {
+                this.$('.mpp-tree-body').html(
+                    '<div class="alert alert-info">Calculate the tree first (Tab 1).</div>');
+                return;
+            }
+            var html = '<div class="table-responsive"><table class="msp-table">';
+            html += this._theadHtml() + '<tbody>';
+            this.treeGroups.forEach(function (g) {
+                var collapsed = !!self.collapsedGroups[g.key];
+                var items = (g.items || []).filter(function (r) {
+                    return self._subtreeMatch(g.key + ':' + r.product_id, r);
+                });
+                items = self._sortItems(items.slice());
+                html += '<tr class="group-row group-' + g.key +
+                    '" data-group="' + g.key + '"><td colspan="15">' +
+                    '<div class="group-title-badge">' +
+                    '<i class="fa ' + self._groupIcon(g.key) + ' mr-1"></i>' +
+                    '<span>' + g.title + '</span>' +
+                    '<span class="group-count ml-2">(' + items.length +
+                    ' Parts)</span>' +
+                    '<span class="ml-auto text-muted" style="font-size: 0.75rem;">' +
+                    'BOM: ' + (g.bom_name || '') + '</span>' +
+                    '<button type="button" class="btn btn-sm msp-btn-toggle-group ml-2 ' +
+                    (collapsed ? 'msp-btn-group-show' : 'msp-btn-group-hide') +
+                    '" data-group-key="' + g.key + '"' +
+                    ' title="' + (collapsed ? 'Show this BOM group' : 'Hide this BOM group') + '"' +
+                    ' style="padding:1px 10px; font-size:0.75rem; font-weight:600;">' +
+                    (collapsed ?
+                        '<i class="fa fa-eye mr-1"></i>Show' :
+                        '<i class="fa fa-eye-slash mr-1"></i>Hide') +
+                    '</button></div></td></tr>';
+                if (!collapsed) {
+                    var out = [];
+                    self._walkRows(items, 0, g.key, g.key + ':', out);
+                    html += out.join('');
+                }
+            });
+            this.$('.mpp-tree-body').html(html + '</tbody></table></div>');
+        },
+
+        _collectExportRows: function () {
+            var self = this;
+            var rows = [];
+            var walk = function (items, level, groupKey, parentUid) {
+                items.forEach(function (r) {
+                    var uid = parentUid + '/' + r.product_id;
+                    if (!self._subtreeMatch(uid, r)) return;
+                    var net = self._rowNet(r);
+                    var order = (r.order_qty !== undefined &&
+                        r.order_qty !== null && r.order_qty !== '') ?
+                        r.order_qty : '';
+                    rows.push({
+                        code: r.code, name: r.name, level: level,
+                        bom_qty: r.bom_qty, uom: r.uom,
+                        onhand: self._onhand(r),
+                        reserved: parseFloat(r.reserved_tr) || 0,
+                        avail: parseFloat(r.avail_tr) || 0,
+                        producible: self._producible(r),
+                        planned: net, net: net, order: order,
+                        seller: r.seller || '',
+                        source: r.last_company || '',
+                        last: self._fmtLast(r),
+                        usd: r.last_usd || '', date: r.last_date || '',
+                        rolled_usd: r.rolled_usd || '',
+                        est_usd: self._estUsd(r),
+                        breakdown: r.top_breakdown || '',
+                    });
+                    var cached = self.subCache[uid];
+                    if (self.expanded[uid] && cached) {
+                        walk(cached.items, cached.level,
+                            cached.groupKey, uid);
+                    }
+                });
+            };
+            this.treeGroups.forEach(function (g) {
+                rows.push({code: '[' + g.title + '] ' + (g.bom_name || ''),
+                    level: 0, is_header: true});
+                var items = self._sortItems((g.items || []).slice());
+                walk(items, 0, g.key, g.key + ':');
+            });
+            return rows;
+        },
+
+        _postExcel: function (payload) {
+            var form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/matia_procurement_plan/export_xlsx';
+            var input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'data';
+            input.value = JSON.stringify(payload);
+            form.appendChild(input);
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
         },
 
         _onExportExcel: function () {
@@ -366,337 +765,265 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onExportTree: function () {
             if (!this.summary) return;
-            var rows = [];
-            var self = this;
-            this.treeGroups.forEach(function (g) {
-                rows.push({code: '[' + g.title + '] ' + (g.bom_name || ''),
-                    level: 0, is_header: true});
-                var items = self._sortItems(
-                    (g.items || []).filter(function (r) {
-                        return self._matchSearch(r);
-                    }));
-                items.forEach(function (r) {
-                    rows.push({
-                        code: r.code, name: r.name, level: 0,
-                        bom_qty: r.bom_qty, uom: r.uom,
-                        avail: r.avail_tr, planned: r.planned,
-                        order: r.order_qty, seller: r.seller,
-                        last: self._fmtLast(r), last_try: r.last_try,
-                        usd: r.last_usd, date: r.last_date,
-                        rolled_try: r.rolled_try, rolled_usd: r.rolled_usd,
-                        subtotal: r.subtotal,
-                        breakdown: r.top_breakdown || '',
-                    });
-                    var kids = self.subCache[r.product_id] || [];
-                    if (self.expanded[r.product_id]) {
-                        kids.forEach(function (k) {
-                            rows.push({
-                                code: k.code, name: k.name, level: 1,
-                                bom_qty: k.bom_qty, uom: k.uom,
-                                avail: k.avail_tr,
-                                planned: k.gross, order: '',
-                                seller: k.seller,
-                                last: self._fmtLast(k),
-                                last_try: k.last_try, usd: k.last_usd,
-                                date: k.last_date,
-                                rolled_try: k.rolled_try,
-                                rolled_usd: k.rolled_usd, subtotal: '',
-                                breakdown: '',
-                            });
-                        });
-                    }
-                });
-            });
             this._postExcel({
                 plan_name: (this.summary.name || '') + ' tree',
                 mode: 'tree',
-                tree_rows: rows,
+                tree_rows: this._collectExportRows(),
                 kits: this.summary.kits || [],
                 rolled_total: this.summary.rolled_total_usd || 0,
-                rolled_total_try: this.summary.rolled_total_try || 0,
             });
         },
 
-        _postExcel: function (payload) {
-            var form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/matia_procurement_plan/export_xlsx';
-            var input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'data';
-            input.value = JSON.stringify(payload);
-            form.appendChild(input);
-            document.body.appendChild(form);
-            form.submit();
-            document.body.removeChild(form);
+        // ---------------- tab 3: suppliers + production ----------------
+        _renderSup: function () {
+            var s = this.supSummary;
+            if (!s) {
+                this.$('.mpp-sup-cards').html('');
+                this.$('.mpp-sup-body').html(
+                    '<div class="alert alert-info">Loading…</div>');
+                this.$('.mpp-prod-body').html('');
+                return;
+            }
+            var cards = '<div class="msp-kpi-card"><div class="kpi-info">' +
+                '<div class="kpi-title">Suppliers</div>' +
+                '<div class="kpi-value" style="color:#2563eb;">' +
+                s.supplier_count + '</div></div>' +
+                '<div class="kpi-icon" style="color:#2563eb;">' +
+                '<i class="fa fa-truck"></i></div></div>' +
+                '<div class="msp-kpi-card"><div class="kpi-info">' +
+                '<div class="kpi-title">Est. Total USD</div>' +
+                '<div class="kpi-value" style="color:#059669;">' +
+                this._fmtNum(s.grand_total_usd, 2) + '</div></div>' +
+                '<div class="kpi-icon" style="color:#059669;">' +
+                '<i class="fa fa-dollar"></i></div></div>' +
+                '<div class="msp-kpi-card"><div class="kpi-info">' +
+                '<div class="kpi-title">Draft RFQs</div>' +
+                '<div class="kpi-value" style="color:#7c3aed;">' +
+                s.rfq_count + '</div></div>' +
+                '<div class="kpi-icon" style="color:#7c3aed;">' +
+                '<i class="fa fa-file-text-o"></i></div></div>' +
+                '<div class="msp-kpi-card"><div class="kpi-info">' +
+                '<div class="kpi-title">Draft MOs</div>' +
+                '<div class="kpi-value" style="color:#64748b;">' +
+                s.mo_count + '</div></div>' +
+                '<div class="kpi-icon" style="color:#64748b;">' +
+                '<i class="fa fa-cogs"></i></div></div>';
+            this.$('.mpp-sup-cards').html(cards);
+            this._renderSuppliers(s);
+            this._renderProduction(s);
         },
 
-        _onRfqPreview: function () {
+        // Suppliers grouped under separate TR / USA sections (user rule).
+        // Each row's button is labeled per company ("TR RFQ" / "US RFQ")
+        // and creates the RFQ under that company.
+        _renderSuppliers: function (s) {
             var self = this;
-            if (!this.plan && !this.summary) return;
-            var pid = this.plan ? this.plan.plan_id : this.summary.plan_id;
-            this.rfqConfirm = false;
-            this._rpcPlan('get_rfq_preview', [pid]).then(function (res) {
-                self.rfqPreview = res;
-                self._renderRfqPreview();
+            var sups = s.suppliers || [];
+            if (!sups.length) {
+                this.$('.mpp-sup-body').html(
+                    '<div class="alert alert-info">No supplier lines with quantity.</div>');
+                return;
+            }
+            var order = {'TR': 0, 'USA': 1};
+            var secs = {};
+            sups.forEach(function (sp) {
+                var c = sp.company || '';
+                (secs[c] = secs[c] || []).push(sp);
             });
+            var names = Object.keys(secs).sort(function (a, b) {
+                var oa = order[a] !== undefined ? order[a] : 99;
+                var ob = order[b] !== undefined ? order[b] : 99;
+                if (oa !== ob) return oa - ob;
+                return (a || '').localeCompare(b || '');
+            });
+            var html = '';
+            names.forEach(function (c) {
+                var rows = secs[c];
+                var tot = 0;
+                rows.forEach(function (sp) {
+                    tot += parseFloat(sp.total_usd) || 0;
+                });
+                html += '<h5 class="mt-2"><span class="badge ' +
+                    (c === 'USA' ? 'badge-warning' : 'badge-primary') +
+                    '" style="font-size:0.9rem;">' + (c || '—') +
+                    '</span> <span class="text-muted small">' +
+                    rows.length + ' suppliers · Est. ' +
+                    self._fmtNum(tot, 2) + ' USD</span></h5>' +
+                    '<table class="table table-sm table-striped">' +
+                    '<thead><tr><th>Supplier</th><th class="text-center">Lines</th>' +
+                    '<th>Routes</th><th class="text-right">Est. Total USD</th>' +
+                    '<th>RFQs</th><th></th></tr></thead><tbody>';
+                rows.forEach(function (sp) {
+                    html += self._supplierRowHtml(sp);
+                });
+                html += '</tbody></table>';
+            });
+            this.$('.mpp-sup-body').html(html);
         },
 
-        _onCreateRfqs: function () {
+        _rfqKey: function (seller, company) {
+            return seller + ':' + (company || 0);
+        },
+
+        _supplierRowHtml: function (sp) {
             var self = this;
-            if (!this.plan && !this.summary) return;
-            var pid = this.plan ? this.plan.plan_id : this.summary.plan_id;
-            this._rpcPlan('action_create_draft_rfqs',
-                [pid, !!this.rfqConfirm]).then(function (res) {
+            var rfqs = '';
+            (sp.rfqs || []).forEach(function (q) {
+                rfqs += '<div><strong>' + q.name + '</strong> (' +
+                    q.state + ') ' + (q.currency || '') + ' ' +
+                    self._fmtNum(q.amount_total, 2) + '</div>';
+            });
+            var key = this._rfqKey(sp.seller_id, sp.company_id);
+            var label = sp.rfq_label || 'Create RFQ';
+            return '<tr><td><strong>' + sp.seller_name + '</strong>' +
+                '<div class="text-muted small">' +
+                (sp.currencies || []).join(', ') + '</div></td>' +
+                '<td class="text-center">' + sp.line_count + '</td>' +
+                '<td>' + (sp.routes || []).join(', ') + '</td>' +
+                '<td class="text-right"><strong>' +
+                self._fmtNum(sp.total_usd, 2) + '</strong></td>' +
+                '<td>' + (rfqs || '<span class="text-muted">—</span>') +
+                '</td><td class="text-right">' +
+                '<button type="button" class="btn btn-success btn-sm mpp-btn-create-rfq" ' +
+                'data-seller="' + sp.seller_id + '" data-company="' +
+                (sp.company_id || '') + '">' + label + '</button>' +
+                (self.pendingRfqSeller === key ?
+                    '<div class="alert alert-warning mt-1 mb-0" style="font-size:0.8rem;">' +
+                    'Draft RFQ(s) already exist for this supplier + company. ' +
+                    '<button type="button" class="btn btn-warning btn-sm mpp-btn-confirm-rfq" ' +
+                    'data-seller="' + sp.seller_id + '" data-company="' +
+                    (sp.company_id || '') + '">Create Again</button></div>' : '') +
+                '</td></tr>';
+        },
+
+        _renderProduction: function (s) {
+            var self = this;
+            var rows = s.production || [];
+            if (!rows.length) {
+                this.$('.mpp-prod-body').html(
+                    '<div class="alert alert-info">No make/subcontract lines with quantity.</div>');
+                return;
+            }
+            var html = '<table class="table table-sm table-striped">' +
+                '<thead><tr><th>Code</th><th>Product</th><th>Route</th>' +
+                '<th class="text-center">Order</th><th>Seller</th>' +
+                '<th>Document</th><th></th></tr></thead><tbody>';
+            rows.forEach(function (r) {
+                var doc = '<span class="text-muted">—</span>';
+                var act = '';
+                if (r.route === 'make') {
+                    if (r.mo) {
+                        doc = '<strong>' + r.mo.name + '</strong> (' +
+                            r.mo.state + ')';
+                    } else if (!r.mo_creatable) {
+                        doc = '<span class="text-warning">No normal BOM</span>';
+                    } else {
+                        act = '<button type="button" class="btn btn-primary btn-sm mpp-btn-create-mo" ' +
+                            'data-line="' + r.line_id + '">Create MO</button>';
+                    }
+                } else {
+                    if (r.po) {
+                        doc = '<strong>' + r.po.name + '</strong> (' +
+                            r.po.state + ')';
+                    } else {
+                        doc = '<span class="text-muted">via supplier RFQ</span>';
+                    }
+                }
+                html += '<tr><td>' + (r.code || '') + '</td>' +
+                    '<td>' + (r.name || '') + '</td>' +
+                    '<td><span class="badge badge-info">' + (r.route || '') +
+                    '</span></td>' +
+                    '<td class="text-center">' + r.order_qty + ' ' +
+                    (r.uom || '') + '</td>' +
+                    '<td>' + (r.seller || '') + '</td>' +
+                    '<td>' + doc + '</td><td class="text-right">' + act +
+                    '</td></tr>';
+            });
+            var mos = '';
+            (s.mos || []).forEach(function (m) {
+                mos += '<div><strong>' + m.name + '</strong> (' + m.state +
+                    ') — ' + (m.product || '') + '</div>';
+            });
+            this.$('.mpp-prod-body').html(html + '</tbody></table>' +
+                (mos ? '<h5>Manufacturing Orders</h5>' + mos : ''));
+        },
+
+        _onCreateRfq: function (ev) {
+            var self = this;
+            var seller = parseInt(ev.currentTarget.dataset.seller, 10);
+            var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
+            if (!seller || !this._planId()) return;
+            this._rpcPlan('action_create_supplier_rfq',
+                [this._planId(), seller, company, false]).then(function (res) {
                 if (res && res.needs_confirm) {
-                    self.rfqPreview = res;
-                    self._renderRfqPreview();
+                    self.pendingRfqSeller = self._rfqKey(seller, company);
+                    self._renderSup();
+                    self.displayNotification({
+                        title: _t('Already exists'),
+                        message: res.message ||
+                            _t('Draft RFQ(s) already exist for this supplier.'),
+                        type: 'warning',
+                    });
                     return;
                 }
-                self.rfqConfirm = false;
-                self.summary = res && res.summary ? res.summary : self.summary;
-                self.createdRfqs = (res && res.created) || [];
-                self._updateView();
-                self._renderRfqs();
+                self.pendingRfqSeller = null;
+                self.supSummary = res && res.supplier_summary ?
+                    res.supplier_summary : self.supSummary;
+                self._renderSup();
                 self.displayNotification({
                     title: _t('Success'),
-                    message: _t('Draft RFQs created.'),
+                    message: _t('Draft RFQ created.'),
                     type: 'success',
                 });
+            }, function (err) {
+                self._notifyErr(err);
             });
         },
 
-        _onConfirmRfqs: function () {
-            this.rfqConfirm = true;
-            this._onCreateRfqs();
-        },
-
-        _renderRfqPreview: function () {
-            var p = this.rfqPreview;
-            var html = '';
-            if (p) {
-                if (p.needs_confirm) {
-                    html += '<div class="alert alert-warning">' +
-                        (p.message || 'This plan already has draft RFQs.') +
-                        '</div>';
-                    var ex = p.existing || [];
-                    for (var e = 0; e < ex.length; e++) {
-                        html += '<div>' + (ex[e].name || '') + ' — ' +
-                            (ex[e].partner || '') + '</div>';
-                    }
-                    html += '<button class="btn btn-warning btn-sm mpp-btn-rfq-confirm">' +
-                        'Create Again (keep existing)</button>';
-                } else {
-                    var groups = p.groups || [];
-                    html += '<div>Suppliers: <strong>' + (p.supplier_count || 0) +
-                        '</strong> — Lines: <strong>' + (p.line_count || 0) + '</strong></div>';
-                    for (var i = 0; i < groups.length; i++) {
-                        html += '<div><strong>' + (groups[i].seller_name || '') + '</strong> ' +
-                            '(' + (groups[i].currency_name || '') + '): ' +
-                            groups[i].line_count + ' lines — ' +
-                            groups[i].subtotal + '</div>';
-                    }
-                    if (p.existing_rfq_count) {
-                        html += '<div class="text-warning">Note: plan already has ' +
-                            p.existing_rfq_count + ' draft RFQ(s); creating adds new ones.</div>';
-                    }
-                }
-            }
-            this.$('.mpp-rfq-preview').html(html);
-        },
-
-        _renderRfqs: function () {
-            var html = '';
-            var list = this.createdRfqs || [];
-            for (var i = 0; i < list.length; i++) {
-                html += '<div><strong>' + (list[i].name || '') + '</strong> — ' +
-                    (list[i].partner || '') + ' (' + (list[i].currency || '') + '): ' +
-                    list[i].line_count + ' lines — ' + list[i].amount + '</div>';
-            }
-            var sups = (this.summary && this.summary.suppliers) || [];
-            for (var s = 0; s < sups.length; s++) {
-                var rfqs = sups[s].rfqs || [];
-                for (var r = 0; r < rfqs.length; r++) {
-                    html += '<div>' + (sups[s].seller_name || '') + ' → <strong>' +
-                        (rfqs[r].name || '') + '</strong></div>';
-                }
-            }
-            this.$('.mpp-rfqs').html(html);
-        },
-
-        _updateView: function () {
-            this.$('.mpp-entry-wrap').show();
-            this._renderEntry();
-            if (this.summary && this.treeGroups.length) {
-                this.$('.mpp-tree-wrap').show();
-                this._renderTree();
-                this._renderSuppliers();
-                this.$('.mpp-rfq-wrap').show();
-            } else {
-                this.$('.mpp-tree-wrap').hide();
-                this.$('.mpp-rfq-wrap').hide();
-            }
-        },
-
-        _renderEntry: function () {
-            var html = '';
-            for (var i = 0; i < this.items.length; i++) {
-                var r = this.items[i];
-                html += '<tr>' +
-                    '<td>' + (r.product_code || '') + '</td>' +
-                    '<td>' + (r.display_name || '') + '</td>' +
-                    '<td><span class="badge badge-info">' + (r.kit_key || '') + '</span></td>' +
-                    '<td class="text-center">' + r.avail_tr + '</td>' +
-                    '<td class="text-center">' + r.stock_usa + '</td>' +
-                    '<td><input type="number" min="0" class="form-control form-control-sm mpp-qty" ' +
-                    'data-pid="' + r.product_id + '" value="' + (r.qty_input || 0) + '"/></td>' +
-                    '</tr>';
-            }
-            this.$('.mpp-entry-body').html(html);
-            this.$('.mpp-fill-n').val(this.fillN);
-        },
-
-        _renderTree: function () {
+        _onConfirmRfq: function (ev) {
             var self = this;
-            var html = '';
-            this.treeGroups.forEach(function (g) {
-                var collapsed = !!self.collapsedGroups[g.key];
-                var items = (g.items || []).filter(function (r) {
-                    return self._matchSearch(r);
+            var seller = parseInt(ev.currentTarget.dataset.seller, 10);
+            var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
+            if (!seller || !this._planId()) return;
+            this._rpcPlan('action_create_supplier_rfq',
+                [this._planId(), seller, company, true]).then(function (res) {
+                self.pendingRfqSeller = null;
+                self.supSummary = res && res.supplier_summary ?
+                    res.supplier_summary : self.supSummary;
+                self._renderSup();
+                self.displayNotification({
+                    title: _t('Success'),
+                    message: _t('Draft RFQ created.'),
+                    type: 'success',
                 });
-                items = self._sortItems(items.slice());
-                html += '<div class="mpp-kit-group">' +
-                    '<div class="mpp-kit-header">' +
-                    '<button class="btn btn-sm btn-outline-secondary mpp-group-toggle" data-group="' +
-                    g.key + '">' + (collapsed ? '+' : '−') + '</button> ' +
-                    '<strong>' + g.title + '</strong> ' +
-                    '<span class="text-muted">' + (g.bom_name || '') + '</span> ' +
-                    '<span class="badge badge-primary">' + items.length + '</span>' +
-                    '</div>';
-                if (!collapsed) {
-                    html += '<table class="table table-sm table-striped mpp-tree-table"><thead><tr>' +
-                        '<th><a href="#" class="mpp-sort" data-sort="code">Part</a></th>' +
-                        '<th>Usage</th>' +
-                        '<th><a href="#" class="mpp-sort" data-sort="avail_tr">Unreserved</a></th>' +
-                        '<th><a href="#" class="mpp-sort" data-sort="planned">Planned</a></th>' +
-                        '<th>Net / Order</th>' +
-                        '<th>Seller</th>' +
-                        '<th>Last Price</th>' +
-                        '<th><a href="#" class="mpp-sort" data-sort="rolled_try">TRY</a></th>' +
-                        '<th>USD</th>' +
-                        '<th>Last Buy</th>' +
-                        '<th>Rolled TRY</th>' +
-                        '<th>Rolled USD</th>' +
-                        '<th>Subtotal</th>' +
-                        '</tr></thead><tbody>';
-                    items.forEach(function (r) {
-                        html += self._rowHtml(r, 0, false);
-                        var kids = self.subCache[r.product_id] || [];
-                        if (self.expanded[r.product_id]) {
-                            var fkids = kids.filter(function (k) {
-                                return self._matchSearch(k);
-                            });
-                            fkids.forEach(function (k) {
-                                html += self._rowHtml(
-                                    Object.assign({}, k, {
-                                        planned: k.gross,
-                                        net: '',
-                                        order_qty: k.order_qty || '',
-                                        subtotal: '',
-                                    }), 1, true);
-                            });
-                        }
-                    });
-                    html += '</tbody></table>';
-                }
-                html += '</div>';
+            }, function (err) {
+                self._notifyErr(err);
             });
-            this.$('.mpp-tree-body').html(html);
-            var title = this.summary ?
-                (this.summary.name + ' — tree + cost') : '';
-            this.$('.mpp-tree-title').text(title);
         },
 
-        _renderSuppliers: function () {
+        _onCreateMo: function (ev) {
             var self = this;
-            var groups = (this.summary && this.summary.groups) || {};
-            var tabs = '';
-            Object.keys(groups).forEach(function (k) {
-                tabs += '<button class="btn btn-sm mpp-tab ' +
-                    (self.activeGroup === k ? 'btn-primary' : 'btn-outline-secondary') +
-                    '" data-group="' + k + '">' + k +
-                    ' (' + groups[k].count + ')</button> ';
+            var line = parseInt(ev.currentTarget.dataset.line, 10);
+            if (!line || !this._planId()) return;
+            this._rpcPlan('action_create_mos',
+                [this._planId(), [line]]).then(function (res) {
+                self.supSummary = res && res.supplier_summary ?
+                    res.supplier_summary : self.supSummary;
+                self._renderSup();
+                var n = (res && res.created ? res.created.length : 0);
+                var sk = (res && res.skipped ? res.skipped.length : 0);
+                self.displayNotification({
+                    title: n ? _t('Success') : _t('Skipped'),
+                    message: n ? _t('Draft MO created.') :
+                        ((res && res.skipped && res.skipped[0] &&
+                            res.skipped[0].reason) ||
+                            _t('No MO created.')) +
+                        (sk ? ' (' + sk + ')' : ''),
+                    type: n ? 'success' : 'warning',
+                });
+            }, function (err) {
+                self._notifyErr(err);
             });
-            this.$('.mpp-tabs').html(tabs);
-            var g = groups[this.activeGroup];
-            var html = '';
-            if (g) {
-                for (var i = 0; i < g.lines.length; i++) {
-                    var l = g.lines[i];
-                    html += '<tr>' +
-                        '<td>' + (l.code || '') + '</td>' +
-                        '<td>' + (l.name || '') + '</td>' +
-                        '<td class="text-center">' + l.level + '</td>' +
-                        '<td class="text-center">' + l.gross + '</td>' +
-                        '<td class="text-center">' + l.avail_tr + '</td>' +
-                        '<td class="text-center">' + l.net + '</td>' +
-                        '<td class="text-center">' + l.order_qty + '</td>' +
-                        '<td>' + (l.seller || '') + '</td>' +
-                        '<td class="text-right">' + self._fmtLast(l) + '</td>' +
-                        '<td class="text-right">' + (l.last_usd || 0) + '</td>' +
-                        '<td class="text-center">' + (l.last_date || '') + '</td>' +
-                        '<td class="text-right">' + (l.subtotal || 0) + '</td>' +
-                        '</tr>';
-                }
-            }
-            this.$('.mpp-summary-body').html(html);
-            this.$('.mpp-total').text(this.summary.total_cost || 0);
-            var kits = (this.summary && this.summary.kits) || [];
-            var kh = '';
-            if (kits.length) {
-                kh += '<table class="table table-sm table-striped"><thead><tr>' +
-                    '<th>Kit</th><th>Products</th><th>Rolled USD</th><th>Rolled TRY</th>' +
-                    '</tr></thead><tbody>';
-                for (var k = 0; k < kits.length; k++) {
-                    kh += '<tr><td>' + (kits[k].name || kits[k].key || '') + '</td>' +
-                        '<td class="text-center">' + kits[k].count + '</td>' +
-                        '<td class="text-right">' + (kits[k].cost || 0) + '</td>' +
-                        '<td class="text-right">' + (kits[k].cost_try || 0) + '</td></tr>';
-                }
-                kh += '</tbody></table>';
-                kh += '<div>Rolled total (USD): <strong>' +
-                    (this.summary.rolled_total_usd || 0) + '</strong>' +
-                    ' — TRY: <strong>' +
-                    (this.summary.rolled_total_try || 0) + '</strong></div>';
-            }
-            this.$('.mpp-kits').html(kh);
-            var sups = (this.summary && this.summary.suppliers) || [];
-            var sh = '';
-            for (var s = 0; s < sups.length; s++) {
-                sh += '<h5>' + sups[s].seller_name + ' — ' + sups[s].cost + '</h5>' +
-                    '<table class="table table-sm table-striped"><thead><tr>' +
-                    '<th>Code</th><th>Product</th><th>Order</th>' +
-                    '<th>Last Price</th><th>USD</th><th>Last Buy</th>' +
-                    '<th>Unit USD</th><th>Rolled USD</th><th>Subtotal</th>' +
-                    '</tr></thead><tbody>';
-                var slines = sups[s].lines || [];
-                for (var j = 0; j < slines.length; j++) {
-                    var sl = slines[j];
-                    sh += '<tr>' +
-                        '<td>' + (sl.code || '') + '</td>' +
-                        '<td>' + (sl.name || '') + '</td>' +
-                        '<td class="text-center">' + sl.order_qty + '</td>' +
-                        '<td class="text-right">' + self._fmtLast(sl) + '</td>' +
-                        '<td class="text-right">' + (sl.last_usd || 0) + '</td>' +
-                        '<td class="text-center">' + (sl.last_date || '') + '</td>' +
-                        '<td class="text-right">' + (sl.unit_usd || 0) + '</td>' +
-                        '<td class="text-right">' + (sl.rolled_usd || 0) + '</td>' +
-                        '<td class="text-right">' + (sl.subtotal || 0) + '</td>' +
-                        '</tr>';
-                }
-                sh += '</tbody></table>';
-            }
-            this.$('.mpp-suppliers').html(sh);
         },
     });
 

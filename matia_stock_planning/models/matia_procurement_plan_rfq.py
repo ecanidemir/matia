@@ -9,8 +9,10 @@ Rules:
 - One draft RFQ per supplier. If a supplier has lines priced in mixed
   currencies, one RFQ per (supplier, currency) is created so the
   original price snapshot (price + currency) is preserved on the PO.
-- Only ``buy`` lines with ``order_qty > 0`` and an assigned seller are
-  eligible. ``make`` / ``subcontract`` lines stay in production scope.
+- ``buy`` and ``subcontract`` lines with ``order_qty > 0`` and an
+  assigned seller are eligible (subcontract is ordered from the
+  subcontractor; confirming the PO runs Odoo's standard subcontract
+  chain). ``make`` lines stay in production scope (draft MOs).
 - Price snapshot: ``price_unit`` = line ``last_price`` with the PO
   currency = line ``last_currency_id`` (no conversion on write).
 - Repeat protection: creating again while RFQs are linked requires
@@ -50,12 +52,16 @@ class MatiaProcurementPlanRfq(models.Model):
             plan.rfq_count = len(plan.purchase_order_ids)
 
     def _rfq_groups(self, plan):
-        """Bucket RFQ-eligible lines by (seller, currency).
+        """Bucket RFQ-eligible lines by (seller, currency, company).
 
+        The company comes from each line's last purchase (TR or USA):
+        the draft PO is created in that company so the receipt lands in
+        the right warehouse (WHTR vs WHUS).
         @param plan: matia.procurement.plan record (sudo env).
         @return: (groups, skipped) where groups is a list of dicts
-            {seller_id, seller_name, currency_id, currency_name, lines,
-            subtotal} and skipped counts excluded lines by reason.
+            {seller_id, seller_name, currency_id, currency_name,
+            company_id, company, lines, subtotal} and skipped counts
+            excluded lines by reason.
         """
         groups = {}
         skipped = {
@@ -64,7 +70,7 @@ class MatiaProcurementPlanRfq(models.Model):
         }
         for line in plan.line_ids:
             route = line.route_type or 'unknown'
-            if route != 'buy':
+            if route not in ('buy', 'subcontract'):
                 skipped[route if route in skipped else 'unknown'] += 1
                 continue
             if not (line.order_qty or 0.0) > 0:
@@ -74,13 +80,18 @@ class MatiaProcurementPlanRfq(models.Model):
                 skipped['no_supplier'] += 1
                 continue
             cur_id = line.last_currency_id.id if line.last_currency_id else 0
-            key = (line.seller_id.id, cur_id)
+            comp_id = line.last_company_id.id if line.last_company_id \
+                else plan.company_id.id
+            key = (line.seller_id.id, cur_id, comp_id)
             bucket = groups.setdefault(key, {
                 'seller_id': line.seller_id.id,
                 'seller_name': line.seller_id.display_name,
                 'currency_id': cur_id,
                 'currency_name': line.last_currency_id.name
                 if line.last_currency_id else '',
+                'company_id': comp_id,
+                'company': self._mpp_company_code(
+                    plan.env, comp_id),
                 'lines': [],
                 'subtotal': 0.0,
             })
@@ -122,6 +133,8 @@ class MatiaProcurementPlanRfq(models.Model):
                 'seller_name': grp['seller_name'],
                 'currency_id': grp['currency_id'],
                 'currency_name': grp['currency_name'],
+                'company_id': grp['company_id'],
+                'company': grp['company'],
                 'line_count': len(grp['lines']),
                 'subtotal': grp['subtotal'],
                 'lines': [{
@@ -176,24 +189,34 @@ class MatiaProcurementPlanRfq(models.Model):
             raise UserError(_(
                 'No RFQ-eligible lines: need buy lines with quantity '
                 'and an assigned supplier.'))
-        company = plan.company_id
-        picking = env_sudo['stock.picking.type'].search([
-            ('code', '=', 'incoming'),
-            ('company_id', '=', company.id),
-        ], limit=1)
-        if not picking:
-            raise UserError(_(
-                'No incoming picking type found for this company.'))
-        fallback_currency = (
-            plan.currency_id.id if plan.currency_id
-            else company.currency_id.id)
+        # Incoming picking type per company (TR Receipts / US Receive),
+        # so each PO's receipt lands in the right warehouse.
+        pickings = {}
+
+        def _incoming(cid):
+            if cid not in pickings:
+                pick = env_sudo['stock.picking.type'].search([
+                    ('code', '=', 'incoming'),
+                    ('company_id', '=', cid),
+                ], limit=1)
+                if not pick:
+                    raise UserError(_(
+                        'No incoming picking type found for company %s.')
+                        % cid)
+                pickings[cid] = pick
+            return pickings[cid]
+
         created = []
         try:
             for grp in groups:
+                gcomp = env_sudo['res.company'].browse(
+                    grp['company_id'])
+                picking = _incoming(grp['company_id'])
                 po = env_sudo['purchase.order'].create({
                     'partner_id': grp['seller_id'],
-                    'company_id': company.id,
-                    'currency_id': grp['currency_id'] or fallback_currency,
+                    'company_id': grp['company_id'],
+                    'currency_id': grp['currency_id']
+                    or gcomp.currency_id.id,
                     'picking_type_id': picking.id,
                     'origin': plan.name,
                     'date_order': fields.Datetime.now(),
@@ -238,6 +261,124 @@ class MatiaProcurementPlanRfq(models.Model):
             'created': created,
             'skipped': skipped,
             'summary': self._plan_summary(env_sudo, plan),
+        }
+
+    def action_create_supplier_rfq(self, plan_id, seller_id,
+                                   company_id=None, confirm=False):
+        """Create draft RFQ(s) for ONE supplier in ONE company.
+
+        The tab-3 button (TR RFQ / US RFQ) passes the row's company: one
+        PO per (seller, currency) inside that company. Idempotent per
+        seller+company: existing draft POs of this plan for that pair
+        require confirm=True.
+        @param plan_id Plan ID.
+        @param seller_id res.partner ID.
+        @param company_id res.company ID (row's source company).
+        @param confirm True when the user confirmed repeat creation.
+        @return Dict with created POs or {'needs_confirm': True}, plus
+            a fresh supplier summary for tab 3.
+        """
+        self.ensure_one()
+        env_sudo, plan = self._rfq_plan(plan_id)
+        try:
+            seller_id = int(seller_id)
+        except (TypeError, ValueError):
+            raise UserError(_('Invalid supplier.'))
+        try:
+            company_id = int(company_id) if company_id else False
+        except (TypeError, ValueError):
+            company_id = False
+        groups, skipped = self._rfq_groups(plan)
+        groups = [g for g in groups if g['seller_id'] == seller_id
+                  and (not company_id or g['company_id'] == company_id)]
+        if not groups:
+            raise UserError(_(
+                'No RFQ-eligible lines for this supplier: need buy or '
+                'subcontract lines with quantity.'))
+        company_id = groups[0]['company_id']
+        groups = [g for g in groups
+                  if g['company_id'] == company_id]
+        existing = [po for po in plan.purchase_order_ids
+                    if po.partner_id.id == seller_id
+                    and po.company_id.id == company_id
+                    and po.state == 'draft']
+        if existing and not confirm:
+            return {
+                'needs_confirm': True,
+                'seller_id': seller_id,
+                'seller_name': groups[0]['seller_name'],
+                'company_id': company_id,
+                'company': groups[0]['company'],
+                'existing': [{
+                    'id': po.id, 'name': po.name,
+                } for po in existing],
+                'message': _(
+                    'This supplier already has %d draft RFQ(s) from '
+                    'this plan in %s. Creating again will add new '
+                    'RFQs; existing records are kept.') % (
+                        len(existing), groups[0]['company']),
+            }
+        company = env_sudo['res.company'].browse(company_id)
+        picking = env_sudo['stock.picking.type'].search([
+            ('code', '=', 'incoming'),
+            ('company_id', '=', company.id),
+        ], limit=1)
+        if not picking:
+            raise UserError(_(
+                'No incoming picking type found for %s.') % company.name)
+        created = []
+        try:
+            for grp in groups:
+                po = env_sudo['purchase.order'].create({
+                    'partner_id': grp['seller_id'],
+                    'company_id': company.id,
+                    'currency_id': grp['currency_id']
+                    or company.currency_id.id,
+                    'picking_type_id': picking.id,
+                    'origin': plan.name,
+                    'date_order': fields.Datetime.now(),
+                })
+                amount = 0.0
+                for line in grp['lines']:
+                    uom = (line.uom_id.id if line.uom_id
+                           else line.product_id.uom_po_id.id
+                           if line.product_id.uom_po_id else False)
+                    po_line = env_sudo['purchase.order.line'].create({
+                        'order_id': po.id,
+                        'product_id': line.product_id.id,
+                        'product_qty': line.order_qty,
+                        'product_uom': uom,
+                        'price_unit': line.last_price or 0.0,
+                        'name': '[%s] %s' % (
+                            plan.name, line.product_id.display_name),
+                        'date_planned': fields.Date.today(),
+                    })
+                    line.write({
+                        'purchase_order_id': po.id,
+                        'purchase_line_id': po_line.id,
+                    })
+                    amount += ((line.order_qty or 0.0)
+                               * (line.last_price or 0.0))
+                created.append({
+                    'id': po.id,
+                    'name': po.name,
+                    'partner': grp['seller_name'],
+                    'company': grp['company'],
+                    'currency': grp['currency_name'],
+                    'line_count': len(grp['lines']),
+                    'amount': amount,
+                })
+            plan.write({
+                'purchase_order_ids': [(4, c['id']) for c in created],
+                'state': 'rfq_created',
+            })
+        except Exception as exc:
+            raise UserError(_('Draft RFQ creation failed: %s') % exc)
+        return {
+            'needs_confirm': False,
+            'created': created,
+            'skipped': skipped,
+            'supplier_summary': self.get_supplier_summary(plan.id),
         }
 
     def _plan_summary(self, env_sudo, plan):
