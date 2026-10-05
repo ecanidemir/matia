@@ -160,3 +160,12 @@
 - Cozum: `<xpath expr="//page[field[@name='line_ids']]" position="after">` + yeni page'e `name="draft_rfqs"` eklendi. Kural: inherit secici olarak sadece `name` (field) veya `xpath expr` kullan, `string` ile secme.
 - Ek bulgu: staging `ir.module.module` `installed_version=15.0.2.0.0` / `latest_version=15.0.1.0.0` gosteriyordu ve `ir.model`'de `matia.procurement.*` yoktu — hata duzeltilip Git Deploy + Upgrade tekrarlanmali.
 
+## Module Health Overhaul (2026-10-06, chore/module-health-overhaul)
+
+- JS RPC cagrilari `model/method/args` formunda `self` bos recordset ile gelir; boyle cagrilan metoda `ensure_one()` konursa her cagri `Expected singleton` patlar (rfq 3 metodu, TR/US RFQ butonlari kirikti). Kural: JS'ten cagrilan metoda `ensure_one` koyma.
+- `next_by_code()` fallback'i sessizce ayni ismi uretir: `data/` sequence kaydi yoksa tum planlar `MPP` adini alir. Kural: sequence kullanan her `create` icin `data/*.xml` kaydini manifest `data` sirasina ekle.
+- Supplier-preview xlsx blogu `_export_tree` icinde return sonrasi olu koddu ve tanimsiz `total` kullaniyordu; `export_xlsx` non-tree dalina tasindi.
+- `assign_suppliers` + `_mpp_last_buys` N+1 batch'lendi (urun-basi search_read kaldirildi); kur cevrim hatasi artik urun-adli `UserError`, teknik detay log'da.
+- ACL: procurement modelleri yalniz `base.group_system` (admin-only tasarim); dogrudan RPC cagrilari grup kontrolsuz sudo ile calisir — bilinclilik karari, raporda (`plans/module_health_report.md`).
+- Push YOK, 4 faz commiti branch'te; deploy + upgrade insan adimi.
+
