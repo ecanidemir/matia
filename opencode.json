@@ -1,6 +1,19 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "instructions": ["AGENTS.md", "AI.md"],
+  "instructions": ["AGENTS.md", "AI.md", ".agents/rules.md", ".agents/memory/HOT.md"],
+  "permission": {
+    "bash": {
+      "rm -rf *": "deny"
+    },
+    "edit": {
+      "**/.env": "deny"
+    }
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 10000
+  },
   "mcp": {
     "odoo_matia": {
       "type": "local",

@@ -1,0 +1,19 @@
+# Cursor Rules - Matia Odoo Hub
+
+This repository is for AI-assisted Odoo 15 troubleshooting and configuration
+(`matia.odoobulut.com` — single live instance, XML-RPC, no SSH, no staging).
+
+To ensure consistent logic, version-safe API usage, and proper environment workflows:
+👉 **You MUST read and follow the master guidelines file: [AGENTS.md](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/AGENTS.md)**
+
+## Key Directives
+
+1. Refer to [AGENTS.md](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/AGENTS.md) for full directory mappings and skill policy.
+2. Place Odoo customization code exclusively in `matia_stock_planning/` (models → views → data → security).
+3. Place planning files inside `plans/` and lasting findings inside `docs/discovery.md`.
+4. Keep reusable audit scripts inside `scripts/`, one-off experiments inside `scratch/`.
+5. Respect Odoo 15 API (`tree` views, `category_id`, `_sql_constraints`, XML-RPC); never apply Odoo 19 patterns.
+
+---
+
+Reference: @AGENTS.md
