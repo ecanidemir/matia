@@ -153,3 +153,10 @@
 - MCP: `opencode.json`'da 2 server — `odoo_matia` (prod, `ODOO_MCP_ENABLE_WRITES` yok = default salt-okunur) + `odoo_staging` (staging, writes staging env'den acik). Kural: prod API ile salt-okunur, modul denemeleri staging'de, staging'e duruma gore yazmak serbest.
 - NOT: yeni MCP server icin opencode restart gerekir (`scripts/start-opencode.ps1` ile baslat, `.env` otomatik yuklenir).
 
+## Staging Upgrade Hatasi (2026-10-05, procurement_plan_rfq_views.xml)
+
+- `button_immediate_upgrade` ParseError verdi: `View inheritance may not use attribute 'string' as a selector` (`view_matia_procurement_plan_form_rfq`, satir 5).
+- Sebep: `<page string="Lines" position="after">` — Odoo 15 kalitimda `string` secici olarak yasak.
+- Cozum: `<xpath expr="//page[field[@name='line_ids']]" position="after">` + yeni page'e `name="draft_rfqs"` eklendi. Kural: inherit secici olarak sadece `name` (field) veya `xpath expr` kullan, `string` ile secme.
+- Ek bulgu: staging `ir.module.module` `installed_version=15.0.2.0.0` / `latest_version=15.0.1.0.0` gosteriyordu ve `ir.model`'de `matia.procurement.*` yoktu — hata duzeltilip Git Deploy + Upgrade tekrarlanmali.
+

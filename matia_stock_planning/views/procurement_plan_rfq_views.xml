@@ -9,8 +9,8 @@
             <field name="total_cost" position="after">
                 <field name="rfq_count" readonly="1"/>
             </field>
-            <page string="Lines" position="after">
-                <page string="Draft RFQs">
+            <xpath expr="//page[field[@name='line_ids']]" position="after">
+                <page string="Draft RFQs" name="draft_rfqs">
                     <field name="purchase_order_ids">
                         <tree>
                             <field name="name"/>
@@ -21,7 +21,7 @@
                         </tree>
                     </field>
                 </page>
-            </page>
+            </xpath>
             <field name="subtotal" position="after">
                 <field name="purchase_order_id" readonly="1"/>
             </field>
