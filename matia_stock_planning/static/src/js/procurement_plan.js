@@ -13,6 +13,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-explode': '_onExplode',
             'click .mpp-btn-suppliers': '_onSuppliers',
             'click .mpp-btn-excel': '_onExportExcel',
+            'click .mpp-btn-rfq-preview': '_onRfqPreview',
+            'click .mpp-btn-rfq-create': '_onCreateRfqs',
+            'click .mpp-btn-rfq-confirm': '_onConfirmRfqs',
             'click .mpp-tab': '_onTab',
             'input .mpp-qty': '_onQtyInput',
         },
@@ -24,6 +27,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.plan = null;
             this.summary = null;
             this.activeGroup = 'buy';
+            this.rfqPreview = null;
+            this.createdRfqs = [];
+            this.rfqConfirm = false;
         },
 
         willStart: function () {
@@ -152,6 +158,96 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             document.body.appendChild(form);
             form.submit();
             document.body.removeChild(form);
+        },
+
+        _onRfqPreview: function () {
+            var self = this;
+            if (!this.plan) return;
+            this.rfqConfirm = false;
+            this._rpcPlan('get_rfq_preview', [this.plan.plan_id]).then(function (res) {
+                self.rfqPreview = res;
+                self._renderRfqPreview();
+            });
+        },
+
+        _onCreateRfqs: function () {
+            var self = this;
+            if (!this.plan) return;
+            this._rpcPlan('action_create_draft_rfqs', [this.plan.plan_id, !!this.rfqConfirm]).then(function (res) {
+                if (res && res.needs_confirm) {
+                    self.rfqPreview = res;
+                    self._renderRfqPreview();
+                    return;
+                }
+                self.rfqConfirm = false;
+                self.summary = res && res.summary ? res.summary : self.summary;
+                self.createdRfqs = (res && res.created) || [];
+                self._updateView();
+                self._renderRfqs();
+                self.displayNotification({
+                    title: _t('Success'),
+                    message: _t('Draft RFQs created.'),
+                    type: 'success',
+                });
+            });
+        },
+
+        _onConfirmRfqs: function () {
+            this.rfqConfirm = true;
+            this._onCreateRfqs();
+        },
+
+        _renderRfqPreview: function () {
+            var p = this.rfqPreview;
+            var html = '';
+            if (p) {
+                if (p.needs_confirm) {
+                    html += '<div class="alert alert-warning">' +
+                        (p.message || 'This plan already has draft RFQs.') +
+                        '</div>';
+                    var ex = p.existing || [];
+                    for (var e = 0; e < ex.length; e++) {
+                        html += '<div>' + (ex[e].name || '') + ' — ' +
+                            (ex[e].partner || '') + '</div>';
+                    }
+                    html += '<button class="btn btn-warning btn-sm mpp-btn-rfq-confirm">' +
+                        'Create Again (keep existing)</button>';
+                } else {
+                    var groups = p.groups || [];
+                    html += '<div>Suppliers: <strong>' + (p.supplier_count || 0) +
+                        '</strong> — Lines: <strong>' + (p.line_count || 0) + '</strong></div>';
+                    for (var i = 0; i < groups.length; i++) {
+                        html += '<div><strong>' + (groups[i].seller_name || '') + '</strong> ' +
+                            '(' + (groups[i].currency_name || '') + '): ' +
+                            groups[i].line_count + ' lines — ' +
+                            groups[i].subtotal + '</div>';
+                    }
+                    if (p.existing_rfq_count) {
+                        html += '<div class="text-warning">Note: plan already has ' +
+                            p.existing_rfq_count + ' draft RFQ(s); creating adds new ones.</div>';
+                    }
+                }
+            }
+            this.$('.mpp-rfq-preview').html(html);
+        },
+
+        _renderRfqs: function () {
+            var html = '';
+            var list = this.createdRfqs || [];
+            for (var i = 0; i < list.length; i++) {
+                html += '<div><strong>' + (list[i].name || '') + '</strong> — ' +
+                    (list[i].partner || '') + ' (' + (list[i].currency || '') + '): ' +
+                    list[i].line_count + ' lines — ' + list[i].amount + '</div>';
+            }
+            var sups = (this.summary && this.summary.suppliers) || [];
+            for (var s = 0; s < sups.length; s++) {
+                var rfqs = sups[s].rfqs || [];
+                for (var r = 0; r < rfqs.length; r++) {
+                    html += '<div>' + (sups[s].seller_name || '') + ' → <strong>' +
+                        (rfqs[r].name || '') + '</strong></div>';
+                }
+            }
+            this.$('.mpp-rfqs').html(html);
         },
 
         _updateView: function () {

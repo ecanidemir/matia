@@ -5,7 +5,7 @@
             <div class="mpp-header">
                 <div>
                     <h2>Procurement &amp; Production Plan — Preview (TR)</h2>
-                    <p>Admin only. Creates no records (no PO/MO). Draft creation comes in a later phase.</p>
+                    <p>Admin only. Preview creates no records. Step 3 can create draft RFQs (no confirmation sent).</p>
                 </div>
                 <div>
                     <button class="btn btn-outline-light btn-sm mpp-btn-reload">Refresh</button>
@@ -45,10 +45,17 @@
             </div>
 
             <div class="mpp-step mpp-step-3" style="display:none;">
-                <h4>3. Step — Supplier-based preview + cost</h4>
+                <h4>3. Step — Supplier-based preview + cost + draft RFQs</h4>
                 <div>Total: <strong class="mpp-total">0</strong></div>
+                <div class="mt-2 mb-2">
+                    <button class="btn btn-info btn-sm mpp-btn-rfq-preview">Preview Draft RFQs</button>
+                    <button class="btn btn-success btn-sm mpp-btn-rfq-create">Create Draft RFQs</button>
+                </div>
+                <div class="mpp-rfq-preview mt-2 mb-2"/>
                 <div class="mpp-kits mt-2 mb-2"/>
                 <div class="mpp-suppliers"/>
+                <h5 class="mt-2">Created RFQs</h5>
+                <div class="mpp-rfqs"/>
             </div>
         </div>
     </t>

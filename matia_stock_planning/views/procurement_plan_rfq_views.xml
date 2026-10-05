@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Kademe 2: RFQ traceability on the plan form (Kademe 1 views untouched) -->
+    <record id="view_matia_procurement_plan_form_rfq" model="ir.ui.view">
+        <field name="name">matia.procurement.plan.form.rfq</field>
+        <field name="model">matia.procurement.plan</field>
+        <field name="inherit_id" ref="view_matia_procurement_plan_form"/>
+        <field name="arch" type="xml">
+            <field name="total_cost" position="after">
+                <field name="rfq_count" readonly="1"/>
+            </field>
+            <page string="Lines" position="after">
+                <page string="Draft RFQs">
+                    <field name="purchase_order_ids">
+                        <tree>
+                            <field name="name"/>
+                            <field name="partner_id"/>
+                            <field name="currency_id"/>
+                            <field name="amount_total"/>
+                            <field name="state"/>
+                        </tree>
+                    </field>
+                </page>
+            </page>
+            <field name="subtotal" position="after">
+                <field name="purchase_order_id" readonly="1"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_matia_procurement_plan_tree_rfq" model="ir.ui.view">
+        <field name="name">matia.procurement.plan.tree.rfq</field>
+        <field name="model">matia.procurement.plan</field>
+        <field name="inherit_id" ref="view_matia_procurement_plan_tree"/>
+        <field name="arch" type="xml">
+            <field name="total_cost" position="after">
+                <field name="rfq_count"/>
+            </field>
+        </field>
+    </record>
+</odoo>
