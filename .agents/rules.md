@@ -84,7 +84,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
 - **Plans**: Kapsamli is (modul degisikligi, goc hazirligi) oncesi `plans/` altina plan yazilir.
 - **Hata Hafizasi (ZORUNLU, atlanamaz)**: Her duzeltilen dev hatasi (kod, MCP, yapistirilan traceback dahil) icin:
   1. Once `search_memories` ile parmakizini ara + `.agents/memory/HOT.md`'yi oku.
-  2. Sonra tek satir yaz: `.agents/memory/errors-log.md`'ye ekle + `add_memory` (scope `project`). Max 1-2 satir: `parmakizi | kok neden -> cozum`. Secret ASLA yazma. Tercihen `log_error` tool'u (`/log-error`) ile cift yaz (formati sabitler).
+  2. Sonra tek satir yaz: `.agents/memory/errors-log.md`'ye ekle + `add_memory` (scope `project`). Max 1-2 satir: `[O15] parmakizi | kok neden -> cozum`. `[O15]` oneki, Mem0 user_id ayrimina (`odoo-matia` vs `odoo-hub`) ek olarak gozle gorunur surum etiketi saglar; hub tarafi `[O19]` yazar. Secret ASLA yazma. Tercihen `log_error` tool'u (`/log-error`) ile cift yaz (formati sabitler).
   3. 3+ tekrar eden hata `HOT.md`'ye terfi eder (<=30 satir, 30 gun).
   4. Push oncesi `powershell -File scripts/lint_error_log.ps1` temiz olmali (format + secret + [auto] birikimi).
   Detay icin global `error-memory` skill'ini yukle. Mem0 default scope `project`'tir.
