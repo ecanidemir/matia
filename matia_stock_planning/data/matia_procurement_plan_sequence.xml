@@ -1,0 +1,13 @@
+<odoo>
+    <!-- Sequence for procurement plan names (create_plan falls back to
+         'MPP' when this sequence is missing). Shared across companies;
+         noupdate preserves the running counter on module upgrades. -->
+    <record id="seq_matia_procurement_plan" model="ir.sequence">
+        <field name="name">Matia Procurement Plan</field>
+        <field name="code">matia.procurement.plan</field>
+        <field name="prefix">MPP-</field>
+        <field name="padding">4</field>
+        <field name="number_next">1</field>
+        <field name="number_increment">1</field>
+    </record>
+</odoo>

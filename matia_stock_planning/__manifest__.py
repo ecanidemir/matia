@@ -29,6 +29,7 @@ across TR and USA warehouse locations to calculate:
     ],
     'data': [
         'security/ir.model.access.csv',
+        'data/matia_procurement_plan_sequence.xml',
         'views/stock_planning_views.xml',
         'views/stock_planning_menus.xml',
         'views/procurement_plan_views.xml',

@@ -20,8 +20,11 @@ Rules:
 """
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
+import logging
 
 from .matia_procurement_plan import _mpp_env_sudo
+
+_logger = logging.getLogger(__name__)
 
 
 class MatiaProcurementPlanRfq(models.Model):
@@ -123,7 +126,7 @@ class MatiaProcurementPlanRfq(models.Model):
         @return: dict with supplier groups, line counts, subtotals,
             skipped counters and already linked RFQs.
         """
-        self.ensure_one()
+        # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo, plan = self._rfq_plan(plan_id)
         groups, skipped = self._rfq_groups(plan)
         preview_groups = []
@@ -168,7 +171,7 @@ class MatiaProcurementPlanRfq(models.Model):
         @return: dict with created RFQs (id, name, partner, lines,
             amount) or {'needs_confirm': True} when RFQs already exist.
         """
-        self.ensure_one()
+        # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo, plan = self._rfq_plan(plan_id)
         existing = plan.purchase_order_ids
         if existing and not confirm:
@@ -255,7 +258,10 @@ class MatiaProcurementPlanRfq(models.Model):
                 'state': 'rfq_created',
             })
         except Exception as exc:
-            raise UserError(_('Draft RFQ creation failed: %s') % exc)
+            _logger.exception('MPP draft RFQ creation failed.')
+            raise UserError(_(
+                'Draft RFQ creation failed. The technical detail was '
+                'written to the server log.'))
         return {
             'needs_confirm': False,
             'created': created,
@@ -278,7 +284,7 @@ class MatiaProcurementPlanRfq(models.Model):
         @return Dict with created POs or {'needs_confirm': True}, plus
             a fresh supplier summary for tab 3.
         """
-        self.ensure_one()
+        # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo, plan = self._rfq_plan(plan_id)
         try:
             seller_id = int(seller_id)
@@ -373,7 +379,10 @@ class MatiaProcurementPlanRfq(models.Model):
                 'state': 'rfq_created',
             })
         except Exception as exc:
-            raise UserError(_('Draft RFQ creation failed: %s') % exc)
+            _logger.exception('MPP draft RFQ creation failed.')
+            raise UserError(_(
+                'Draft RFQ creation failed. The technical detail was '
+                'written to the server log.'))
         return {
             'needs_confirm': False,
             'created': created,
