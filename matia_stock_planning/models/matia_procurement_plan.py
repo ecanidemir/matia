@@ -13,10 +13,14 @@ shared patterns were copied (no imports).
 """
 import calendar
 import json
+import logging
 import math
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
+
+
+_logger = logging.getLogger(__name__)
 
 
 # Kit BOMs: same source as the existing Capacity Plan (same ID + name fallback).
@@ -516,6 +520,43 @@ class MatiaProcurementPlan(models.Model):
     # conversion using the USD rate of the last purchase date.
     # ------------------------------------------------------------------
     @api.model
+    def _mpp_price_in_plan_currency(self, env_sudo, plan, price,
+                                    cur_id, label):
+        """Convert a price to the plan currency (fail-fast, clear msg).
+
+        Both supplier-preview branches (last-buy and pricelist) used to
+        call ``res.currency._convert`` unguarded, so a missing rate
+        crashed the whole preview with a raw traceback. Centralized
+        here: returns the converted amount, or raises a UserError that
+        names the product and the missing rate direction (the technical
+        detail goes to the server log, not the dialog).
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record.
+        @param price: amount in the source currency.
+        @param cur_id: source res.currency id (False = plan currency).
+        @param label: product label for the error message.
+        @return: price in plan.currency_id.
+        """
+        if not cur_id or not plan.currency_id \
+                or cur_id == plan.currency_id.id:
+            return float(price or 0.0)
+        cur_rec = env_sudo['res.currency'].browse(cur_id)
+        try:
+            return cur_rec._convert(
+                float(price or 0.0), plan.currency_id,
+                plan.company_id, fields.Date.today())
+        except Exception as exc:
+            _logger.warning(
+                'MPP supplier preview: FX %s -> %s failed: %s',
+                cur_rec.name,
+                plan.currency_id.name if plan.currency_id else '?',
+                exc)
+            raise UserError(_(
+                'Currency conversion failed for %s: no usable rate '
+                'from %s to %s. Set the rate and run supplier '
+                'preview again.') % (
+                    label, cur_rec.name, plan.currency_id.name))
+
     def action_assign_suppliers(self, plan_id):
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
@@ -552,6 +593,22 @@ class MatiaProcurementPlan(models.Model):
         for pr in env_sudo['product.product'].browse(buy_pids).read(
                 ['product_tmpl_id', 'seller_ids', 'uom_id']):
             tmpl_map[pr['id']] = pr
+        # All pricelist sellers in ONE query (was: one search_read per
+        # line). Grouped by template; row order per template matches
+        # the old per-template query (no order = id order).
+        tmpl_ids = list({
+            t[0] for t in (
+                pr.get('product_tmpl_id')
+                for pr in tmpl_map.values()) if t})
+        seller_map = {}
+        if tmpl_ids:
+            for s in Supplier.search_read([
+                    ('product_tmpl_id', 'in', tmpl_ids),
+            ], ['product_tmpl_id', 'name', 'price', 'min_qty',
+                'currency_id', 'product_uom', 'sequence']):
+                _st = s.get('product_tmpl_id')
+                seller_map.setdefault(
+                    _st[0] if _st else 0, []).append(s)
 
         for line in cost_lines:
             pid = line.product_id.id
@@ -568,11 +625,8 @@ class MatiaProcurementPlan(models.Model):
             price = 0.0
             warn = ''
             lp = lb.get('partner_id')
-            sellers = Supplier.search_read([
-                ('product_tmpl_id', '=', pr.get('product_tmpl_id', [0])[0]
-                 if pr.get('product_tmpl_id') else 0),
-            ], ['name', 'price', 'min_qty', 'currency_id',
-                'product_uom', 'sequence'])
+            _tmpl = pr.get('product_tmpl_id')
+            sellers = seller_map.get(_tmpl[0] if _tmpl else 0, [])
             if lp:
                 # Real purchase history wins: order from the last
                 # supplier (TR or USA) at the last price. The pricelist
@@ -586,15 +640,17 @@ class MatiaProcurementPlan(models.Model):
                         price = line.uom_id._compute_quantity(
                             1.0, pou_rec, round=False) * price \
                             if price else 0.0
-                    except Exception:
+                    except Exception as exc:
+                        _logger.warning(
+                            'MPP supplier preview: UoM conversion failed '
+                            'for %s, using PO-line price as-is: %s',
+                            line.product_id.display_name, exc)
                         price = float(lb.get('price_unit') or 0.0)
                 cur = lb.get('currency_id')
-                if cur and plan.currency_id \
-                        and cur[0] != plan.currency_id.id:
-                    cur_rec = env_sudo['res.currency'].browse(cur[0])
-                    price = cur_rec._convert(
-                        price, plan.currency_id, plan.company_id,
-                        fields.Date.today())
+                price = self._mpp_price_in_plan_currency(
+                    env_sudo, plan, price,
+                    cur[0] if cur else False,
+                    line.product_id.display_name)
                 cand = [s for s in sellers if s['name'][0] == lp[0]]
                 if cand and cand[0].get('min_qty') \
                         and line.order_qty < cand[0]['min_qty']:
@@ -615,13 +671,11 @@ class MatiaProcurementPlan(models.Model):
                 if seller.get('min_qty') \
                         and line.order_qty < seller['min_qty']:
                     warn = _('Min. order %s') % seller['min_qty']
-                cur = seller.get('currency_id')
-                if cur and plan.currency_id \
-                        and cur[0] != plan.currency_id.id:
-                    cur_rec = env_sudo['res.currency'].browse(cur[0])
-                    price = cur_rec._convert(
-                        price, plan.currency_id, plan.company_id,
-                        fields.Date.today())
+                seller_cur = seller.get('currency_id')
+                price = self._mpp_price_in_plan_currency(
+                    env_sudo, plan, price,
+                    seller_cur[0] if seller_cur else False,
+                    line.product_id.display_name)
                 seller_pid = seller['name'][0]
             if not seller_pid:
                 vals['note'] = _('No supplier (no seller defined).')
@@ -696,7 +750,13 @@ class MatiaProcurementPlan(models.Model):
             try:
                 return cur._convert(
                     price, plan.currency_id, plan.company_id, buy_date)
-            except Exception:
+            except Exception as exc:
+                _logger.warning(
+                    'MPP rollup: TRY conversion failed for '
+                    'product %s (%s -> %s): %s; using 0.0',
+                    pid, cur.name,
+                    plan.currency_id.name if plan.currency_id else '?',
+                    exc)
                 return 0.0
 
         def _unit_usd(pid):
@@ -808,30 +868,44 @@ class MatiaProcurementPlan(models.Model):
             any purchase are omitted.
         """
         res = {}
+        pids = sorted({p for p in (pids or []) if p})
         if not pids:
             return res
         POLine = env_sudo['purchase.order.line']
-        for pid in pids:
-            cands = POLine.search_read([
-                ('product_id', '=', pid),
+        # ONE batched fetch for all products (was: one search_read per
+        # product). Same order, first 5 rows per product kept, so the
+        # best-pick below sees exactly the old candidate sets.
+        by_pid = {}
+        for c in POLine.search_read([
+                ('product_id', 'in', pids),
                 ('order_id.state', '!=', 'cancel'),
-            ], ['partner_id', 'date_planned', 'price_unit',
-                'currency_id', 'product_uom', 'order_id'],
-                limit=5, order='date_planned desc, id desc')
+        ], ['product_id', 'partner_id', 'date_planned', 'price_unit',
+            'currency_id', 'product_uom', 'order_id'],
+                order='date_planned desc, id desc'):
+            _cp = c.get('product_id')
+            _cpid = _cp[0] if _cp else False
+            if not _cpid:
+                continue
+            bucket = by_pid.setdefault(_cpid, [])
+            if len(bucket) < 5:
+                bucket.append(c)
+        oids = list({
+            c['order_id'][0] for _cl in by_pid.values()
+            for c in _cl if c.get('order_id')})
+        omap = {}
+        if oids:
+            for o in env_sudo['purchase.order'].browse(oids).read(
+                    ['date_order', 'company_id']):
+                dt = o.get('date_order')
+                omap[o['id']] = (
+                    fields.Datetime.from_string(dt)
+                    if isinstance(dt, str) else dt,
+                    o.get('company_id'),
+                )
+        for pid in pids:
+            cands = by_pid.get(pid)
             if not cands:
                 continue
-            oids = list({
-                c['order_id'][0] for c in cands if c.get('order_id')})
-            omap = {}
-            if oids:
-                for o in env_sudo['purchase.order'].browse(oids).read(
-                        ['date_order', 'company_id']):
-                    dt = o.get('date_order')
-                    omap[o['id']] = (
-                        fields.Datetime.from_string(dt)
-                        if isinstance(dt, str) else dt,
-                        o.get('company_id'),
-                    )
             best, best_dt = False, False
             for c in cands:
                 _oid = c['order_id'][0] if c.get('order_id') else 0
@@ -1151,7 +1225,13 @@ class MatiaProcurementPlan(models.Model):
             return cur._convert(
                 float(line.last_price or 0.0), plan.currency_id,
                 plan.company_id, buy_date)
-        except Exception:
+        except Exception as exc:
+            _logger.warning(
+                'MPP line TRY: conversion failed for line %s '
+                '(product %s): %s; using 0.0',
+                line.id if line else '?',
+                line.product_id.display_name if line else '?',
+                exc)
             return 0.0
 
     @api.model
@@ -1333,8 +1413,11 @@ class MatiaProcurementPlan(models.Model):
                                 lp, usd, comp, buy_date)
                         ltry = cur_rec._convert(
                             lp, comp.currency_id, comp, buy_date)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.warning(
+                            'MPP tree cost: historical FX failed for '
+                            'product id %s on %s, cost shown as 0.0: %s',
+                            pid, buy_date, exc)
                 ldate = self._mpp_month_year(buy_date) if buy_date else ''
                 rtry, rusd = ltry, lusd
                 _lp = lb.get('partner_id')
@@ -1631,6 +1714,9 @@ class MatiaProcurementPlan(models.Model):
                     'procurement_group_id': group.id,
                 })
             except Exception as exc:
+                _logger.exception(
+                    'MPP MO creation failed for line %s (%s).',
+                    line.id, line.product_id.default_code)
                 skipped.append({
                     'line_id': line.id,
                     'code': line.product_id.default_code or '',
