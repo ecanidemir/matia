@@ -105,6 +105,9 @@ class MatiaProcurementPlan(models.Model):
     ], default='draft', required=True)
     target_json = fields.Text(
         help='JSON: {product_id: qty} - Screen 1 entries.')
+    edge_json = fields.Text(
+        help='JSON: {parent_id: {child_id: qty}} - BOM edges for '
+             'rolled-up cost (Screen 2 output).')
     currency_id = fields.Many2one(
         'res.currency', help='Total cost currency (default company).')
     total_cost = fields.Float(compute='_compute_total_cost', store=True)
@@ -252,6 +255,7 @@ class MatiaProcurementPlan(models.Model):
         bom_cache = {}  # tmpl_id -> bom record
         need = {}       # pid -> gross
         meta = {}       # pid -> {'level':min, 'paths':set, 'route':..}
+        edges = {}      # parent pid -> {child pid: qty per parent unit}
         stack = [(pid, float(qty), 0, 'root')
                  for pid, qty in targets.items()]
 
@@ -296,8 +300,12 @@ class MatiaProcurementPlan(models.Model):
                 m['paths'].add(path)
                 continue
             if bom.type == 'phantom':
-                # Kit: not a line, carry the multiplier
+                # Kit: not a line, carry the multiplier.
+                # Edges still recorded so rolled cost flows through.
+                edge = edges.setdefault(pid, {})
                 for bl in bom.bom_line_ids:
+                    edge.setdefault(bl.product_id.id,
+                                    float(bl.product_qty or 1.0))
                     stack.append((bl.product_id.id,
                                   mult * float(bl.product_qty or 1.0),
                                   level, path))
@@ -311,6 +319,8 @@ class MatiaProcurementPlan(models.Model):
                 child_path = '%s>%s' % (path, pid)
                 if bl.product_id.id in child_path.split('>'):
                     continue  # cycle protection
+                edges.setdefault(pid, {}).setdefault(
+                    bl.product_id.id, float(bl.product_qty or 1.0))
                 stack.append((bl.product_id.id,
                               mult * float(bl.product_qty or 1.0),
                               level + 1, child_path))
@@ -413,6 +423,9 @@ class MatiaProcurementPlan(models.Model):
                 'route_type': route,
             })
         env_sudo['matia.procurement.plan.line'].create(lines)
+        plan.edge_json = json.dumps(
+            {str(p): {str(c): q for c, q in ch.items()}
+             for p, ch in edges.items()})
         plan.state = 'calculated'
         return self._plan_summary(env_sudo, plan)
 
@@ -430,9 +443,12 @@ class MatiaProcurementPlan(models.Model):
 
         POLine = env_sudo['purchase.order.line']
         Supplier = env_sudo['product.supplierinfo']
-        buy_lines = plan.line_ids.filtered(
-            lambda l: l.route_type == 'buy' and l.order_qty > 0)
-        buy_pids = buy_lines.mapped('product_id').ids
+        # Price snapshot for every purchased line (buy + subcontract),
+        # seller assignment only for buy lines with an order qty.
+        cost_lines = plan.line_ids.filtered(
+            lambda l: l.route_type in ('buy', 'subcontract')
+            and (l.gross_qty or 0) > 0)
+        buy_pids = cost_lines.mapped('product_id').ids
         # Last purchase per product (TR confirmed POs first).
         # pid -> {partner_id, price_unit, currency_id, order_id, date_planned}
         last_buy = {}
@@ -475,11 +491,17 @@ class MatiaProcurementPlan(models.Model):
                 ['product_tmpl_id', 'seller_ids', 'uom_id']):
             tmpl_map[pr['id']] = pr
 
-        for line in buy_lines:
+        for line in cost_lines:
             pid = line.product_id.id
             pr = tmpl_map.get(pid, {})
-            seller = False
             lb = last_buy.get(pid, {})
+            vals = self._last_buy_vals(
+                env_sudo, plan, usd, lb, order_dates)
+            if line.route_type != 'buy' or not (line.order_qty or 0) > 0:
+                # Price snapshot only (no seller / no order).
+                line.write(vals)
+                continue
+            seller = False
             lp = lb.get('partner_id')
             sellers = Supplier.search_read([
                 ('product_tmpl_id', '=', pr.get('product_tmpl_id', [0])[0]
@@ -496,8 +518,6 @@ class MatiaProcurementPlan(models.Model):
                     sellers,
                     key=lambda s: (s.get('sequence') or 99,
                                    s['price']))[0]
-            vals = self._last_buy_vals(
-                env_sudo, plan, usd, lb, order_dates)
             if not seller:
                 vals['note'] = _('No supplier (no seller defined).')
                 line.write(vals)
@@ -530,7 +550,98 @@ class MatiaProcurementPlan(models.Model):
             })
             line.write(vals)
         plan.state = 'supplier_review'
-        return self._plan_summary(env_sudo, plan)
+        rollup = self._compute_rollup(env_sudo, plan)
+        summary = self._plan_summary(env_sudo, plan)
+        summary['kits'] = rollup['kits']
+        summary['rolled_total_usd'] = rollup['total']
+        return summary
+
+    @api.model
+    def _compute_rollup(self, env_sudo, plan):
+        """Bottom-up rolled USD cost per unit.
+
+        Each leaf purchase price (last_price_usd of buy/subcontract
+        lines) is multiplied by its usage qty and summed upward to the
+        top products and kits. No operation costing: make/phantom
+        nodes contribute only their children's cost.
+        """
+        try:
+            edges = json.loads(plan.edge_json or '{}')
+        except ValueError:
+            edges = {}
+        children = {}
+        for p, ch in edges.items():
+            try:
+                children[int(p)] = {int(c): float(q)
+                                    for c, q in ch.items()}
+            except (TypeError, ValueError):
+                continue
+        line_by_pid = {}
+        for line in plan.line_ids:
+            line_by_pid.setdefault(line.product_id.id, line)
+
+        memo = {}
+        visiting = set()
+
+        def _own(pid):
+            line = line_by_pid.get(pid)
+            if line and line.route_type in ('buy', 'subcontract'):
+                return float(line.last_price_usd or 0.0)
+            return 0.0
+
+        def _unit(pid):
+            if pid in memo:
+                return memo[pid]
+            if pid in visiting:
+                return 0.0  # cycle guard
+            visiting.add(pid)
+            total = _own(pid)
+            for c, q in children.get(pid, {}).items():
+                total += _unit(c) * (q or 0.0)
+            visiting.discard(pid)
+            memo[pid] = total
+            return total
+
+        for pid, line in line_by_pid.items():
+            unit = _unit(pid)
+            line.write({
+                'rolled_usd': unit,
+                'rolled_total_usd': unit * float(line.gross_qty or 0.0),
+            })
+
+        # Kit totals from entry quantities (members only, no double count:
+        # sub-product cost already lives inside each entry's rolled cost).
+        try:
+            targets = json.loads(plan.target_json or '{}')
+        except ValueError:
+            targets = {}
+        kit_of = {}
+        kit_names = {}
+        for kit in _mpp_find_kit_boms(env_sudo):
+            key = kit['key']
+            kit_names[key] = kit['bom'].product_tmpl_id.name or key
+            for bl in kit['bom'].bom_line_ids:
+                kit_of.setdefault(bl.product_id.id, key)
+        kits = {}
+        grand = 0.0
+        for pid_str, tq in targets.items():
+            try:
+                pid = int(pid_str)
+                tqf = float(tq or 0)
+            except (TypeError, ValueError):
+                continue
+            if tqf <= 0:
+                continue
+            ext = _unit(pid) * tqf
+            grand += ext
+            key = kit_of.get(pid, 'other')
+            k = kits.setdefault(
+                key, {'key': key,
+                      'name': kit_names.get(key, 'Other'),
+                      'cost': 0.0, 'count': 0})
+            k['cost'] += ext
+            k['count'] += 1
+        return {'kits': list(kits.values()), 'total': grand}
 
     @api.model
     def _last_buy_vals(self, env_sudo, plan, usd, lb, order_dates):
@@ -605,6 +716,8 @@ class MatiaProcurementPlan(models.Model):
                 if line.last_currency_id else '',
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
+                'unit_usd': line.rolled_usd,
+                'rolled_usd': line.rolled_total_usd,
                 'warn': line.min_qty_warn or '',
                 'note': line.note or '',
             }
@@ -633,6 +746,8 @@ class MatiaProcurementPlan(models.Model):
                 if line.last_currency_id else '',
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
+                'unit_usd': line.rolled_usd,
+                'rolled_usd': line.rolled_total_usd,
                 'warn': line.min_qty_warn or '',
             })
             s['cost'] += line.subtotal or 0.0
@@ -686,5 +801,12 @@ class MatiaProcurementPlanLine(models.Model):
              'of the last purchase date (snapshot).')
     last_date = fields.Date(
         help='Last purchase date (shown as Mon YYYY).')
+    rolled_usd = fields.Float(
+        digits=(16, 4),
+        help='Rolled-up USD unit cost: own last-buy USD price plus '
+             'children rolled costs (no operation costing).')
+    rolled_total_usd = fields.Float(
+        digits=(16, 2),
+        help='Rolled USD unit cost x gross qty.')
     min_qty_warn = fields.Char()
     note = fields.Text()

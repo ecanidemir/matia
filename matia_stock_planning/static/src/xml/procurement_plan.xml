@@ -47,6 +47,7 @@
             <div class="mpp-step mpp-step-3" style="display:none;">
                 <h4>3. Step — Supplier-based preview + cost</h4>
                 <div>Total: <strong class="mpp-total">0</strong></div>
+                <div class="mpp-kits mt-2 mb-2"/>
                 <div class="mpp-suppliers"/>
             </div>
         </div>

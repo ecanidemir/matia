@@ -54,6 +54,8 @@
                                     <field name="last_currency_id"/>
                                     <field name="last_price_usd"/>
                                     <field name="last_date"/>
+                                    <field name="rolled_usd"/>
+                                    <field name="rolled_total_usd"/>
                                     <field name="unit_price"/>
                                     <field name="subtotal"/>
                                 </tree>

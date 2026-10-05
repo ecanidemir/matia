@@ -138,6 +138,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 plan_name: this.summary.name,
                 groups: groups,
                 total: this.summary.total_cost,
+                kits: this.summary.kits || [],
+                rolled_total: this.summary.rolled_total_usd || 0,
             };
             var form = document.createElement('form');
             form.method = 'POST';
@@ -210,6 +212,23 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             this.$('.mpp-summary-body').html(html);
             this.$('.mpp-total').text(this.summary.total_cost || 0);
+            // Kit rolled-up totals (step 3): bottom-up USD cost per kit.
+            var kits = (this.summary && this.summary.kits) || [];
+            var kh = '';
+            if (kits.length) {
+                kh += '<table class="table table-sm table-striped"><thead><tr>' +
+                    '<th>Kit</th><th>Products</th><th>Rolled USD</th>' +
+                    '</tr></thead><tbody>';
+                for (var k = 0; k < kits.length; k++) {
+                    kh += '<tr><td>' + (kits[k].name || kits[k].key || '') + '</td>' +
+                        '<td class="text-center">' + kits[k].count + '</td>' +
+                        '<td class="text-right">' + (kits[k].cost || 0) + '</td></tr>';
+                }
+                kh += '</tbody></table>';
+                kh += '<div>Rolled total (USD): <strong>' +
+                    (this.summary.rolled_total_usd || 0) + '</strong></div>';
+            }
+            this.$('.mpp-kits').html(kh);
             // Supplier breakdown (step 3): per-supplier tables with
             // last-purchase price, USD conversion and last buy date.
             var sups = (this.summary && this.summary.suppliers) || [];
@@ -218,7 +237,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 sh += '<h5>' + sups[s].seller_name + ' — ' + sups[s].cost + '</h5>' +
                     '<table class="table table-sm table-striped"><thead><tr>' +
                     '<th>Code</th><th>Product</th><th>Order</th>' +
-                    '<th>Last Price</th><th>USD</th><th>Last Buy</th><th>Subtotal</th>' +
+                    '<th>Last Price</th><th>USD</th><th>Last Buy</th>' +
+                    '<th>Unit USD</th><th>Rolled USD</th><th>Subtotal</th>' +
                     '</tr></thead><tbody>';
                 var slines = sups[s].lines || [];
                 for (var j = 0; j < slines.length; j++) {
@@ -230,6 +250,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         '<td class="text-right">' + self._fmtLast(sl) + '</td>' +
                         '<td class="text-right">' + (sl.last_usd || 0) + '</td>' +
                         '<td class="text-center">' + (sl.last_date || '') + '</td>' +
+                        '<td class="text-right">' + (sl.unit_usd || 0) + '</td>' +
+                        '<td class="text-right">' + (sl.rolled_usd || 0) + '</td>' +
                         '<td class="text-right">' + (sl.subtotal || 0) + '</td>' +
                         '</tr>';
                 }
