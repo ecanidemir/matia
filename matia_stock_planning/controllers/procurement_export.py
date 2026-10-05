@@ -32,6 +32,8 @@ class MatiaProcurementPlanController(http.Controller):
         if not request.env.user.has_group('base.group_system'):
             return request.not_found()
         data = json.loads(data_json)
+        if data.get('mode') == 'tree':
+            return self._export_tree(data, plan_name, kits, rolled_total)
         groups = data.get('groups', [])
         plan_name = data.get('plan_name', 'Plan')
         total = data.get('total', 0)
@@ -66,6 +68,96 @@ class MatiaProcurementPlanController(http.Controller):
                      'attachment; filename=%s' % filename),
                 ])
 
+    def _export_tree(self, data, plan_name, kits, rolled_total):
+        """Capacity-style indented tree export (visible rows only)."""
+        rows = data.get('tree_rows', [])
+        rolled_total_try = data.get('rolled_total_try', 0)
+        headers = ['Part', 'Usage', 'Unreserved', 'Planned', 'Order',
+                   'Seller', 'Last Price', 'TRY', 'USD', 'Last Buy',
+                   'Rolled TRY', 'Rolled USD', 'Subtotal', 'Per-top']
+        if not xlsxwriter:
+            lines = ['\ufeff' + 'Tree - %s' % plan_name]
+            lines.append('Rolled total USD: %s | TRY: %s' % (
+                rolled_total, rolled_total_try))
+            lines.append(';'.join(headers))
+            for r in rows:
+                if r.get('is_header'):
+                    lines.append('--- %s ---' % r.get('code', ''))
+                    continue
+                pad = '  ' * int(r.get('level') or 0)
+                lines.append('%s%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s' % (
+                    pad, r.get('code', ''), r.get('name', ''),
+                    r.get('bom_qty', ''), r.get('uom', ''),
+                    r.get('avail', ''), r.get('planned', ''),
+                    r.get('order', ''), r.get('seller', ''),
+                    r.get('last', ''), r.get('last_try', ''),
+                    r.get('usd', ''), r.get('date', ''),
+                    r.get('rolled_try', ''), r.get('rolled_usd', ''),
+                    r.get('subtotal', ''), r.get('breakdown', '')))
+            content = '\r\n'.join(lines).encode('utf-8')
+            filename = 'Tree_%s.csv' % datetime.now().strftime('%Y%m%d_%H%M')
+            return request.make_response(
+                content,
+                headers=[
+                    ('Content-Type', 'text/csv; charset=utf-8'),
+                    ('Content-Disposition',
+                     'attachment; filename=%s' % filename),
+                ])
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        ws = workbook.add_worksheet('Tree')
+        title_fmt = workbook.add_format({'bold': True, 'font_size': 14})
+        header_fmt = workbook.add_format(
+            {'bold': True, 'bg_color': '#7c2d12', 'font_color': '#ffffff',
+             'border': 1})
+        num_fmt = workbook.add_format({'border': 1, 'align': 'center'})
+        text_fmt = workbook.add_format({'border': 1})
+        child_fmt = workbook.add_format(
+            {'border': 1, 'bg_color': '#FFFBEB'})
+        row = 0
+        ws.write(row, 0, 'Tree - %s' % plan_name, title_fmt)
+        row += 1
+        ws.write(row, 0, 'Rolled total USD: %s | TRY: %s' % (
+            rolled_total, rolled_total_try))
+        row += 2
+        ws.write_row(row, 0, headers, header_fmt)
+        row += 1
+        for r in rows:
+            if r.get('is_header'):
+                ws.write(row, 0, r.get('code', ''), header_fmt)
+                row += 1
+                continue
+            lvl = int(r.get('level') or 0)
+            pad = '    ' * lvl + ('↳ ' if lvl else '')
+            fmt = child_fmt if lvl else text_fmt
+            ws.write(row, 0, pad + str(r.get('code', '')), fmt)
+            ws.write(row, 1, str(r.get('name', '')), fmt)
+            ws.write(row, 2, '%s %s' % (
+                r.get('bom_qty', ''), r.get('uom', '')), fmt)
+            ws.write(row, 3, r.get('avail', '') or 0, num_fmt)
+            ws.write(row, 4, r.get('planned', '') or 0, num_fmt)
+            ws.write(row, 5, r.get('order', '') or 0, num_fmt)
+            ws.write(row, 6, r.get('seller', ''), fmt)
+            ws.write(row, 7, r.get('last', ''), fmt)
+            ws.write(row, 8, r.get('last_try', '') or 0, num_fmt)
+            ws.write(row, 9, r.get('usd', '') or 0, num_fmt)
+            ws.write(row, 10, r.get('date', ''), fmt)
+            ws.write(row, 11, r.get('rolled_try', '') or 0, num_fmt)
+            ws.write(row, 12, r.get('rolled_usd', '') or 0, num_fmt)
+            ws.write(row, 13, r.get('subtotal', '') or 0, num_fmt)
+            ws.write(row, 14 - 1, r.get('breakdown', ''), fmt)
+            row += 1
+        workbook.close()
+        output.seek(0)
+        filename = 'Tree_%s.xlsx' % datetime.now().strftime('%Y%m%d_%H%M')
+        return request.make_response(
+            output.getvalue(),
+            headers=[
+                ('Content-Type', 'application/vnd.openxmlformats-officedocument'
+                 '.spreadsheetml.sheet'),
+                ('Content-Disposition',
+                 'attachment; filename=%s' % filename),
+            ])
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         ws = workbook.add_worksheet('Supplier Preview')

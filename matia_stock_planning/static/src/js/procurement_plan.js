@@ -9,23 +9,37 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         template: 'MatiaProcurementPlan.Dashboard',
         events: {
             'click .mpp-btn-reload': '_onReload',
-            'click .mpp-btn-create': '_onCreatePlan',
-            'click .mpp-btn-explode': '_onExplode',
-            'click .mpp-btn-suppliers': '_onSuppliers',
+            'click .mpp-btn-calc': '_onCalc',
+            'click .mpp-btn-fill': '_onFill',
+            'click .mpp-btn-clear': '_onClear',
             'click .mpp-btn-excel': '_onExportExcel',
+            'click .mpp-btn-excel-tree': '_onExportTree',
+            'click .mpp-btn-expand-all': '_onExpandAll',
+            'click .mpp-btn-collapse-all': '_onCollapseAll',
+            'click .mpp-group-toggle': '_onGroupToggle',
+            'click .mpp-tree-toggle': '_onRowToggle',
+            'click .mpp-sort': '_onSort',
+            'click .mpp-tab': '_onTab',
             'click .mpp-btn-rfq-preview': '_onRfqPreview',
             'click .mpp-btn-rfq-create': '_onCreateRfqs',
             'click .mpp-btn-rfq-confirm': '_onConfirmRfqs',
-            'click .mpp-tab': '_onTab',
             'input .mpp-qty': '_onQtyInput',
+            'input .mpp-tree-search': '_onTreeSearch',
         },
 
         init: function (parent, action) {
             this._super.apply(this, arguments);
-            this.step = 1;
             this.items = [];
             this.plan = null;
             this.summary = null;
+            this.treeGroups = [];
+            this.targets = {};
+            this.expanded = {};
+            this.subCache = {};
+            this.collapsedGroups = {};
+            this.treeSearch = '';
+            this.treeSort = {key: 'planned', dir: -1};
+            this.fillN = 50;
             this.activeGroup = 'buy';
             this.rfqPreview = null;
             this.createdRfqs = [];
@@ -84,52 +98,253 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        _onCreatePlan: function () {
+        // Fill-to-N: qty = max(0, N - avail_tr) for every entry row.
+        _onFill: function () {
+            var nInput = this.$('.mpp-fill-n').val();
+            var n = parseInt(nInput, 10);
+            if (isNaN(n) || n < 0) n = 50;
+            this.fillN = n;
+            for (var i = 0; i < this.items.length; i++) {
+                var avail = parseFloat(this.items[i].avail_tr) || 0;
+                this.items[i].qty_input = Math.max(0, Math.ceil(n - avail));
+            }
+            this._renderEntry();
+            this.displayNotification({
+                title: _t('Filled'),
+                message: _t('Quantities filled to ') + n + '.',
+                type: 'success',
+            });
+        },
+
+        _onClear: function () {
+            for (var i = 0; i < this.items.length; i++) {
+                this.items[i].qty_input = 0;
+            }
+            this._renderEntry();
+        },
+
+        // Single-screen flow: create plan -> tree + cost in one call.
+        _onCalc: function () {
             var self = this;
             var sel = this._selectedItems();
             if (!sel.length) {
                 self.displayNotification({
                     title: _t('Warning'),
-                    message: _t('Enter a quantity for at least one product.'),
+                    message: _t('Enter a quantity for at least one product (or use Fill to N).'),
                     type: 'warning',
                 });
                 return;
             }
             this._rpcPlan('create_plan', [sel]).then(function (res) {
                 self.plan = res;
-                self.step = 2;
-                self._updateView();
-            });
-        },
-
-        _onExplode: function () {
-            var self = this;
-            if (!this.plan) return;
-            this._rpcPlan('action_explode_and_net', [this.plan.plan_id]).then(function (res) {
-                self.summary = res;
-                self.step = 2;
+                return self._rpcPlan('get_tree_with_cost', [res.plan_id]);
+            }).then(function (summary) {
+                self.summary = summary;
+                self.treeGroups = (summary && summary.tree_groups) || [];
+                self.targets = (summary && summary.targets) || {};
+                self.expanded = {};
+                self.subCache = {};
+                self.collapsedGroups = {};
                 self.activeGroup = 'buy';
                 self._updateView();
-            });
-        },
-
-        _onSuppliers: function () {
-            var self = this;
-            if (!this.plan) return;
-            this._rpcPlan('action_assign_suppliers', [this.plan.plan_id]).then(function (res) {
-                self.summary = res;
-                self.step = 3;
-                self._updateView();
+            }, function (err) {
+                var msg = (err && err.data && err.data.message) ||
+                    (err && err.message) || _t('Calculation failed.');
+                self.displayNotification({
+                    title: _t('Error'),
+                    message: msg,
+                    type: 'danger',
+                });
             });
         },
 
         _onTab: function (ev) {
             this.activeGroup = ev.currentTarget.dataset.group;
-            this._updateView();
+            this._renderSuppliers();
+        },
+
+        _onTreeSearch: function (ev) {
+            this.treeSearch = (ev.currentTarget.value || '').toLowerCase();
+            this._renderTree();
+        },
+
+        _onSort: function (ev) {
+            ev.preventDefault();
+            var key = ev.currentTarget.dataset.sort;
+            if (this.treeSort.key === key) {
+                this.treeSort.dir *= -1;
+            } else {
+                this.treeSort = {key: key, dir: -1};
+            }
+            this._renderTree();
+        },
+
+        _onGroupToggle: function (ev) {
+            var key = ev.currentTarget.dataset.group;
+            this.collapsedGroups[key] = !this.collapsedGroups[key];
+            this._renderTree();
+        },
+
+        _onRowToggle: function (ev) {
+            var self = this;
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            var qty = parseFloat(ev.currentTarget.dataset.qty || '1') || 1;
+            if (this.expanded[pid]) {
+                delete this.expanded[pid];
+                this._renderTree();
+                return;
+            }
+            if (this.subCache[pid]) {
+                this.expanded[pid] = true;
+                this._renderTree();
+                return;
+            }
+            var planId = this.plan ? this.plan.plan_id :
+                (this.summary ? this.summary.plan_id : false);
+            this._rpcPlan('get_sub_bom_cost', [pid, qty, planId || false])
+                .then(function (res) {
+                    self.subCache[pid] = (res && res.items) || [];
+                    self.expanded[pid] = true;
+                    self._renderTree();
+                });
+        },
+
+        _onExpandAll: function () {
+            var self = this;
+            var planId = this.plan ? this.plan.plan_id :
+                (this.summary ? this.summary.plan_id : false);
+            var todo = [];
+            this.treeGroups.forEach(function (g) {
+                (g.items || []).forEach(function (it) {
+                    if (it.has_bom && !self.subCache[it.product_id]) {
+                        todo.push(it);
+                    } else if (it.has_bom) {
+                        self.expanded[it.product_id] = true;
+                    }
+                });
+            });
+            var chain = Promise.resolve();
+            todo.forEach(function (it) {
+                chain = chain.then(function () {
+                    return self._rpcPlan('get_sub_bom_cost',
+                        [it.product_id, it.bom_qty || 1, planId || false]
+                    ).then(function (res) {
+                        self.subCache[it.product_id] =
+                            (res && res.items) || [];
+                        self.expanded[it.product_id] = true;
+                    });
+                });
+            });
+            chain.then(function () { self._renderTree(); });
+        },
+
+        _onCollapseAll: function () {
+            this.expanded = {};
+            this._renderTree();
+        },
+
+        _matchSearch: function (r) {
+            if (!this.treeSearch) return true;
+            var s = ((r.code || '') + ' ' + (r.name || '')).toLowerCase();
+            return s.indexOf(this.treeSearch) !== -1;
+        },
+
+        _sortItems: function (rows) {
+            var k = this.treeSort.key, d = this.treeSort.dir;
+            var num = {avail_tr: 1, planned: 1, gross: 1, rolled_try: 1,
+                rolled_total_try: 1, last_usd: 1, order_qty: 1};
+            rows.sort(function (a, b) {
+                var av = a[k], bv = b[k];
+                if (num[k]) {
+                    av = parseFloat(av) || 0;
+                    bv = parseFloat(bv) || 0;
+                    return (av - bv) * d;
+                }
+                av = (av || '').toString().toLowerCase();
+                bv = (bv || '').toString().toLowerCase();
+                if (av < bv) return -1 * d;
+                if (av > bv) return 1 * d;
+                return 0;
+            });
+            return rows;
+        },
+
+        _fmtNum: function (v, dec) {
+            if (v === undefined || v === null || v === '') return '';
+            var n = parseFloat(v);
+            if (isNaN(n)) return v;
+            return n.toLocaleString(undefined,
+                {minimumFractionDigits: dec || 0,
+                 maximumFractionDigits: dec !== undefined ? dec : 2});
+        },
+
+        _fmtLast: function (l) {
+            if (!l.last_price) return '';
+            return this._fmtNum(l.last_price, 2) +
+                (l.last_currency ? ' ' + l.last_currency : '');
+        },
+
+        _rowHtml: function (r, level, isChild) {
+            var self = this;
+            var hasKids = r.has_bom;
+            var isOpen = !!this.expanded[r.product_id];
+            var toggle = '';
+            if (hasKids) {
+                toggle = '<span class="mpp-tree-toggle" data-pid="' +
+                    r.product_id + '" data-qty="' + (r.bom_qty || 1) +
+                    '" title="Expand/collapse">' +
+                    (isOpen ? '&#9660;' : '&#9654;') + '</span> ';
+            } else {
+                toggle = '<span class="mpp-tree-leaf">&#183;</span> ';
+            }
+            var indent = '';
+            for (var i = 0; i < level; i++) indent += '<span class="mpp-indent"></span>';
+            var availCls = (parseFloat(r.avail_tr) || 0) > 0 ?
+                'badge badge-success' : 'badge badge-secondary';
+            var breakdown = r.top_breakdown ?
+                ' title="Per-top: ' + r.top_breakdown + '"' : '';
+            var html = '<tr class="mpp-level-' + level +
+                (isChild ? ' mpp-child-row' : '') + '">' +
+                '<td><div class="mpp-part">' + indent + toggle +
+                '<span><strong>' + (r.code || '') + '</strong><br/>' +
+                '<span class="text-muted">' + (r.name || '') + '</span> ' +
+                (level === 0 ? '<span class="badge badge-info">L0</span>' :
+                    '<span class="badge badge-light">L' + level + '</span>') +
+                '</span></div></td>' +
+                '<td class="text-center">' +
+                self._fmtNum(r.bom_qty, 2) + ' ' + (r.uom || '') + '</td>' +
+                '<td class="text-center"><span class="' + availCls + '">' +
+                self._fmtNum(r.avail_tr, 0) + '</span>' +
+                '<div class="text-muted small">res ' +
+                self._fmtNum(r.reserved_tr, 0) + '</div></td>' +
+                '<td class="text-center"' + breakdown + '><strong>' +
+                self._fmtNum(r.planned !== undefined ? r.planned : r.gross, 0) +
+                '</strong>' +
+                (r.top_breakdown ?
+                    '<div class="text-muted small" style="max-width:220px;">' +
+                    r.top_breakdown + '</div>' : '') + '</td>' +
+                '<td class="text-center">' +
+                self._fmtNum(r.net !== undefined ? r.net : '', 0) +
+                ' / <strong>' +
+                self._fmtNum(r.order_qty, 0) + '</strong></td>' +
+                '<td>' + (r.seller || '') + '</td>' +
+                '<td class="text-right">' + self._fmtLast(r) + '</td>' +
+                '<td class="text-right">' + self._fmtNum(r.last_try, 2) +
+                '</td>' +
+                '<td class="text-right">' + self._fmtNum(r.last_usd, 4) +
+                '</td>' +
+                '<td class="text-center">' + (r.last_date || '') + '</td>' +
+                '<td class="text-right">' + self._fmtNum(r.rolled_try, 2) +
+                '</td>' +
+                '<td class="text-right">' + self._fmtNum(r.rolled_usd, 4) +
+                '</td>' +
+                '<td class="text-right">' + self._fmtNum(r.subtotal, 2) +
+                '</td>' +
+                '</tr>';
+            return html;
         },
 
         _onExportExcel: function () {
-            var self = this;
             if (!this.summary) return;
             var groups = [];
             var sups = this.summary.suppliers || [];
@@ -140,13 +355,69 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     items: sups[i].lines,
                 });
             }
-            var payload = {
+            this._postExcel({
                 plan_name: this.summary.name,
                 groups: groups,
                 total: this.summary.total_cost,
                 kits: this.summary.kits || [],
                 rolled_total: this.summary.rolled_total_usd || 0,
-            };
+            });
+        },
+
+        _onExportTree: function () {
+            if (!this.summary) return;
+            var rows = [];
+            var self = this;
+            this.treeGroups.forEach(function (g) {
+                rows.push({code: '[' + g.title + '] ' + (g.bom_name || ''),
+                    level: 0, is_header: true});
+                var items = self._sortItems(
+                    (g.items || []).filter(function (r) {
+                        return self._matchSearch(r);
+                    }));
+                items.forEach(function (r) {
+                    rows.push({
+                        code: r.code, name: r.name, level: 0,
+                        bom_qty: r.bom_qty, uom: r.uom,
+                        avail: r.avail_tr, planned: r.planned,
+                        order: r.order_qty, seller: r.seller,
+                        last: self._fmtLast(r), last_try: r.last_try,
+                        usd: r.last_usd, date: r.last_date,
+                        rolled_try: r.rolled_try, rolled_usd: r.rolled_usd,
+                        subtotal: r.subtotal,
+                        breakdown: r.top_breakdown || '',
+                    });
+                    var kids = self.subCache[r.product_id] || [];
+                    if (self.expanded[r.product_id]) {
+                        kids.forEach(function (k) {
+                            rows.push({
+                                code: k.code, name: k.name, level: 1,
+                                bom_qty: k.bom_qty, uom: k.uom,
+                                avail: k.avail_tr,
+                                planned: k.gross, order: '',
+                                seller: k.seller,
+                                last: self._fmtLast(k),
+                                last_try: k.last_try, usd: k.last_usd,
+                                date: k.last_date,
+                                rolled_try: k.rolled_try,
+                                rolled_usd: k.rolled_usd, subtotal: '',
+                                breakdown: '',
+                            });
+                        });
+                    }
+                });
+            });
+            this._postExcel({
+                plan_name: (this.summary.name || '') + ' tree',
+                mode: 'tree',
+                tree_rows: rows,
+                kits: this.summary.kits || [],
+                rolled_total: this.summary.rolled_total_usd || 0,
+                rolled_total_try: this.summary.rolled_total_try || 0,
+            });
+        },
+
+        _postExcel: function (payload) {
             var form = document.createElement('form');
             form.method = 'POST';
             form.action = '/matia_procurement_plan/export_xlsx';
@@ -162,9 +433,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onRfqPreview: function () {
             var self = this;
-            if (!this.plan) return;
+            if (!this.plan && !this.summary) return;
+            var pid = this.plan ? this.plan.plan_id : this.summary.plan_id;
             this.rfqConfirm = false;
-            this._rpcPlan('get_rfq_preview', [this.plan.plan_id]).then(function (res) {
+            this._rpcPlan('get_rfq_preview', [pid]).then(function (res) {
                 self.rfqPreview = res;
                 self._renderRfqPreview();
             });
@@ -172,8 +444,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onCreateRfqs: function () {
             var self = this;
-            if (!this.plan) return;
-            this._rpcPlan('action_create_draft_rfqs', [this.plan.plan_id, !!this.rfqConfirm]).then(function (res) {
+            if (!this.plan && !this.summary) return;
+            var pid = this.plan ? this.plan.plan_id : this.summary.plan_id;
+            this._rpcPlan('action_create_draft_rfqs',
+                [pid, !!this.rfqConfirm]).then(function (res) {
                 if (res && res.needs_confirm) {
                     self.rfqPreview = res;
                     self._renderRfqPreview();
@@ -251,10 +525,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         _updateView: function () {
-            this.$('.mpp-step').hide();
-            this.$('.mpp-step-' + this.step).show();
-            if (this.step === 1) this._renderEntry();
-            if (this.step >= 2 && this.summary) this._renderSummary();
+            this.$('.mpp-entry-wrap').show();
+            this._renderEntry();
+            if (this.summary && this.treeGroups.length) {
+                this.$('.mpp-tree-wrap').show();
+                this._renderTree();
+                this._renderSuppliers();
+                this.$('.mpp-rfq-wrap').show();
+            } else {
+                this.$('.mpp-tree-wrap').hide();
+                this.$('.mpp-rfq-wrap').hide();
+            }
         },
 
         _renderEntry: function () {
@@ -272,9 +553,71 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '</tr>';
             }
             this.$('.mpp-entry-body').html(html);
+            this.$('.mpp-fill-n').val(this.fillN);
         },
 
-        _renderSummary: function () {
+        _renderTree: function () {
+            var self = this;
+            var html = '';
+            this.treeGroups.forEach(function (g) {
+                var collapsed = !!self.collapsedGroups[g.key];
+                var items = (g.items || []).filter(function (r) {
+                    return self._matchSearch(r);
+                });
+                items = self._sortItems(items.slice());
+                html += '<div class="mpp-kit-group">' +
+                    '<div class="mpp-kit-header">' +
+                    '<button class="btn btn-sm btn-outline-secondary mpp-group-toggle" data-group="' +
+                    g.key + '">' + (collapsed ? '+' : '−') + '</button> ' +
+                    '<strong>' + g.title + '</strong> ' +
+                    '<span class="text-muted">' + (g.bom_name || '') + '</span> ' +
+                    '<span class="badge badge-primary">' + items.length + '</span>' +
+                    '</div>';
+                if (!collapsed) {
+                    html += '<table class="table table-sm table-striped mpp-tree-table"><thead><tr>' +
+                        '<th><a href="#" class="mpp-sort" data-sort="code">Part</a></th>' +
+                        '<th>Usage</th>' +
+                        '<th><a href="#" class="mpp-sort" data-sort="avail_tr">Unreserved</a></th>' +
+                        '<th><a href="#" class="mpp-sort" data-sort="planned">Planned</a></th>' +
+                        '<th>Net / Order</th>' +
+                        '<th>Seller</th>' +
+                        '<th>Last Price</th>' +
+                        '<th><a href="#" class="mpp-sort" data-sort="rolled_try">TRY</a></th>' +
+                        '<th>USD</th>' +
+                        '<th>Last Buy</th>' +
+                        '<th>Rolled TRY</th>' +
+                        '<th>Rolled USD</th>' +
+                        '<th>Subtotal</th>' +
+                        '</tr></thead><tbody>';
+                    items.forEach(function (r) {
+                        html += self._rowHtml(r, 0, false);
+                        var kids = self.subCache[r.product_id] || [];
+                        if (self.expanded[r.product_id]) {
+                            var fkids = kids.filter(function (k) {
+                                return self._matchSearch(k);
+                            });
+                            fkids.forEach(function (k) {
+                                html += self._rowHtml(
+                                    Object.assign({}, k, {
+                                        planned: k.gross,
+                                        net: '',
+                                        order_qty: k.order_qty || '',
+                                        subtotal: '',
+                                    }), 1, true);
+                            });
+                        }
+                    });
+                    html += '</tbody></table>';
+                }
+                html += '</div>';
+            });
+            this.$('.mpp-tree-body').html(html);
+            var title = this.summary ?
+                (this.summary.name + ' — tree + cost') : '';
+            this.$('.mpp-tree-title').text(title);
+        },
+
+        _renderSuppliers: function () {
             var self = this;
             var groups = (this.summary && this.summary.groups) || {};
             var tabs = '';
@@ -308,25 +651,25 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             this.$('.mpp-summary-body').html(html);
             this.$('.mpp-total').text(this.summary.total_cost || 0);
-            // Kit rolled-up totals (step 3): bottom-up USD cost per kit.
             var kits = (this.summary && this.summary.kits) || [];
             var kh = '';
             if (kits.length) {
                 kh += '<table class="table table-sm table-striped"><thead><tr>' +
-                    '<th>Kit</th><th>Products</th><th>Rolled USD</th>' +
+                    '<th>Kit</th><th>Products</th><th>Rolled USD</th><th>Rolled TRY</th>' +
                     '</tr></thead><tbody>';
                 for (var k = 0; k < kits.length; k++) {
                     kh += '<tr><td>' + (kits[k].name || kits[k].key || '') + '</td>' +
                         '<td class="text-center">' + kits[k].count + '</td>' +
-                        '<td class="text-right">' + (kits[k].cost || 0) + '</td></tr>';
+                        '<td class="text-right">' + (kits[k].cost || 0) + '</td>' +
+                        '<td class="text-right">' + (kits[k].cost_try || 0) + '</td></tr>';
                 }
                 kh += '</tbody></table>';
                 kh += '<div>Rolled total (USD): <strong>' +
-                    (this.summary.rolled_total_usd || 0) + '</strong></div>';
+                    (this.summary.rolled_total_usd || 0) + '</strong>' +
+                    ' — TRY: <strong>' +
+                    (this.summary.rolled_total_try || 0) + '</strong></div>';
             }
             this.$('.mpp-kits').html(kh);
-            // Supplier breakdown (step 3): per-supplier tables with
-            // last-purchase price, USD conversion and last buy date.
             var sups = (this.summary && this.summary.suppliers) || [];
             var sh = '';
             for (var s = 0; s < sups.length; s++) {
@@ -354,11 +697,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 sh += '</tbody></table>';
             }
             this.$('.mpp-suppliers').html(sh);
-        },
-
-        _fmtLast: function (l) {
-            if (!l.last_price) return '';
-            return l.last_price + (l.last_currency ? ' ' + l.last_currency : '');
         },
     });
 

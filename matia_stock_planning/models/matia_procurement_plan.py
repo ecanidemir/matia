@@ -554,16 +554,19 @@ class MatiaProcurementPlan(models.Model):
         summary = self._plan_summary(env_sudo, plan)
         summary['kits'] = rollup['kits']
         summary['rolled_total_usd'] = rollup['total']
+        summary['rolled_total_try'] = rollup.get('total_try', 0.0)
         return summary
 
     @api.model
     def _compute_rollup(self, env_sudo, plan):
-        """Bottom-up rolled USD cost per unit.
+        """Bottom-up rolled USD + TRY cost per unit.
 
-        Each leaf purchase price (last_price_usd of buy/subcontract
+        Each leaf purchase price (last price of buy/subcontract
         lines) is multiplied by its usage qty and summed upward to the
-        top products and kits. No operation costing: make/phantom
-        nodes contribute only their children's cost.
+        top products and kits. USD uses the historical USD rate of the
+        last buy date; TRY uses the historical TRY rate of the same
+        date. No operation costing: make/phantom nodes contribute only
+        their children's cost.
         """
         try:
             edges = json.loads(plan.edge_json or '{}')
@@ -580,33 +583,67 @@ class MatiaProcurementPlan(models.Model):
         for line in plan.line_ids:
             line_by_pid.setdefault(line.product_id.id, line)
 
-        memo = {}
+        memo_usd = {}
+        memo_try = {}
         visiting = set()
 
-        def _own(pid):
+        def _own_usd(pid):
             line = line_by_pid.get(pid)
             if line and line.route_type in ('buy', 'subcontract'):
                 return float(line.last_price_usd or 0.0)
             return 0.0
 
-        def _unit(pid):
-            if pid in memo:
-                return memo[pid]
+        def _own_try(pid):
+            line = line_by_pid.get(pid)
+            if not line or line.route_type not in ('buy', 'subcontract'):
+                return 0.0
+            price = float(line.last_price or 0.0)
+            if not price:
+                return 0.0
+            cur = line.last_currency_id
+            if not cur or cur.id == plan.currency_id.id:
+                return price
+            buy_date = line.last_date or fields.Date.today()
+            try:
+                return cur._convert(
+                    price, plan.currency_id, plan.company_id, buy_date)
+            except Exception:
+                return 0.0
+
+        def _unit_usd(pid):
+            if pid in memo_usd:
+                return memo_usd[pid]
             if pid in visiting:
                 return 0.0  # cycle guard
             visiting.add(pid)
-            total = _own(pid)
+            total = _own_usd(pid)
             for c, q in children.get(pid, {}).items():
-                total += _unit(c) * (q or 0.0)
+                total += _unit_usd(c) * (q or 0.0)
             visiting.discard(pid)
-            memo[pid] = total
+            memo_usd[pid] = total
+            return total
+
+        def _unit_try(pid):
+            if pid in memo_try:
+                return memo_try[pid]
+            if pid in visiting:
+                return 0.0  # cycle guard
+            visiting.add(pid)
+            total = _own_try(pid)
+            for c, q in children.get(pid, {}).items():
+                total += _unit_try(c) * (q or 0.0)
+            visiting.discard(pid)
+            memo_try[pid] = total
             return total
 
         for pid, line in line_by_pid.items():
-            unit = _unit(pid)
+            unit_u = _unit_usd(pid)
+            unit_t = _unit_try(pid)
             line.write({
-                'rolled_usd': unit,
-                'rolled_total_usd': unit * float(line.gross_qty or 0.0),
+                'rolled_usd': unit_u,
+                'rolled_total_usd': unit_u * float(line.gross_qty or 0.0),
+                'rolled_try': unit_t,
+                'rolled_total_try': unit_t * float(line.gross_qty or 0.0),
             })
 
         # Kit totals from entry quantities (members only, no double count:
@@ -624,6 +661,7 @@ class MatiaProcurementPlan(models.Model):
                 kit_of.setdefault(bl.product_id.id, key)
         kits = {}
         grand = 0.0
+        grand_try = 0.0
         for pid_str, tq in targets.items():
             try:
                 pid = int(pid_str)
@@ -632,16 +670,19 @@ class MatiaProcurementPlan(models.Model):
                 continue
             if tqf <= 0:
                 continue
-            ext = _unit(pid) * tqf
+            ext = _unit_usd(pid) * tqf
             grand += ext
+            grand_try += _unit_try(pid) * tqf
             key = kit_of.get(pid, 'other')
             k = kits.setdefault(
                 key, {'key': key,
                       'name': kit_names.get(key, 'Other'),
-                      'cost': 0.0, 'count': 0})
+                      'cost': 0.0, 'cost_try': 0.0, 'count': 0})
             k['cost'] += ext
+            k['cost_try'] += _unit_try(pid) * tqf
             k['count'] += 1
-        return {'kits': list(kits.values()), 'total': grand}
+        return {'kits': list(kits.values()), 'total': grand,
+                'total_try': grand_try}
 
     @api.model
     def _last_buy_vals(self, env_sudo, plan, usd, lb, order_dates):
@@ -718,6 +759,8 @@ class MatiaProcurementPlan(models.Model):
                 'last_date': self._mpp_month_year(line.last_date),
                 'unit_usd': line.rolled_usd,
                 'rolled_usd': line.rolled_total_usd,
+                'rolled_try': line.rolled_try,
+                'rolled_total_try': line.rolled_total_try,
                 'warn': line.min_qty_warn or '',
                 'note': line.note or '',
             }
@@ -759,6 +802,395 @@ class MatiaProcurementPlan(models.Model):
             'groups': groups,
             'suppliers': list(suppliers.values()),
         }
+
+    # ------------------------------------------------------------------
+    # Tree UI (capacity-style): kit groups + lazy sub-BOM with cost.
+    # Single-screen flow: create_plan -> get_tree_with_cost.
+    # ------------------------------------------------------------------
+    @api.model
+    def get_tree_with_cost(self, plan_id):
+        """Explode + net + suppliers, then return capacity-style groups.
+
+        Groups are the 4 kit BOMs; items are the kit's top products
+        (level 0). Children load lazily via get_sub_bom_cost.
+        @param plan_id Plan ID from create_plan.
+        @return Summary dict plus 'tree_groups' and 'targets'.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        summary = self.action_explode_and_net(plan.id)
+        summary = self.action_assign_suppliers(plan.id)
+        try:
+            targets = json.loads(plan.target_json or '{}')
+        except ValueError:
+            targets = {}
+        targets = {int(k): float(v) for k, v in targets.items()
+                   if float(v or 0) > 0}
+        line_by_pid = {}
+        for line in plan.line_ids:
+            line_by_pid.setdefault(line.product_id.id, line)
+        prod_by_id = {}
+        if targets:
+            for pr in env_sudo['product.product'].browse(
+                    list(targets)).read(
+                    ['default_code', 'name', 'display_name', 'uom_id']):
+                prod_by_id[pr['id']] = pr
+        bom_by_tmpl = {}
+        tmpl_ids = [p.get('product_tmpl_id', [0])[0]
+                    for p in prod_by_id.values()
+                    if p.get('product_tmpl_id')]
+        if tmpl_ids:
+            for b in env_sudo['mrp.bom'].search(
+                    [('product_tmpl_id', 'in', list(set(tmpl_ids)))]):
+                key = b.product_tmpl_id.id
+                if key not in bom_by_tmpl or b.product_id:
+                    bom_by_tmpl[key] = b
+        kit_cfgs = _mpp_find_kit_boms(env_sudo)
+        tree_groups = []
+        for kit in kit_cfgs:
+            key = kit['key']
+            bom = kit['bom']
+            items = []
+            for bl in bom.bom_line_ids:
+                pid = bl.product_id.id
+                if pid not in targets:
+                    continue
+                pr = prod_by_id.get(pid, {})
+                line = line_by_pid.get(pid)
+                tmpl_id = bl.product_id.product_tmpl_id.id
+                has_bom = tmpl_id in bom_by_tmpl or bool(
+                    env_sudo['mrp.bom'].search(
+                        [('product_tmpl_id', '=', tmpl_id)], limit=1))
+                avail = line.avail_tr if line else 0.0
+                items.append({
+                    'product_id': pid,
+                    'code': bl.product_id.default_code or '',
+                    'name': bl.product_id.display_name,
+                    'display': pr.get('display_name')
+                    or bl.product_id.display_name,
+                    'bom_qty': 1.0,
+                    'uom': pr.get('uom_id', [0, ''])[1]
+                    if pr.get('uom_id') else (
+                        bl.product_uom_id.name
+                        if bl.product_uom_id else ''),
+                    'has_bom': bool(has_bom),
+                    'level': 0,
+                    'stock_tr': line.stock_tr if line else 0.0,
+                    'reserved_tr': line.reserved_tr if line else 0.0,
+                    'avail_tr': avail,
+                    'gross': line.gross_qty if line else targets.get(pid, 0),
+                    'planned': targets.get(pid, 0),
+                    'producible': int(math.floor(avail))
+                    if avail > 0 else 0,
+                    'net': line.net_qty if line else 0.0,
+                    'order_qty': line.order_qty if line else 0.0,
+                    'seller': line.seller_id.display_name
+                    if line and line.seller_id else '',
+                    'last_price': line.last_price if line else 0.0,
+                    'last_currency':
+                        line.last_currency_id.name
+                        if line and line.last_currency_id else '',
+                    'last_usd': line.last_price_usd if line else 0.0,
+                    'last_try': self._mpp_line_try(env_sudo, plan, line),
+                    'last_date': self._mpp_month_year(
+                        line.last_date) if line else '',
+                    'rolled_try': line.rolled_try if line else 0.0,
+                    'rolled_total_try':
+                        line.rolled_total_try if line else 0.0,
+                    'rolled_usd': line.rolled_usd if line else 0.0,
+                    'rolled_total_usd':
+                        line.rolled_total_usd if line else 0.0,
+                    'subtotal': line.subtotal if line else 0.0,
+                    'incoming_info': line.incoming_info if line else 0.0,
+                    'open_mo_info': line.open_mo_info if line else 0.0,
+                    'top_breakdown': '',
+                    'warn': line.min_qty_warn if line else '',
+                })
+            items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
+            tree_groups.append({
+                'key': key,
+                'title': dict(base='Base', screws='Screws',
+                              outdoor='Outdoor', seat='Seat').get(key, key),
+                'bom_name': bom.product_tmpl_id.name or key,
+                'badge': key,
+                'count': len(items),
+                'items': items,
+            })
+        summary['tree_groups'] = tree_groups
+        summary['targets'] = {str(k): v for k, v in targets.items()}
+        # Per-top contribution: which target needs how much of each part.
+        contrib = self._mpp_need_per_top(env_sudo, plan)
+        code_by_pid = {}
+        if contrib:
+            all_p = set(contrib) | {t for v in contrib.values()
+                                    for t in v}
+            for pr in env_sudo['product.product'].browse(
+                    list(all_p)).read(['default_code', 'name']):
+                code_by_pid[pr['id']] = pr.get('default_code') or pr.get(
+                    'name') or str(pr['id'])
+        for g in tree_groups:
+            for it in g['items']:
+                it['top_breakdown'] = self._mpp_format_breakdown(
+                    contrib.get(it['product_id'], {}), code_by_pid)
+        # Flat lines also carry breakdown (tooltip on Planned column).
+        if 'groups' in summary:
+            for _rk, grp in summary['groups'].items():
+                for ln in grp.get('lines', []):
+                    ln['top_breakdown'] = self._mpp_format_breakdown(
+                        contrib.get(ln.get('product_id'), {}), code_by_pid)
+                    if ln.get('product_id') in line_by_pid:
+                        _l = line_by_pid[ln['product_id']]
+                        ln['last_try'] = self._mpp_line_try(
+                            env_sudo, plan, _l)
+        return summary
+
+    @api.model
+    def _mpp_line_try(self, env_sudo, plan, line):
+        """Last-buy price converted to TRY at the buy-date rate."""
+        if not line or not (line.last_price or 0.0):
+            return 0.0
+        cur = line.last_currency_id
+        if not cur or cur.id == plan.currency_id.id:
+            return float(line.last_price or 0.0)
+        buy_date = line.last_date or fields.Date.today()
+        try:
+            return cur._convert(
+                float(line.last_price or 0.0), plan.currency_id,
+                plan.company_id, buy_date)
+        except Exception:
+            return 0.0
+
+    @api.model
+    def _mpp_need_per_top(self, env_sudo, plan):
+        """Re-explode targets tracking per-top contribution.
+
+        @return {part_pid: {top_pid: gross_qty}}.
+        """
+        try:
+            targets = json.loads(plan.target_json or '{}')
+        except ValueError:
+            return {}
+        targets = {int(k): float(v) for k, v in targets.items()
+                   if float(v or 0) > 0}
+        if not targets:
+            return {}
+        Product = env_sudo['product.product']
+        Bom = env_sudo['mrp.bom']
+        bom_cache = {}
+
+        def _bom_of(pid):
+            prod = Product.browse(pid)
+            if not prod.exists():
+                return False
+            tid = prod.product_tmpl_id.id
+            if tid not in bom_cache:
+                b = Bom.search(
+                    [('product_tmpl_id', '=', tid),
+                     ('product_id', '=', pid)], limit=1)
+                if not b:
+                    b = Bom.search(
+                        [('product_tmpl_id', '=', tid)], limit=1)
+                bom_cache[tid] = b
+            return bom_cache[tid]
+
+        contrib = {}
+        stack = [(top, float(qty), top, 0)
+                 for top, qty in targets.items()]
+        guard = 0
+        while stack:
+            guard += 1
+            if guard > 60000:
+                break
+            pid, mult, top, level = stack.pop()
+            if level > _MPP_MAX_LEVEL:
+                continue
+            bom = _bom_of(pid)
+            if not bom:
+                contrib.setdefault(pid, {}).setdefault(top, 0.0)
+                contrib[pid][top] += mult
+                continue
+            if bom.type == 'phantom':
+                for bl in bom.bom_line_ids:
+                    stack.append((bl.product_id.id,
+                                  mult * float(bl.product_qty or 1.0),
+                                  top, level))
+                continue
+            contrib.setdefault(pid, {}).setdefault(top, 0.0)
+            contrib[pid][top] += mult
+            for bl in bom.bom_line_ids:
+                stack.append((bl.product_id.id,
+                              mult * float(bl.product_qty or 1.0),
+                              top, level + 1))
+        return contrib
+
+    @api.model
+    def _mpp_format_breakdown(self, per_top, code_by_pid):
+        """'CODE×qty, ...' short string (max 5 entries + '+N more')."""
+        if not per_top:
+            return ''
+        parts = []
+        for top, qty in sorted(per_top.items(),
+                               key=lambda kv: -kv[1])[:5]:
+            code = code_by_pid.get(top, str(top))
+            q = int(qty) if float(qty).is_integer() else round(qty, 2)
+            parts.append('%s×%s' % (code, q))
+        s = ', '.join(parts)
+        if len(per_top) > 5:
+            s += ' +%s more' % (len(per_top) - 5)
+        return s
+
+    @api.model
+    def get_sub_bom_cost(self, product_id, parent_qty=1.0, plan_id=False):
+        """Children of one product with TR avail + cost snapshot.
+
+        Capacity-style lazy expansion for the procurement tree.
+        @param product_id Parent product ID.
+        @param parent_qty Parent multiplier (usage per top unit).
+        @param plan_id Optional plan (uses its line snapshots first).
+        @return {'items': [...]}, each with bom_qty, avail, last
+            price/TRY/USD + short date, rolled TRY/USD unit, has_bom.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        prod = env_sudo['product.product'].browse(int(product_id))
+        if not prod.exists():
+            raise UserError(_('Product not found.'))
+        bom = env_sudo['mrp.bom'].search(
+            [('product_tmpl_id', '=', prod.product_tmpl_id.id),
+             ('product_id', '=', prod.id)], limit=1)
+        if not bom:
+            bom = env_sudo['mrp.bom'].search(
+                [('product_tmpl_id', '=', prod.product_tmpl_id.id)],
+                limit=1)
+        if not bom:
+            return {'items': []}
+        try:
+            mult = float(parent_qty or 1.0)
+        except (TypeError, ValueError):
+            mult = 1.0
+        child_ids = [bl.product_id.id for bl in bom.bom_line_ids]
+        tr_locs, _ncr = _mpp_tr_stock_locs(env_sudo)
+        onhand, reserv = {}, {}
+        if child_ids and tr_locs:
+            for sq in env_sudo['stock.quant'].read_group(
+                    [('product_id', 'in', child_ids),
+                     ('location_id', 'in', tr_locs)],
+                    ['product_id', 'quantity', 'reserved_quantity'],
+                    ['product_id']):
+                pid = sq['product_id'][0]
+                onhand[pid] = float(sq.get('quantity') or 0.0)
+                reserv[pid] = float(sq.get('reserved_quantity') or 0.0)
+        # Snapshot: plan lines first, else last PO line lookup.
+        snap = {}
+        plan = env_sudo['matia.procurement.plan'].browse(
+            int(plan_id)) if plan_id else False
+        if plan and plan.exists():
+            for line in plan.line_ids.filtered(
+                    lambda l: l.product_id.id in child_ids):
+                snap[line.product_id.id] = line
+        missing = [c for c in child_ids if c not in snap]
+        POLine = env_sudo['purchase.order.line']
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        order_dates = {}
+        last_buy = {}
+        for pid in missing:
+            found = POLine.search_read([
+                ('product_id', '=', pid),
+                ('order_id.company_id', '=', _MPP_TR_COMPANY_ID),
+                ('order_id.state', '!=', 'cancel'),
+            ], ['partner_id', 'date_planned', 'price_unit',
+                'currency_id', 'order_id'],
+                limit=1, order='date_planned desc, id desc')
+            if found:
+                last_buy[pid] = found[0]
+                if found[0].get('order_id'):
+                    oid = found[0]['order_id'][0]
+                    if oid not in order_dates:
+                        o = env_sudo['purchase.order'].browse(oid)
+                        if o.exists() and o.date_order:
+                            order_dates[oid] = fields.Datetime.from_string(
+                                o.date_order) if isinstance(
+                                o.date_order, str) else o.date_order
+        items = []
+        for bl in bom.bom_line_ids:
+            cp = bl.product_id
+            pid = cp.id
+            oh = max(0.0, onhand.get(pid, 0.0))
+            rs = max(0.0, reserv.get(pid, 0.0))
+            avail = max(0.0, oh - rs)
+            bqty = float(bl.product_qty or 1.0)
+            line = snap.get(pid)
+            if line:
+                lp = float(line.last_price or 0.0)
+                lcur = line.last_currency_id.name \
+                    if line.last_currency_id else ''
+                lusd = float(line.last_price_usd or 0.0)
+                ltry = self._mpp_line_try(env_sudo, plan, line)
+                ldate = self._mpp_month_year(line.last_date)
+                rtry = float(line.rolled_try or 0.0)
+                rusd = float(line.rolled_usd or 0.0)
+                seller = line.seller_id.display_name \
+                    if line.seller_id else ''
+            else:
+                lb = last_buy.get(pid, {})
+                lp = float(lb.get('price_unit') or 0.0)
+                cur = lb.get('currency_id')
+                lcur = cur[1] if cur else ''
+                buy_dt = None
+                if lb.get('order_id') and lb['order_id'][0] in order_dates:
+                    buy_dt = order_dates[lb['order_id'][0]]
+                elif lb.get('date_planned'):
+                    dp = lb['date_planned']
+                    buy_dt = fields.Datetime.from_string(dp) \
+                        if isinstance(dp, str) else dp
+                buy_date = buy_dt.date() if buy_dt else False
+                lusd, ltry = lp, lp
+                if cur and buy_date:
+                    cur_rec = env_sudo['res.currency'].browse(cur[0])
+                    comp = plan.company_id if plan and plan.exists() \
+                        else env_sudo['res.company'].browse(
+                            _MPP_TR_COMPANY_ID)
+                    try:
+                        if usd and cur[0] != usd.id:
+                            lusd = cur_rec._convert(
+                                lp, usd, comp, buy_date)
+                        ltry = cur_rec._convert(
+                            lp, comp.currency_id, comp, buy_date)
+                    except Exception:
+                        pass
+                ldate = self._mpp_month_year(buy_date) if buy_date else ''
+                rtry, rusd = ltry, lusd
+                seller = ''
+            has_bom = bool(env_sudo['mrp.bom'].search(
+                [('product_tmpl_id', '=', cp.product_tmpl_id.id)],
+                limit=1))
+            items.append({
+                'product_id': pid,
+                'code': cp.default_code or '',
+                'name': cp.display_name,
+                'bom_qty': bqty,
+                'gross': bqty * mult,
+                'uom': bl.product_uom_id.name
+                if bl.product_uom_id else '',
+                'has_bom': has_bom,
+                'stock_tr': oh,
+                'reserved_tr': rs,
+                'avail_tr': avail,
+                'producible': int(math.floor(avail / bqty))
+                if bqty > 0 and avail > 0 else 0,
+                'seller': seller,
+                'last_price': lp,
+                'last_currency': lcur,
+                'last_usd': lusd,
+                'last_try': ltry,
+                'last_date': ldate,
+                'rolled_try': rtry,
+                'rolled_usd': rusd,
+            })
+        items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
+        return {'items': items}
 
 
 class MatiaProcurementPlanLine(models.Model):
@@ -808,5 +1240,12 @@ class MatiaProcurementPlanLine(models.Model):
     rolled_total_usd = fields.Float(
         digits=(16, 2),
         help='Rolled USD unit cost x gross qty.')
+    rolled_try = fields.Float(
+        digits=(16, 4),
+        help='Rolled-up TRY unit cost: own last-buy price in TRY '
+             '(at last buy date rate) plus children rolled costs.')
+    rolled_total_try = fields.Float(
+        digits=(16, 2),
+        help='Rolled TRY unit cost x gross qty.')
     min_qty_warn = fields.Char()
     note = fields.Text()

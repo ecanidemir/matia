@@ -1,18 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- New preview screen: under the same app, visible to admin ONLY.
+    <!-- Production Plan: single page under the same app, visible to admin ONLY.
+         Opens the dashboard directly (like Capacity Plan); no sub-pages.
          The existing "TekRMD Device Capacity" menu is unchanged. -->
     <menuitem id="menu_matia_procurement_plan_dashboard"
-              name="Procurement &amp; Production Plan (Preview)"
+              name="Production Plan"
               parent="matia_stock_planning.menu_matia_stock_planning_app"
               action="action_matia_procurement_plan_dashboard"
               groups="base.group_system"
               sequence="20"/>
 
-    <menuitem id="menu_matia_procurement_plan_history"
-              name="Plan History"
-              parent="matia_stock_planning.menu_matia_procurement_plan_dashboard"
-              action="action_matia_procurement_plan_list"
-              groups="base.group_system"
-              sequence="10"/>
 </odoo>

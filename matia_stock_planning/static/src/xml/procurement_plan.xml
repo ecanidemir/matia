@@ -4,17 +4,28 @@
         <div class="o_matia_procurement_plan">
             <div class="mpp-header">
                 <div>
-                    <h2>Procurement &amp; Production Plan — Preview (TR)</h2>
-                    <p>Admin only. Preview creates no records. Step 3 can create draft RFQs (no confirmation sent).</p>
+                    <h2>Production Plan (TR)</h2>
+                    <p>Admin only. Preview creates no records. Draft RFQs create no confirmation.</p>
                 </div>
                 <div>
                     <button class="btn btn-outline-light btn-sm mpp-btn-reload">Refresh</button>
-                    <button class="btn btn-success btn-sm mpp-btn-excel">Excel</button>
+                    <button class="btn btn-success btn-sm mpp-btn-excel">Excel (suppliers)</button>
+                    <button class="btn btn-success btn-sm mpp-btn-excel-tree">Excel (tree)</button>
                 </div>
             </div>
 
-            <div class="mpp-step mpp-step-1">
-                <h4>1. Step — Enter quantities (USA+TR stock shown)</h4>
+            <div class="mpp-step mpp-entry-wrap">
+                <h4>1. Enter quantities (USA+TR stock shown)</h4>
+                <div class="mpp-entry-toolbar mb-2">
+                    <label>Fill to N:
+                        <input type="number" min="0" value="50"
+                            class="form-control form-control-sm mpp-fill-n d-inline-block"
+                            style="width:90px;"/>
+                    </label>
+                    <button class="btn btn-secondary btn-sm mpp-btn-fill">Fill to N (avail → N)</button>
+                    <button class="btn btn-outline-secondary btn-sm mpp-btn-clear">Clear</button>
+                    <button class="btn btn-primary btn-sm mpp-btn-calc">Calculate tree + cost</button>
+                </div>
                 <table class="table table-sm table-striped">
                     <thead>
                         <tr>
@@ -24,13 +35,28 @@
                     </thead>
                     <tbody class="mpp-entry-body"/>
                 </table>
-                <button class="btn btn-primary mpp-btn-create">Confirm — Go to Net Requirement</button>
             </div>
 
-            <div class="mpp-step mpp-step-2" style="display:none;">
-                <h4>2. Step — Net requirement (TR stock netted)</h4>
-                <button class="btn btn-primary btn-sm mpp-btn-explode">Calculate</button>
-                <button class="btn btn-secondary btn-sm mpp-btn-suppliers">Go to Supplier Preview</button>
+            <div class="mpp-step mpp-tree-wrap" style="display:none;">
+                <h4>2. Tree + cost — <span class="mpp-tree-title"/></h4>
+                <div class="mpp-tree-toolbar mb-2">
+                    <input type="text" placeholder="Search code/name…"
+                        class="form-control form-control-sm mpp-tree-search d-inline-block"
+                        style="width:240px;"/>
+                    <button class="btn btn-outline-secondary btn-sm mpp-btn-expand-all">Expand all</button>
+                    <button class="btn btn-outline-secondary btn-sm mpp-btn-collapse-all">Collapse all</button>
+                </div>
+                <div class="mpp-tree-body"/>
+            </div>
+
+            <div class="mpp-step mpp-rfq-wrap" style="display:none;">
+                <h4>3. Supplier preview + draft RFQs</h4>
+                <div>Total: <strong class="mpp-total">0</strong></div>
+                <div class="mt-2 mb-2">
+                    <button class="btn btn-info btn-sm mpp-btn-rfq-preview">Preview Draft RFQs</button>
+                    <button class="btn btn-success btn-sm mpp-btn-rfq-create">Create Draft RFQs</button>
+                </div>
+                <div class="mpp-rfq-preview mt-2 mb-2"/>
                 <div class="mpp-tabs mt-2 mb-2"/>
                 <table class="table table-sm table-striped">
                     <thead>
@@ -42,16 +68,6 @@
                     </thead>
                     <tbody class="mpp-summary-body"/>
                 </table>
-            </div>
-
-            <div class="mpp-step mpp-step-3" style="display:none;">
-                <h4>3. Step — Supplier-based preview + cost + draft RFQs</h4>
-                <div>Total: <strong class="mpp-total">0</strong></div>
-                <div class="mt-2 mb-2">
-                    <button class="btn btn-info btn-sm mpp-btn-rfq-preview">Preview Draft RFQs</button>
-                    <button class="btn btn-success btn-sm mpp-btn-rfq-create">Create Draft RFQs</button>
-                </div>
-                <div class="mpp-rfq-preview mt-2 mb-2"/>
                 <div class="mpp-kits mt-2 mb-2"/>
                 <div class="mpp-suppliers"/>
                 <h5 class="mt-2">Created RFQs</h5>
