@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Admin-only client action: yeni onizleme ekrani (mevcut sayfaya dokunmaz) -->
+    <!-- Admin-only client action: new preview screen (existing page untouched) -->
     <record id="action_matia_procurement_plan_dashboard" model="ir.actions.client">
-        <field name="name">Tedarik &amp; Uretim Plani (Onizleme)</field>
+        <field name="name">Procurement &amp; Production Plan (Preview)</field>
         <field name="tag">matia_procurement_plan.dashboard</field>
         <field name="target">main</field>
     </record>
 
-    <!-- Plan listesi (admin) -->
+    <!-- Plan list (admin) -->
     <record id="view_matia_procurement_plan_tree" model="ir.ui.view">
         <field name="name">matia.procurement.plan.tree</field>
         <field name="model">matia.procurement.plan</field>
@@ -40,7 +40,7 @@
                         <field name="note"/>
                     </group>
                     <notebook>
-                        <page string="Satirlar">
+                        <page string="Lines">
                             <field name="line_ids">
                                 <tree>
                                     <field name="product_id"/>
@@ -50,6 +50,10 @@
                                     <field name="net_qty"/>
                                     <field name="order_qty"/>
                                     <field name="seller_id"/>
+                                    <field name="last_price"/>
+                                    <field name="last_currency_id"/>
+                                    <field name="last_price_usd"/>
+                                    <field name="last_date"/>
                                     <field name="unit_price"/>
                                     <field name="subtotal"/>
                                 </tree>
@@ -62,7 +66,7 @@
     </record>
 
     <record id="action_matia_procurement_plan_list" model="ir.actions.act_window">
-        <field name="name">Plan Gecmisi</field>
+        <field name="name">Plan History</field>
         <field name="res_model">matia.procurement.plan</field>
         <field name="view_mode">tree,form</field>
     </record>

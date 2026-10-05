@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Matia toplu tedarik/uretim ONIZLEME plani (admin-only, preview-only).
+"""Matia bulk procurement/production PREVIEW plan (admin-only, preview-only).
 
-Kapsam (1. kademe): giris urunlerine adet gir -> tum agaci patlat -> TR stoga
-gore netle -> tedarikci bazinda onizleme + maliyet. Kayit ACMAZ (PO/MO yok).
+Scope (phase 1): enter qty for entry products -> explode full tree -> net
+against TR stock -> supplier-based preview + cost. Creates NO records
+(no PO/MO).
 
-Gelecek kademe (bu dosyada YOK, plan olarak sakli): action_create_drafts()
-tedarikci basina tek draft PO + draft MO'lari uretecek.
+Future phase (NOT in this file, kept as plan): action_create_drafts()
+will create one draft PO per supplier + draft MOs.
 
-Mevcut Capacity Plan sayfasina dokunulmaz: bu dosya bagimsizdir, ortak
-desenler kopyalanmistir (import yok).
+Never touch the existing Capacity Plan page: this file is standalone,
+shared patterns were copied (no imports).
 """
+import calendar
 import json
 import math
 
@@ -17,7 +19,7 @@ from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 
 
-# Kit BOM'lari: mevcut Capacity Plan ile ayni kaynak (ayni ID + isim fallback).
+# Kit BOMs: same source as the existing Capacity Plan (same ID + name fallback).
 _MPP_KIT_BOMS = [
     {'key': 'base', 'preferred_id': 1766,
      'names': ['TekRMD Common Parts v2', 'TekRMD Common Parts']},
@@ -34,7 +36,7 @@ _MPP_TR_COMPANY_ID = 1
 
 
 def _mpp_env_sudo(self):
-    """Tum sirketleri kapsayan sudo env (mevcut moduldeki kanitlanmis desen)."""
+    """sudo env covering all companies (proven pattern from this module)."""
     all_company_ids = self.env['res.company'].with_context(
         active_test=False).sudo().search([]).ids
     return self.with_context(
@@ -44,7 +46,7 @@ def _mpp_env_sudo(self):
 
 
 def _mpp_tr_stock_locs(env_sudo):
-    """WHTR/Stock% internal lokasyonlar (NCR haric)."""
+    """WHTR/Stock% internal locations (excluding NCR)."""
     locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
     stock, ncr = [], []
     for loc in locs:
@@ -59,7 +61,7 @@ def _mpp_tr_stock_locs(env_sudo):
 
 
 def _mpp_find_kit_boms(env_sudo):
-    """4 kit BOM'unu ID-oncelikli, isim-fallback ile bul."""
+    """Find the 4 kit BOMs, ID-first with name fallback."""
     found = []
     for cfg in _MPP_KIT_BOMS:
         bom = False
@@ -88,23 +90,23 @@ def _mpp_find_kit_boms(env_sudo):
 
 class MatiaProcurementPlan(models.Model):
     _name = 'matia.procurement.plan'
-    _description = 'Matia Toplu Tedarik/Uretim Onizleme Plani (TR)'
+    _description = 'Matia Bulk Procurement/Production Preview Plan (TR)'
     _order = 'id desc'
 
     name = fields.Char(required=True, default=lambda self: _('New'))
     company_id = fields.Many2one(
         'res.company', required=True, default=_MPP_TR_COMPANY_ID,
-        help='Bu plan sadece TR sirketi icindir (ID=1).')
+        help='This plan is for the TR company only (ID=1).')
     state = fields.Selection([
-        ('draft', 'Taslak (miktar girisi)'),
-        ('calculated', 'Net ihtiyac hesaplandi'),
-        ('supplier_review', 'Tedarikci onizleme'),
-        # ('done', ...) : GELECEK KADEME (taslak PO/MO acma). Simdilik yok.
+        ('draft', 'Draft (qty entry)'),
+        ('calculated', 'Net requirement calculated'),
+        ('supplier_review', 'Supplier preview'),
+        # ('done', ...) : FUTURE PHASE (draft PO/MO creation). Not yet.
     ], default='draft', required=True)
     target_json = fields.Text(
-        help='JSON: {product_id: adet} - Ekran 1 girisleri.')
+        help='JSON: {product_id: qty} - Screen 1 entries.')
     currency_id = fields.Many2one(
-        'res.currency', help='Maliyet toplamlari para birimi (default sirket).')
+        'res.currency', help='Total cost currency (default company).')
     total_cost = fields.Float(compute='_compute_total_cost', store=True)
     line_count = fields.Integer(compute='_compute_line_count', store=True)
     note = fields.Text()
@@ -123,15 +125,15 @@ class MatiaProcurementPlan(models.Model):
             plan.line_count = len(plan.line_ids)
 
     # ------------------------------------------------------------------
-    # Ekran 1: giris urunleri (125 ana urun, TR+USA stok gostergeli)
+    # Screen 1: entry products (125 top products, TR+USA stock indicators)
     # ------------------------------------------------------------------
     @api.model
     def get_entry_products(self):
-        """4 kitin SADECE ana urunleri (alt urunler yok). Salt-okunur."""
+        """ONLY the top products of the 4 kits (no sub-products). Read-only."""
         env_sudo = _mpp_env_sudo(self)
         kits = _mpp_find_kit_boms(env_sudo)
         if not kits:
-            raise UserError(_('Kit BOMlari bulunamadi.'))
+            raise UserError(_('Kit BOMs not found.'))
 
         top_map = {}  # pid -> {'kit_key': ...}
         for kit in kits:
@@ -148,7 +150,7 @@ class MatiaProcurementPlan(models.Model):
 
         pids = list(top_map)
         tr_locs, _ncr = _mpp_tr_stock_locs(env_sudo)
-        # USA lokasyonlari (bilgi amacli, netlemeye girmez)
+        # USA locations (info only, excluded from netting)
         usa_locs = []
         for loc in env_sudo['stock.location'].search(
                 [('usage', '=', 'internal')]):
@@ -195,7 +197,7 @@ class MatiaProcurementPlan(models.Model):
 
     @api.model
     def create_plan(self, items):
-        """Ekran 1 onay: {product_id: adet} ile plan basligi acar."""
+        """Screen 1 confirm: opens a plan header with {product_id: qty}."""
         targets = {}
         for row in items or []:
             try:
@@ -206,7 +208,7 @@ class MatiaProcurementPlan(models.Model):
             if pid > 0 and qty > 0:
                 targets[str(pid)] = qty
         if not targets:
-            raise UserError(_('En az bir urune adet girin.'))
+            raise UserError(_('Enter a quantity for at least one product.'))
         company = self.env['res.company'].browse(_MPP_TR_COMPANY_ID)
         seq = self.env['ir.sequence'].sudo().next_by_code(
             'matia.procurement.plan') or _('MPP')
@@ -220,14 +222,14 @@ class MatiaProcurementPlan(models.Model):
         return {'plan_id': plan.id, 'name': plan.name}
 
     # ------------------------------------------------------------------
-    # Ekran 2: patlatma + TR netleme (salt-okunur kaynaklar, plan satiri yazar)
+    # Screen 2: explosion + TR netting (read-only sources, writes plan lines)
     # ------------------------------------------------------------------
     @api.model
     def action_explode_and_net(self, plan_id):
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
-            raise UserError(_('Plan bulunamadi.'))
+            raise UserError(_('Plan not found.'))
         try:
             targets = json.loads(plan.target_json or '{}')
         except ValueError:
@@ -235,12 +237,12 @@ class MatiaProcurementPlan(models.Model):
         targets = {int(k): int(v) for k, v in targets.items()
                    if int(v or 0) > 0}
         if not targets:
-            raise UserError(_('Planda hedef miktar yok.'))
+            raise UserError(_('No target quantities on the plan.'))
 
         Product = env_sudo['product.product']
         Bom = env_sudo['mrp.bom']
 
-        # Toplu BOM onbellek: ilgili tum sablonlarin BOM'lari (chunk'li).
+        # Bulk BOM cache: BOMs of all related templates (chunked).
         tmpl_of = {}
         prods = Product.browse(list(targets)).read(
             ['product_tmpl_id'])
@@ -262,7 +264,7 @@ class MatiaProcurementPlan(models.Model):
                 chunk = todo[i:i + 200]
                 for b in Bom.search(
                         [('product_tmpl_id', 'in', chunk)]):
-                    # Urun-varyant BOM'u sablon BOM'una tercih et
+                    # Prefer product-variant BOM over template BOM
                     key = b.product_tmpl_id.id
                     if key not in bom_cache or b.product_id:
                         bom_cache[key] = b
@@ -274,7 +276,7 @@ class MatiaProcurementPlan(models.Model):
             iter_guard += 1
             if iter_guard > 60000:
                 raise UserError(
-                    _('Agac cok derin/genis, patlatma sinirlandi.'))
+                    _('Tree too deep/wide, explosion limited.'))
             pid, mult, level, path = stack.pop()
             if level > _MPP_MAX_LEVEL:
                 continue
@@ -286,7 +288,7 @@ class MatiaProcurementPlan(models.Model):
                 _load_boms([tmpl_id])
             bom = bom_cache.get(tmpl_id)
             if not bom:
-                # Yaprak: satin alinan parca (ustten gelen carpanla)
+                # Leaf: purchased part (with the multiplier from above)
                 need[pid] = need.get(pid, 0.0) + mult
                 m = meta.setdefault(pid, {'level': level,
                                          'paths': set()})
@@ -294,13 +296,13 @@ class MatiaProcurementPlan(models.Model):
                 m['paths'].add(path)
                 continue
             if bom.type == 'phantom':
-                # Kit: satir degil, carpan tasi
+                # Kit: not a line, carry the multiplier
                 for bl in bom.bom_line_ids:
                     stack.append((bl.product_id.id,
                                   mult * float(bl.product_qty or 1.0),
                                   level, path))
                 continue
-            # normal / subcontract: ihtiyaci yaz + altini patlat
+            # normal / subcontract: record need + explode below
             need[pid] = need.get(pid, 0.0) + mult
             m = meta.setdefault(pid, {'level': level, 'paths': set()})
             m['level'] = min(m['level'], level)
@@ -308,15 +310,15 @@ class MatiaProcurementPlan(models.Model):
             for bl in bom.bom_line_ids:
                 child_path = '%s>%s' % (path, pid)
                 if bl.product_id.id in child_path.split('>'):
-                    continue  # cevrim korumasi
+                    continue  # cycle protection
                 stack.append((bl.product_id.id,
                               mult * float(bl.product_qty or 1.0),
                               level + 1, child_path))
 
         if not need:
-            raise UserError(_('Patlatma sonucu urun cikmadi.'))
+            raise UserError(_('Explosion returned no products.'))
 
-        # TR stok (tek read_group) + bilgi kolonlari
+        # TR stock (single read_group) + info columns
         tr_locs, _ncr = _mpp_tr_stock_locs(env_sudo)
         pids = list(need)
         onhand, reserv = {}, {}
@@ -330,7 +332,7 @@ class MatiaProcurementPlan(models.Model):
                 onhand[pid] = float(sq.get('quantity') or 0.0)
                 reserv[pid] = float(sq.get('reserved_quantity') or 0.0)
 
-        # Bilgi: onayli gelen PO + acik MO ciktisi (DUSMEZ, sadece gosterim)
+        # Info: confirmed incoming POs + open MO output (NOT netted, display only)
         incoming, mo_out = {}, {}
         po_ids = env_sudo['purchase.order'].search([
             ('company_id', '=', _MPP_TR_COMPANY_ID),
@@ -357,7 +359,7 @@ class MatiaProcurementPlan(models.Model):
                     mo_out[g['product_id'][0]] = float(
                         g.get('product_qty') or 0.0)
 
-        # Rota + UoM bilgisi (toplu read)
+        # Route + UoM info (bulk read)
         prod_info = {}
         for pr in Product.browse(pids).read([
                 'default_code', 'name', 'display_name', 'uom_id',
@@ -373,7 +375,7 @@ class MatiaProcurementPlan(models.Model):
                     list(all_route_ids)).read(['name']):
                 route_names[r['id']] = r['name']
 
-        # Eski satirlari temizle, yeniden yaz (onizleme tekrarlanabilir)
+        # Clear old lines, rewrite (preview is repeatable)
         plan.line_ids.unlink()
         lines = []
         for pid, gross in need.items():
@@ -415,38 +417,58 @@ class MatiaProcurementPlan(models.Model):
         return self._plan_summary(env_sudo, plan)
 
     # ------------------------------------------------------------------
-    # Ekran 3: tedarikci atama + maliyet onizleme (yazma: sadece plan satiri)
+    # Screen 3: supplier assignment + cost preview (writes: plan lines only)
+    # Last purchase price is shown in its own currency plus a USD
+    # conversion using the USD rate of the last purchase date.
     # ------------------------------------------------------------------
     @api.model
     def action_assign_suppliers(self, plan_id):
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
-            raise UserError(_('Plan bulunamadi.'))
+            raise UserError(_('Plan not found.'))
 
         POLine = env_sudo['purchase.order.line']
         Supplier = env_sudo['product.supplierinfo']
         buy_lines = plan.line_ids.filtered(
             lambda l: l.route_type == 'buy' and l.order_qty > 0)
         buy_pids = buy_lines.mapped('product_id').ids
-        # Son tedarikci (TR onayli PO'lar oncelikli)
-        last_partner = {}
+        # Last purchase per product (TR confirmed POs first).
+        # pid -> {partner_id, price_unit, currency_id, order_id, date_planned}
+        last_buy = {}
+        order_ids = set()
         if buy_pids:
             for pid in buy_pids:
                 found = POLine.search_read([
                     ('product_id', '=', pid),
                     ('order_id.company_id', '=', _MPP_TR_COMPANY_ID),
                     ('order_id.state', '!=', 'cancel'),
-                ], ['partner_id', 'date_planned'],
+                ], ['partner_id', 'date_planned', 'price_unit',
+                    'currency_id', 'order_id'],
                     limit=1, order='date_planned desc, id desc')
                 if not found:
                     found = POLine.search_read([
                         ('product_id', '=', pid),
                         ('order_id.state', '!=', 'cancel'),
-                    ], ['partner_id', 'date_planned'],
+                    ], ['partner_id', 'date_planned', 'price_unit',
+                        'currency_id', 'order_id'],
                         limit=1, order='date_planned desc, id desc')
-                if found and found[0].get('partner_id'):
-                    last_partner[pid] = found[0]['partner_id'][0]
+                if found:
+                    last_buy[pid] = found[0]
+                    if found[0].get('order_id'):
+                        order_ids.add(found[0]['order_id'][0])
+        # PO date (date_order) in one batch; fallback to line date_planned.
+        order_dates = {}
+        if order_ids:
+            for o in env_sudo['purchase.order'].browse(
+                    list(order_ids)).read(['date_order']):
+                if o.get('date_order'):
+                    order_dates[o['id']] = fields.Datetime.from_string(
+                        o['date_order']) if isinstance(
+                        o['date_order'], str) else o['date_order']
+
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
 
         tmpl_map = {}
         for pr in env_sudo['product.product'].browse(buy_pids).read(
@@ -457,14 +479,15 @@ class MatiaProcurementPlan(models.Model):
             pid = line.product_id.id
             pr = tmpl_map.get(pid, {})
             seller = False
-            lp = last_partner.get(pid)
+            lb = last_buy.get(pid, {})
+            lp = lb.get('partner_id')
             sellers = Supplier.search_read([
                 ('product_tmpl_id', '=', pr.get('product_tmpl_id', [0])[0]
                  if pr.get('product_tmpl_id') else 0),
             ], ['name', 'price', 'min_qty', 'currency_id',
                 'product_uom', 'sequence'])
             if lp:
-                cand = [s for s in sellers if s['name'][0] == lp]
+                cand = [s for s in sellers if s['name'][0] == lp[0]]
                 if cand:
                     seller = sorted(
                         cand, key=lambda s: s['price'])[0]
@@ -473,10 +496,13 @@ class MatiaProcurementPlan(models.Model):
                     sellers,
                     key=lambda s: (s.get('sequence') or 99,
                                    s['price']))[0]
+            vals = self._last_buy_vals(
+                env_sudo, plan, usd, lb, order_dates)
             if not seller:
-                line.write({'note': _('Tedarikci yok (seller tanimsiz).')})
+                vals['note'] = _('No supplier (no seller defined).')
+                line.write(vals)
                 continue
-            # UoM cevrilmis birim fiyat
+            # UoM-converted unit price
             price = float(seller['price'] or 0.0)
             s_uom = seller.get('product_uom')
             if s_uom and line.uom_id and s_uom[0] != line.uom_id.id:
@@ -484,26 +510,69 @@ class MatiaProcurementPlan(models.Model):
                 price = line.uom_id._compute_quantity(
                     1.0, s_uom_rec, round=False) * price \
                     if price else 0.0
-                # Not: fiyat seller UoM basina; miktar urun UoM'unda.
-                # Tutar = order_qty(urun UoM) * cevrilen fiyat.
+                # Note: price is per seller UoM; qty is in product UoM.
+                # Amount = order_qty(product UoM) * converted price.
             warn = ''
             if seller.get('min_qty') and line.order_qty < seller['min_qty']:
-                warn = _('Min. siparis %s') % seller['min_qty']
-            # Para birimi: sirket para birimine cevir
+                warn = _('Min. order %s') % seller['min_qty']
+            # Currency: convert to the company currency
             cur = seller.get('currency_id')
             if cur and plan.currency_id and cur[0] != plan.currency_id.id:
                 cur_rec = env_sudo['res.currency'].browse(cur[0])
                 price = cur_rec._convert(
                     price, plan.currency_id, plan.company_id,
                     fields.Date.today())
-            line.write({
+            vals.update({
                 'seller_id': seller['name'][0],
                 'unit_price': price,
                 'subtotal': price * float(line.order_qty or 0.0),
                 'min_qty_warn': warn,
             })
+            line.write(vals)
         plan.state = 'supplier_review'
         return self._plan_summary(env_sudo, plan)
+
+    @api.model
+    def _last_buy_vals(self, env_sudo, plan, usd, lb, order_dates):
+        """Last-purchase snapshot: price in own currency, USD at the
+        historical rate of the purchase date, and date as 'Mon YYYY'."""
+        vals = {'last_price': 0.0, 'last_currency_id': False,
+                'last_price_usd': 0.0, 'last_date': False}
+        if not lb:
+            return vals
+        price = float(lb.get('price_unit') or 0.0)
+        cur = lb.get('currency_id')
+        cur_id = cur[0] if cur else False
+        buy_dt = None
+        if lb.get('order_id') and lb['order_id'][0] in order_dates:
+            buy_dt = order_dates[lb['order_id'][0]]
+        elif lb.get('date_planned'):
+            dp = lb['date_planned']
+            buy_dt = fields.Datetime.from_string(dp) if isinstance(
+                dp, str) else dp
+        buy_date = buy_dt.date() if buy_dt else fields.Date.today()
+        usd_price = price
+        if cur_id and usd:
+            cur_rec = env_sudo['res.currency'].browse(cur_id)
+            if cur_id != usd.id:
+                usd_price = cur_rec._convert(
+                    price, usd, plan.company_id, buy_date)
+        vals.update({
+            'last_price': price,
+            'last_currency_id': cur_id,
+            'last_price_usd': usd_price,
+            'last_date': buy_date,
+        })
+        return vals
+
+    @api.model
+    def _mpp_month_year(self, date_val):
+        """'Sep 2025' style label, always English regardless of locale."""
+        if not date_val:
+            return ''
+        d = fields.Date.from_string(date_val) if isinstance(
+            date_val, str) else date_val
+        return '%s %s' % (calendar.month_abbr[d.month], d.year)
 
     @api.model
     def _plan_summary(self, env_sudo, plan):
@@ -531,13 +600,18 @@ class MatiaProcurementPlan(models.Model):
                 if line.seller_id else '',
                 'price': line.unit_price,
                 'subtotal': line.subtotal,
+                'last_price': line.last_price,
+                'last_currency': line.last_currency_id.name
+                if line.last_currency_id else '',
+                'last_usd': line.last_price_usd,
+                'last_date': self._mpp_month_year(line.last_date),
                 'warn': line.min_qty_warn or '',
                 'note': line.note or '',
             }
             g['lines'].append(val)
             g['cost'] += line.subtotal or 0.0
             g['count'] += 1
-        # Tedarikci kirilimi (buy grubu)
+        # Supplier breakdown (buy group)
         suppliers = {}
         for line in plan.line_ids.filtered(
                 lambda l: l.route_type == 'buy' and l.order_qty > 0):
@@ -545,7 +619,7 @@ class MatiaProcurementPlan(models.Model):
             s = suppliers.setdefault(
                 sid, {'seller_id': sid,
                       'seller_name': line.seller_id.display_name
-                      if line.seller_id else _('Tedarikcisiz'),
+                       if line.seller_id else _('No supplier'),
                       'lines': [], 'cost': 0.0})
             s['lines'].append({
                 'product_id': line.product_id.id,
@@ -554,6 +628,11 @@ class MatiaProcurementPlan(models.Model):
                 'order_qty': line.order_qty,
                 'price': line.unit_price,
                 'subtotal': line.subtotal,
+                'last_price': line.last_price,
+                'last_currency': line.last_currency_id.name
+                if line.last_currency_id else '',
+                'last_usd': line.last_price_usd,
+                'last_date': self._mpp_month_year(line.last_date),
                 'warn': line.min_qty_warn or '',
             })
             s['cost'] += line.subtotal or 0.0
@@ -569,7 +648,7 @@ class MatiaProcurementPlan(models.Model):
 
 class MatiaProcurementPlanLine(models.Model):
     _name = 'matia.procurement.plan.line'
-    _description = 'Matia Onizleme Plan Satiri (TR)'
+    _description = 'Matia Preview Plan Line (TR)'
 
     plan_id = fields.Many2one('matia.procurement.plan', required=True,
                               ondelete='cascade')
@@ -581,21 +660,31 @@ class MatiaProcurementPlanLine(models.Model):
     avail_tr = fields.Float(digits=(16, 3))
     incoming_info = fields.Float(
         digits=(16, 3),
-        help='Bilgi: onayli gelen PO miktari (netten DUSMEZ).')
+        help='Info: confirmed incoming PO qty (NOT netted).')
     open_mo_info = fields.Float(
         digits=(16, 3),
-        help='Bilgi: acik MO uretimi (netten DUSMEZ).')
+        help='Info: open MO production (NOT netted).')
     net_qty = fields.Float(digits=(16, 3))
     order_qty = fields.Float(digits=(16, 3))
     uom_id = fields.Many2one('uom.uom')
     route_type = fields.Selection([
-        ('buy', 'Satin alma'),
-        ('make', 'Uretim'),
-        ('subcontract', 'Fason'),
-        ('unknown', 'Bilinmiyor'),
+        ('buy', 'Buy'),
+        ('make', 'Make'),
+        ('subcontract', 'Subcontract'),
+        ('unknown', 'Unknown'),
     ], default='unknown', required=True)
     seller_id = fields.Many2one('res.partner')
     unit_price = fields.Float(digits=(16, 4))
     subtotal = fields.Float(digits=(16, 2))
+    last_price = fields.Float(
+        digits=(16, 4),
+        help='Last purchase unit price in its own currency (snapshot).')
+    last_currency_id = fields.Many2one('res.currency')
+    last_price_usd = fields.Float(
+        digits=(16, 4),
+        help='Last purchase price converted to USD at the USD rate '
+             'of the last purchase date (snapshot).')
+    last_date = fields.Date(
+        help='Last purchase date (shown as Mon YYYY).')
     min_qty_warn = fields.Char()
     note = fields.Text()

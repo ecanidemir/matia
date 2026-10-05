@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Onizleme Excel export (ayri route; mevcut Capacity export'a dokunmaz)."""
+"""Preview Excel export (separate route; existing Capacity export untouched)."""
 import io
 import json
 from datetime import datetime
@@ -13,6 +13,13 @@ except ImportError:
     xlsxwriter = None
 
 
+def _last_str(itm):
+    if not itm.get('last_price'):
+        return ''
+    cur = itm.get('last_currency') or ''
+    return '%s %s' % (itm.get('last_price'), cur)
+
+
 class MatiaProcurementPlanController(http.Controller):
 
     @http.route('/matia_procurement_plan/export_xlsx', type='http',
@@ -21,7 +28,7 @@ class MatiaProcurementPlanController(http.Controller):
         data_json = kwargs.get('data')
         if not data_json:
             return request.not_found()
-        # Sadece admin grubu indirebilir
+        # Admin group only
         if not request.env.user.has_group('base.group_system'):
             return request.not_found()
         data = json.loads(data_json)
@@ -30,16 +37,18 @@ class MatiaProcurementPlanController(http.Controller):
         total = data.get('total', 0)
 
         if not xlsxwriter:
-            lines = ['\ufeff' + 'Tedarikci Onizleme - %s' % plan_name]
+            lines = ['\ufeff' + 'Supplier Preview - %s' % plan_name]
             for grp in groups:
                 lines.append('--- %s (%.2f) ---' % (
                     grp.get('title', ''), grp.get('cost', 0)))
                 for itm in grp.get('items', []):
-                    lines.append('%s;%s;%s;%s' % (
+                    lines.append('%s;%s;%s;%s;%s;%s;%s' % (
                         itm.get('code', ''), itm.get('name', ''),
-                        itm.get('order_qty', ''), itm.get('subtotal', '')))
+                        itm.get('order_qty', ''), _last_str(itm),
+                        itm.get('last_usd', ''), itm.get('last_date', ''),
+                        itm.get('subtotal', '')))
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Tedarik_Onizleme_%s.csv' % datetime.now().strftime(
+            filename = 'Supplier_Preview_%s.csv' % datetime.now().strftime(
                 '%Y%m%d_%H%M')
             return request.make_response(
                 content,
@@ -51,7 +60,7 @@ class MatiaProcurementPlanController(http.Controller):
 
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-        ws = workbook.add_worksheet('Tedarikci Onizleme')
+        ws = workbook.add_worksheet('Supplier Preview')
         title_fmt = workbook.add_format(
             {'bold': True, 'font_size': 14})
         header_fmt = workbook.add_format(
@@ -60,27 +69,31 @@ class MatiaProcurementPlanController(http.Controller):
         num_fmt = workbook.add_format({'border': 1, 'align': 'center'})
         text_fmt = workbook.add_format({'border': 1})
         row = 0
-        ws.write(row, 0, 'Tedarikci Onizleme - %s' % plan_name, title_fmt)
+        ws.write(row, 0, 'Supplier Preview - %s' % plan_name, title_fmt)
         row += 1
-        ws.write(row, 0, 'Toplam: %.2f' % (total or 0))
+        ws.write(row, 0, 'Total: %.2f' % (total or 0))
         row += 2
         for grp in groups:
             ws.write(row, 0, '%s (%.2f)' % (
                 grp.get('title', ''), grp.get('cost', 0)), header_fmt)
             row += 1
-            ws.write_row(row, 0, ['Kod', 'Urun', 'Siparis', 'Tutar'],
+            ws.write_row(row, 0, ['Code', 'Product', 'Order', 'Last Price',
+                                  'USD', 'Last Buy', 'Subtotal'],
                          header_fmt)
             row += 1
             for itm in grp.get('items', []):
                 ws.write(row, 0, itm.get('code', ''), text_fmt)
                 ws.write(row, 1, itm.get('name', ''), text_fmt)
                 ws.write(row, 2, itm.get('order_qty', 0) or 0, num_fmt)
-                ws.write(row, 3, itm.get('subtotal', 0) or 0, num_fmt)
+                ws.write(row, 3, _last_str(itm), text_fmt)
+                ws.write(row, 4, itm.get('last_usd', 0) or 0, num_fmt)
+                ws.write(row, 5, itm.get('last_date', ''), text_fmt)
+                ws.write(row, 6, itm.get('subtotal', 0) or 0, num_fmt)
                 row += 1
             row += 1
         workbook.close()
         output.seek(0)
-        filename = 'Tedarik_Onizleme_%s.xlsx' % datetime.now().strftime(
+        filename = 'Supplier_Preview_%s.xlsx' % datetime.now().strftime(
             '%Y%m%d_%H%M')
         return request.make_response(
             output.getvalue(),

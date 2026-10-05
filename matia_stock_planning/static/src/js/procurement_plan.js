@@ -83,8 +83,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var sel = this._selectedItems();
             if (!sel.length) {
                 self.displayNotification({
-                    title: _t('Uyari'),
-                    message: _t('En az bir urune adet girin.'),
+                    title: _t('Warning'),
+                    message: _t('Enter a quantity for at least one product.'),
                     type: 'warning',
                 });
                 return;
@@ -201,19 +201,46 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         '<td class="text-center">' + l.net + '</td>' +
                         '<td class="text-center">' + l.order_qty + '</td>' +
                         '<td>' + (l.seller || '') + '</td>' +
+                        '<td class="text-right">' + self._fmtLast(l) + '</td>' +
+                        '<td class="text-right">' + (l.last_usd || 0) + '</td>' +
+                        '<td class="text-center">' + (l.last_date || '') + '</td>' +
                         '<td class="text-right">' + (l.subtotal || 0) + '</td>' +
                         '</tr>';
                 }
             }
             this.$('.mpp-summary-body').html(html);
             this.$('.mpp-total').text(this.summary.total_cost || 0);
-            // Tedarikci kirilimi (3. adim)
+            // Supplier breakdown (step 3): per-supplier tables with
+            // last-purchase price, USD conversion and last buy date.
             var sups = (this.summary && this.summary.suppliers) || [];
             var sh = '';
             for (var s = 0; s < sups.length; s++) {
-                sh += '<h5>' + sups[s].seller_name + ' — ' + sups[s].cost + '</h5>';
+                sh += '<h5>' + sups[s].seller_name + ' — ' + sups[s].cost + '</h5>' +
+                    '<table class="table table-sm table-striped"><thead><tr>' +
+                    '<th>Code</th><th>Product</th><th>Order</th>' +
+                    '<th>Last Price</th><th>USD</th><th>Last Buy</th><th>Subtotal</th>' +
+                    '</tr></thead><tbody>';
+                var slines = sups[s].lines || [];
+                for (var j = 0; j < slines.length; j++) {
+                    var sl = slines[j];
+                    sh += '<tr>' +
+                        '<td>' + (sl.code || '') + '</td>' +
+                        '<td>' + (sl.name || '') + '</td>' +
+                        '<td class="text-center">' + sl.order_qty + '</td>' +
+                        '<td class="text-right">' + self._fmtLast(sl) + '</td>' +
+                        '<td class="text-right">' + (sl.last_usd || 0) + '</td>' +
+                        '<td class="text-center">' + (sl.last_date || '') + '</td>' +
+                        '<td class="text-right">' + (sl.subtotal || 0) + '</td>' +
+                        '</tr>';
+                }
+                sh += '</tbody></table>';
             }
             this.$('.mpp-suppliers').html(sh);
+        },
+
+        _fmtLast: function (l) {
+            if (!l.last_price) return '';
+            return l.last_price + (l.last_currency ? ' ' + l.last_currency : '');
         },
     });
 
