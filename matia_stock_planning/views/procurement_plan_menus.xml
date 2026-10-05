@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Yeni onizleme ekrani: ayni app altinda, SADECE admin gorur.
+         Mevcut "TekRMD Device Capacity" menusu degismedi. -->
+    <menuitem id="menu_matia_procurement_plan_dashboard"
+              name="Tedarik &amp; Uretim Plani (Onizleme)"
+              parent="matia_stock_planning.menu_matia_stock_planning_app"
+              action="action_matia_procurement_plan_dashboard"
+              groups="base.group_system"
+              sequence="20"/>
+
+    <menuitem id="menu_matia_procurement_plan_history"
+              name="Plan Gecmisi"
+              parent="matia_stock_planning.menu_matia_procurement_plan_dashboard"
+              action="action_matia_procurement_plan_list"
+              groups="base.group_system"
+              sequence="10"/>
+</odoo>

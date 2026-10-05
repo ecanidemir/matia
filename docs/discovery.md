@@ -85,3 +85,62 @@
 - **Mobil Görünüm & Scroll Kilidi Düzeltmesi:** Mobil ekranlarda (`@media (max-width: 991px)`) `.table-responsive` içindeki `calc(100vh - 380px)` sınırlaması kaldırılarak iç/dış çift kaydırma kilidi çözüldü; ana kapsayıcıya `6rem` alt boşluk verilerek Common Screws dahil en alttaki bileşenlerin mobil tarayıcı çubukları arkasında kaybolması önlendi.
 - **Mobil Lokasyon Rozetleri Yan Yana:** `.msp-filter-group` içine `.msp-loc-options` sarmalayıcı eklendi; mobilde TR/USA rozetleri `flex-wrap: nowrap` ile yan yana durur, `.loc-sub` (WHTR/Stock, WHUS/Stock) `display:block` ile alt satıra alınarak genişlikten tasarruf edilir.
 - **Ürün Sütunu Hizalama & Kaydırma:** Reçetesi olmayan satırlarda boş `msp-bom-spacer` yerine solda nokta ikonu (`.msp-no-bom-dot`, `fa-circle`) kullanılarak tüm ürün adları aynı hizaya getirildi; buton ve spacer genişliği 22px'e eşitlendi. Ana ürün hücresi (`td-product`, `.prod-code`, `.prod-name`) `white-space: nowrap` + `width:auto` ile içerik bitiminde biter, alt satıra geçmez. Alt ürünlerde girinti span'i (`sub-bom-indent`) kaldırıldı (ikon + satır rengi yeterli sinyal); `[part code]` (`sub-prod-code`) `nowrap`, ürün adı wrap olabilir.
+
+## Cloudpepper Infra (2026-09-25)
+
+- Server V15-12C24R-199.247.21.64: 12 CPU, ~24GB RAM, Ubuntu 22.04, Python 3.10, Odoo 15.0 Community (15.0.20240109, Update pending). Tek instance: matia.odoobulut.com, workers=2.
+- 2 haftalik Monitoring: CPU avg <%10 idle (max %20-50, 14 Eylul %90 spike), Memory %70-85 surekli yuksek (20.5GB used), Disk stabil ~250GB, DB connections 120-290/500 anormal yuksek (2 worker icin beklenmez).
+- Config: limit_time_cpu=600 (def 60), limit_time_real=1200 (def 120) cok yuksek -> takilan istekler worker bloklar, memory/connection sismesi suphesi. log_level=error, proxy_mode=True, list_db=False dogru.
+- Tavsiye: once limit_time dusur (120/240), Show-all options + PostgreSQL sekmesi incelenmeli (max_cron_threads, db_maxconn, limit_memory_soft/hard), sonra memory izlenip workers 4 e kademeli artirim.
+
+
+- Kullanim (2026-09-25): TR+USA 24 saat, ayni anda max 2 kullanici, cok hafif kullanim; ileride max 4 eszamanli. 12C/24GB server bu yuk icin oversize, workers=2 su an yeterli.
+
+
+## Cloudpepper Config Baseline (2026-09-25, PDF 4 sayfa)
+
+- workers=2, db_maxconn=64, max_cron_threads=2, limit_time_cpu=600, limit_time_real=1200, limit_time_real_cron=-1, limit_memory_soft=2147483648, limit_memory_hard=2684354560, limit_request=8192, longpolling_port=8072, proxy_mode=True, list_db=False, db_name set, log_level=error, smtp localhost:25.
+- Oneri: limit_time_cpu 120, limit_time_real 240, limit_time_real_cron 300, max_cron_threads 1, db_maxconn 32; workers 2 sabit. Save+Restart mesai disi, oncesi backup.
+- MCP notu: odoo_matia default instance test-argerobotik.cloudpepper.site isaret ediyor ve auth fail veriyor; matia prod canli kontrolu yapilamadi, sadece config uzerinden oneri verildi.
+
+
+## MCP Env Karisikligi Cozumu (2026-09-25)
+
+- Sorun: Windows User-level env ODOO_URL/ODOO_DB/ODOO_USERNAME test-argerobotik.cloudpepper.site isaret ediyordu; workspace .env (matia.odoobulut.com) eziliyordu, odoo_matia yanlis projeye baglaniyordu.
+- Cozum: User-level 3 degisken silindi (kullanici onayli). Bu oturumun MCP prosesi eski env ile basladigi icin restart/reconnect sonrasi matia degerlerini gorecek.
+- UYARI: argerobotik projesi bu User-level degiskenlere bagimli olabilir; o projenin workspace inde kendi .env dosyasi olmali, yoksa eklenmeli.
+
+
+## MCP Env Yukleme Notu (2026-09-25)
+
+- opencode.json {env:ODOO_*} yalnizca proses environment'indan okunur; workspace .env OTOMATIK yuklenmez. Bos gelirse MCP url/db bos gorunur.
+- Cozum: opencode'u powershell -ExecutionPolicy Bypass -File scripts\\start-opencode.ps1 ile baslat (once .env'i yukler). Dogrudan opencode komutuyla baslatirsan MCP baglanamaz.
+- Mevcut scripts/load_env.ps1 iki ust klasordeki odoo/.env dosyasini ariyor (o dosya yok) - bu workspace icin start-opencode.ps1 kullanilmali.
+
+
+## Canli API Kontrolu (2026-09-25, dogrudan XML-RPC)
+
+- Baglanti OK (uid=2, server 15.0-20240109). Aktif internal kullanici: 8, portal: 0. Kurulu modul: 212.
+- Aktif cron: 35, suresi gecmis: 0 -> cron saglikli, max_cron_threads 2->1 guvenli.
+- mail.mail: outgoing 0, sent 3, exception 85 -> giden posta BOZUK (sebepler: OAuth access token hatasi, SMTP 'Connection unexpectedly closed'). localhost:25 postfix/OAuth ayri konu olarak incelenmeli.
+- MCP notu: odoo_matia MCP bu oturumda hala bos env gosteriyor (eski proses); canli kontroller dogrudan XML-RPC ile yapildi.
+
+## Goc Envanteri (2026-09-25, Odoo 15 -> 19 planlama)
+
+- Baglanti OK: 15.0-20240109, uid=2. Aktif kullanici 8 (tamami internal, portal 0). Kurulu modul 211 (99 Odoo standard + 74 Projetgrup/TR + 35 OCA + 2 diger 3rd-party + 1 matia_*).
+- Kritik sayilar: res.partner 394 (94 musteri / 227 tedarikci / 230 sirket); product.product=product.template=1174 (varyantsiz 1:1); mrp.bom 511 (1568 satir; 152 normal / 6 phantom / 353 subcontract; sirket: 495 TR + 9 US + 7 global); sale.order 152 (149 sale + 3 cancel, 0 acik); mrp.production 2982 (1610 cancel + 1356 done + 16 acik); purchase.order 159 (157 purchase + 2 acik); stock.picking 2032 (1684 done + 334 cancel + 14 acik); stock.quant 9442 (4635 qty>0, 3745 negatif! 140 rezerve); stock.move 42063 (33954 done + 7684 cancel).
+- Yan veriler: pricelist 2 + 123 item; workcenter 6 + routing.workcenter 151 + workorder 709 (3 acik); uom 24; product.category 8; supplierinfo 1443 (1042 template'te seller var); warehouse 2 (WHTR/TR, WHUS/US); location 168 (154 internal); attachment 749 (481'i sale/mrp/purchase/picking'e bagli); res.groups 81.
+- Tarih araligi: sale 2022-12-28..2026-09-10 (2026'da 60 siparis); mrp 2022..2026-09-22, 2024'te 2701 MO spike (cogu iptal, toplu deneme/ice aktarma suphesi); purchase 2023..2026-07-20 (2024'te 115); picking 2022-11..2026-09-21.
+- KRITIK BULGU muhasebe: kullanilmiyor denmesine ragmen account.move posted=30574 (stock_account/mrp_account otomatik uretmis). Goc'te muhasebe tasinmaz ama Odoo 19'da valuation/CoA karari sart.
+- KRITIK BULGU stok kalitesi: 3745 negatif quant var (stock_no_negative kurulu olmasina ragmen). Cutover oncesi envanter sayimi + negatif temizligi sart; quant birebir tasinmaz.
+- `matia_*` prefixli tek modul: matia_stock_planning (AbstractModel matia.stock.planning, 7 xml_id, ~517 satir py + 763 satir legacy JS + 427 satir QWeb + 247 satir xlsx controller). Diger ozel gorunumluler matia_* degil: mrp_ux, mrp_analytic_link, mrp_maintenance_link, whitelabel (Projet/Projetgrup), sh_hide_menu (BulutKobi), bsi_merge_any_purchase, web_pwa_oca. En buyuk port riski 74 Projetgrup l10n_tr modulu (19 karsiligi yoksa kurulmaz karari verilmeli).
+- Urun yapisi: template=product (varyant yok) gocu kolaylastirir. sale_ok 252 / purchase_ok 1013; detailed_type: 1096 storable, 68 consu, 9 service, 1 gift. BOM hard-coded ID'ler: 1766/1737/1738/1736 (19'da isme gore arama oncelikli olmali).
+
+## Tedarik & Uretim Onizleme Plani (2026-10-01, preview-only, admin-only)
+
+- Yeni bagimsiz kod: `matia.procurement.plan` + `matia.procurement.plan.line` (`models/matia_procurement_plan.py`), 3 asamali client action (`tag matia_procurement_plan.dashboard`), ayri JS/QWeb/SCSS (`mpp-` prefix), ayri Excel route `/matia_procurement_plan/export_xlsx`.
+- Mevcut Capacity sayfasina DOKUNULMADI (stock_planning.js/xml/views, controllers/main.py ayni). Manifest'e `purchase` depends + yeni dosyalar eklendi; menu ayni app altinda 2. menü, `groups=base.group_system` (sadece admin).
+- Taslak PO/MO acma YOK (2. kademe, `action_create_drafts` henuz yazilmadi). Plan satirlari kalici saklanir (seller_id/order_qty/price snapshot) ki 2. kademe ayni veriyi kullansin.
+- Canli dogrulama: `stock.warehouse.orderpoint` company 1'de 0 kayit (otomatik min/max ikmal YOK); rotalar Buy(5)/Manufacture(6)/Resupply Subcontractor on Order(9) aktif; subcontract BOM 353 (company 1 ornekli). Son-tedarikci mantigi `purchase.order.line order by date_planned desc` ile calisiyor (ornek 1151 -> partner 1226).
+- Kural kararlari: TR-only netleme (`WHTR/Stock%`, NCR haric, `max(0,onhand-reserved)`), yoldaki (onayli PO + acik MO) sadece bilgi kolonu, tedarikci basina tek RFQ + birlestirme uyarisi (2. kademe), snapshot fiyat (TRY, vergisiz), UoM cevrilmis tutar.
+

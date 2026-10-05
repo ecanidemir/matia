@@ -1,0 +1,37 @@
+/* Matia Procurement Plan (preview-only, admin). Mevcut msp stillerine dokunmaz. */
+.o_matia_procurement_plan {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+    background-color: #f8fafc;
+    padding: 1.5rem;
+    color: #1e293b;
+
+    .mpp-header {
+        background: linear-gradient(135deg, #7c2d12 0%, #431407 100%);
+        color: #fff;
+        padding: 1.25rem 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 1.25rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+
+        h2 { margin: 0; font-weight: 700; color: #fff; }
+        p { margin: 0; font-size: 0.85rem; color: #fed7aa; }
+    }
+
+    .mpp-step {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
+    }
+
+    .mpp-tabs .btn { margin-right: 0.35rem; }
+    .mpp-qty { max-width: 110px; }
+}

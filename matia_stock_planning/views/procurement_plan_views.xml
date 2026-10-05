@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Admin-only client action: yeni onizleme ekrani (mevcut sayfaya dokunmaz) -->
+    <record id="action_matia_procurement_plan_dashboard" model="ir.actions.client">
+        <field name="name">Tedarik &amp; Uretim Plani (Onizleme)</field>
+        <field name="tag">matia_procurement_plan.dashboard</field>
+        <field name="target">main</field>
+    </record>
+
+    <!-- Plan listesi (admin) -->
+    <record id="view_matia_procurement_plan_tree" model="ir.ui.view">
+        <field name="name">matia.procurement.plan.tree</field>
+        <field name="model">matia.procurement.plan</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="name"/>
+                <field name="state"/>
+                <field name="line_count"/>
+                <field name="total_cost"/>
+                <field name="create_uid"/>
+                <field name="create_date"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_matia_procurement_plan_form" model="ir.ui.view">
+        <field name="name">matia.procurement.plan.form</field>
+        <field name="model">matia.procurement.plan</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <field name="name" readonly="1"/>
+                        <field name="company_id" readonly="1"/>
+                        <field name="currency_id" readonly="1"/>
+                        <field name="total_cost" readonly="1"/>
+                        <field name="note"/>
+                    </group>
+                    <notebook>
+                        <page string="Satirlar">
+                            <field name="line_ids">
+                                <tree>
+                                    <field name="product_id"/>
+                                    <field name="route_type"/>
+                                    <field name="gross_qty"/>
+                                    <field name="avail_tr"/>
+                                    <field name="net_qty"/>
+                                    <field name="order_qty"/>
+                                    <field name="seller_id"/>
+                                    <field name="unit_price"/>
+                                    <field name="subtotal"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_matia_procurement_plan_list" model="ir.actions.act_window">
+        <field name="name">Plan Gecmisi</field>
+        <field name="res_model">matia.procurement.plan</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+</odoo>

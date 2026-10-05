@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="MatiaProcurementPlan.Dashboard">
+        <div class="o_matia_procurement_plan">
+            <div class="mpp-header">
+                <div>
+                    <h2>Tedarik &amp; Uretim Plani — Onizleme (TR)</h2>
+                    <p>Sadece admin. Kayit acmaz (PO/MO yok). Taslak acma sonraki kademede.</p>
+                </div>
+                <div>
+                    <button class="btn btn-outline-light btn-sm mpp-btn-reload">Yenile</button>
+                    <button class="btn btn-success btn-sm mpp-btn-excel">Excel</button>
+                </div>
+            </div>
+
+            <div class="mpp-step mpp-step-1">
+                <h4>1. Adim — Urunlere adet gir (USA+TR stok gostergeli)</h4>
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Kod</th><th>Urun</th><th>Kit</th>
+                            <th>TR Kullanilabilir</th><th>USA Stok</th><th>Adet</th>
+                        </tr>
+                    </thead>
+                    <tbody class="mpp-entry-body"/>
+                </table>
+                <button class="btn btn-primary mpp-btn-create">Onayla — Net Ihtiyaca Gec</button>
+            </div>
+
+            <div class="mpp-step mpp-step-2" style="display:none;">
+                <h4>2. Adim — Net ihtiyac (TR stogu dusulmus)</h4>
+                <button class="btn btn-primary btn-sm mpp-btn-explode">Hesapla</button>
+                <button class="btn btn-secondary btn-sm mpp-btn-suppliers">Tedarikci Onizlemeye Gec</button>
+                <div class="mpp-tabs mt-2 mb-2"/>
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Kod</th><th>Urun</th><th>Seviye</th><th>Brut</th>
+                            <th>TR Kull.</th><th>Net</th><th>Siparis</th>
+                            <th>Tedarikci</th><th>Tutar</th>
+                        </tr>
+                    </thead>
+                    <tbody class="mpp-summary-body"/>
+                </table>
+            </div>
+
+            <div class="mpp-step mpp-step-3" style="display:none;">
+                <h4>3. Adim — Tedarikci bazinda onizleme + maliyet</h4>
+                <div>Toplam: <strong class="mpp-total">0</strong></div>
+                <div class="mpp-suppliers"/>
+            </div>
+        </div>
+    </t>
+</templates>

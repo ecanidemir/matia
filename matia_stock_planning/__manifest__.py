@@ -24,20 +24,26 @@ across TR and USA warehouse locations to calculate:
         'base',
         'stock',
         'mrp',
+        'purchase',
         'web',
     ],
     'data': [
         'security/ir.model.access.csv',
         'views/stock_planning_views.xml',
         'views/stock_planning_menus.xml',
+        'views/procurement_plan_views.xml',
+        'views/procurement_plan_menus.xml',
     ],
     'assets': {
         'web.assets_backend': [
             'matia_stock_planning/static/src/scss/stock_planning.scss',
             'matia_stock_planning/static/src/js/stock_planning.js',
+            'matia_stock_planning/static/src/scss/procurement_plan.scss',
+            'matia_stock_planning/static/src/js/procurement_plan.js',
         ],
         'web.assets_qweb': [
             'matia_stock_planning/static/src/xml/stock_planning.xml',
+            'matia_stock_planning/static/src/xml/procurement_plan.xml',
         ],
     },
     'installable': True,
