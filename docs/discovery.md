@@ -231,3 +231,9 @@
 - 2026-10-06 ek (paylasim notu): E2CBAN02 ornegi paylasimi kanitladi — planda ~65 hedef varken Cable 4 BOM'da, Shrink 9 BOM'da kullanildigi icin dallar kirpildi (Cable 10->1, Shrink 283->23); sadece bu BOM'daki Connector/Faston tam pay aldi. `producible_json` artik `share`+`driver` de tutar; `share_n>1` hucrede kehribar rakam + `⇄ % · N parents` notu (JS `_sharedNote`, SCSS `.msp-shared-note`).
 - Plan: `plans/producible_bottomup.md`. Deploy: Python degisikligi Git Deploy + Upgrade/restart (mesai disi + backup).
 
+## Expand All + Cross-BOM Search (2026-10-06, production plan Tab 2)
+
+- Expand All yalniz seviye-1 aciyordu (recursive degildi); ayrica tek RPC hatasi chain'i reject edip render'i hic calistirmadigi icin buton "olu" gorunuyordu. Simdi BFS ile tum orman acilir (cycle/depth<=10/node<=2000 guard); basarisiz dal uyarir ama kalan acilir + render calisir.
+- Arama kutusu sadece yuklenmis (acik) satirlari filtreliyordu; kapali subtree gorunmezdi. 2+ harfte `search_tree(plan_id, q)` tum ormani server-side gezer (get_sub_bom_cost ile ayni BOM cozumu, depth<=10, cap 100) ve her eslesmeyi parent trail ile dondurur (`trail` TOP-ilk, `path_ids` genisletme icin, `group_key/top_*`). Ornek: E1CBRN06 -> 4 sonuc, her biri ust kod zinciriyle. `Show` filtreyi temizler, yolu top-down acar (net'ler taze parent satirlardan, sayilar exact), satira scroll + sari flash (`.msp-flash`).
+- Kural: paylasilan alt agaclar her ust icin AYRI gezilir (dedupe yok) - ayni parca N BOM'daysa N sonuc doner. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup).
+
