@@ -156,3 +156,41 @@ grup kontrolü; `mrp.bom.search` N+1'leri.
 (Fault 2) — canlı alan doğrulaması upgrade'e kadar bloklu.
 
 **Doğrulama:** PY-OK, JS1-OK, JS2-OK, XML-OK.
+
+## PERFORMANS PAKETİ (2026-10-06, kullanıcı seçimi)
+
+Kullanıcı 4 paketten "Performans paketi"ni seçti. JS API değişmedi;
+tüm değişiklikler `matia_procurement_plan.py` içinde.
+
+**Önbellekli ağaç (lazy recompute):**
+- Yeni alan `built_target_json`: satırlar hangi hedeflerle
+  kurulduysa onun kopyası (`action_explode_and_net` sonunda yazılır).
+- `get_tree_with_cost`: satırlar mevcut + hedefler aynıysa tam
+  yeniden kurulum ATLANIR (unlink + yüzlerce create/write yok).
+  Özet `_plan_summary` + `_kits_from_stored` ile salt-okunur kurulur
+  (kayıtlı rolled değerlerden; `_compute_rollup` ile aynı
+  `_aggregate_kits` yardımcısını kullanır, sonuç birebir aynı).
+- Yan fayda: yeniden görüntüleme artık satırlardaki RFQ/MO
+  izlerini silmiyor (unlink tehlikesi bu yolda kapandı).
+- Hedef değişirse veya eski planlarda alan boşsa tam kurulum çalışır.
+
+**Toplu sorgular (N+1 → 1):**
+- Ağaç `has_bom` yedeği: satır-başı `mrp.bom.search` → eksik
+  şablonlara tek `in` sorgusu.
+- `get_sub_bom_cost` `has_bom`: çocuk-başı search → tek `in`
+  sorgusu.
+
+**No-op write eleme:**
+- Yeni `_mpp_write_if_changed`: değerler aynıysa `write`
+  atlanır (UPDATE + stored-computed zinciri yok). Assign
+  döngüsündeki 3 write + rollup write'ı buna bağlandı. Many2one
+  karşılaştırması id ile yapılır.
+
+**Önce/sonra (plan başına, N = satır sayısı):**
+- Yeniden görüntüleme: ~2N write + N okuma + patlatma → ~10 sabit
+  okuma, 0 write.
+- İlk kurulum: -2N `mrp.bom.search`, değişmeyen satırlarda -N write.
+
+**Doğrulama:** PY-OK. Canlı upgrade sonrası ilk açılışta tam
+kurulumun bir kez çalışacağı, ikinci açılışta önbellekten
+geleceği test edilmeli (insan adımı).

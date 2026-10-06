@@ -116,7 +116,7 @@ Tüm satırlar kod okumasıyla doğrulandı; Capacity satırları salt-okunur
 | `create_plan(items)` | `[{product_id, target_qty}]` | Yeni plan id | Boş/geçersiz items → UserError | Faz 0 kod okuma |
 | `action_explode_and_net(plan_id)` | plan id | BOM patlatma + net ihtiyaç satırları | Cycle/phantom → guard ile durur, clamp ≥ 0 | Faz 1 kod okuma |
 | `action_assign_suppliers(plan_id)` | plan id | Seller + fiyat + UoM ataması | Kur yok → ürün-adlı UserError (Faz 3 helper); fiyat yok → 0 + uyarı | Faz 2-4 edit + gözden geçirme |
-| `get_tree_with_cost(plan_id)` | plan id | USD/TRY rollup'lu ağaç | TRY kuru yok → satır 0.0 + log warning | Faz 1 + Faz 3 log |
+| `get_tree_with_cost(plan_id)` | plan id | USD/TRY rollup'lu ağaç (satırlar hedeflerle aynıysa önbellekten: yeniden patlatma yok, RFQ/MO izleri korunur) | TRY kuru yok → satır 0.0 + log warning | Faz 1 + Faz 3 log + performans paketi |
 | `get_sub_bom_cost(product_id, parent_qty, plan_id=False)` | ürün, üst adet, opsiyonel plan | Alt-BOM maliyet kırılımı | BOM'suz ürün → alt satırsız kendi satırı | Faz 0 kod okuma |
 | `get_supplier_summary(plan_id)` | plan id | Tedarikçi grupları + TR/US toplamlar | Atanmamış satırlar ayrı listelenir | Faz 0 kod okuma |
 | `action_create_supplier_rfq(plan_id, seller_id, company_id, confirm)` | plan, seller, company, onay | PO listesi veya `needs_confirm` | Mevcut draft + onaysız → `needs_confirm`; uygun satır yoksa UserError | Faz 0 (rfq dosyası okuma) |

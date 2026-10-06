@@ -113,6 +113,10 @@ class MatiaProcurementPlan(models.Model):
     edge_json = fields.Text(
         help='JSON: {parent_id: {child_id: qty}} - BOM edges for '
              'rolled-up cost (Screen 2 output).')
+    built_target_json = fields.Text(
+        help='Copy of target_json the lines were built from. '
+             'get_tree_with_cost skips the full rebuild when it '
+             'still matches (cached view: no unlink/recreate).')
     currency_id = fields.Many2one(
         'res.currency', help='Total cost currency (default company).')
     total_cost = fields.Float(compute='_compute_total_cost', store=True)
@@ -513,6 +517,7 @@ class MatiaProcurementPlan(models.Model):
             {str(p): {str(c): q for c, q in ch.items()}
              for p, ch in edges.items()})
         plan.state = 'calculated'
+        plan.built_target_json = plan.target_json
         return self._plan_summary(env_sudo, plan)
 
     # ------------------------------------------------------------------
@@ -620,7 +625,7 @@ class MatiaProcurementPlan(models.Model):
             if line.route_type not in ('buy', 'subcontract') or not (
                     line.order_qty or 0) > 0:
                 # Price snapshot only (no seller / no order).
-                line.write(vals)
+                self._mpp_write_if_changed(line, vals)
                 continue
             seller_pid = False
             price = 0.0
@@ -680,7 +685,7 @@ class MatiaProcurementPlan(models.Model):
                 seller_pid = seller['name'][0]
             if not seller_pid:
                 vals['note'] = _('No supplier (no seller defined).')
-                line.write(vals)
+                self._mpp_write_if_changed(line, vals)
                 continue
             vals.update({
                 'seller_id': seller_pid,
@@ -692,7 +697,7 @@ class MatiaProcurementPlan(models.Model):
             # tree shows Est. USD (rolled_usd x order) instead.
             if line.route_type == 'buy':
                 vals['subtotal'] = price * float(line.order_qty or 0.0)
-            line.write(vals)
+            self._mpp_write_if_changed(line, vals)
         plan.state = 'supplier_review'
         rollup = self._compute_rollup(env_sudo, plan)
         summary = self._plan_summary(env_sudo, plan)
@@ -700,6 +705,51 @@ class MatiaProcurementPlan(models.Model):
         summary['rolled_total_usd'] = rollup['total']
         summary['rolled_total_try'] = rollup.get('total_try', 0.0)
         return summary
+
+    @api.model
+    def _aggregate_kits(self, env_sudo, targets, unit_usd, unit_try):
+        """Kit totals from entry quantities (members only, no double
+        count: sub-product cost already lives inside each entry's
+        rolled cost).
+
+        @param env_sudo: sudo environment.
+        @param targets: {str(pid): qty} entry quantities.
+        @param unit_usd: callable(pid) -> rolled USD per unit.
+        @param unit_try: callable(pid) -> rolled TRY per unit.
+        @return: {'kits': [...], 'total': grand_usd,
+            'total_try': grand_try}.
+        """
+        kit_of = {}
+        kit_names = {}
+        for kit in _mpp_find_kit_boms(env_sudo):
+            key = kit['key']
+            kit_names[key] = kit['bom'].product_tmpl_id.name or key
+            for bl in kit['bom'].bom_line_ids:
+                kit_of.setdefault(bl.product_id.id, key)
+        kits = {}
+        grand = 0.0
+        grand_try = 0.0
+        for pid_str, tq in (targets or {}).items():
+            try:
+                pid = int(pid_str)
+                tqf = float(tq or 0)
+            except (TypeError, ValueError):
+                continue
+            if tqf <= 0:
+                continue
+            ext = unit_usd(pid) * tqf
+            grand += ext
+            grand_try += unit_try(pid) * tqf
+            key = kit_of.get(pid, 'other')
+            k = kits.setdefault(
+                key, {'key': key,
+                      'name': kit_names.get(key, 'Other'),
+                      'cost': 0.0, 'cost_try': 0.0, 'count': 0})
+            k['cost'] += ext
+            k['cost_try'] += unit_try(pid) * tqf
+            k['count'] += 1
+        return {'kits': list(kits.values()), 'total': grand,
+                'total_try': grand_try}
 
     @api.model
     def _compute_rollup(self, env_sudo, plan):
@@ -789,7 +839,7 @@ class MatiaProcurementPlan(models.Model):
         for pid, line in line_by_pid.items():
             unit_u = _unit_usd(pid)
             unit_t = _unit_try(pid)
-            line.write({
+            self._mpp_write_if_changed(line, {
                 'rolled_usd': unit_u,
                 'rolled_total_usd': unit_u * float(line.gross_qty or 0.0),
                 'rolled_try': unit_t,
@@ -802,37 +852,8 @@ class MatiaProcurementPlan(models.Model):
             targets = json.loads(plan.target_json or '{}')
         except ValueError:
             targets = {}
-        kit_of = {}
-        kit_names = {}
-        for kit in _mpp_find_kit_boms(env_sudo):
-            key = kit['key']
-            kit_names[key] = kit['bom'].product_tmpl_id.name or key
-            for bl in kit['bom'].bom_line_ids:
-                kit_of.setdefault(bl.product_id.id, key)
-        kits = {}
-        grand = 0.0
-        grand_try = 0.0
-        for pid_str, tq in targets.items():
-            try:
-                pid = int(pid_str)
-                tqf = float(tq or 0)
-            except (TypeError, ValueError):
-                continue
-            if tqf <= 0:
-                continue
-            ext = _unit_usd(pid) * tqf
-            grand += ext
-            grand_try += _unit_try(pid) * tqf
-            key = kit_of.get(pid, 'other')
-            k = kits.setdefault(
-                key, {'key': key,
-                      'name': kit_names.get(key, 'Other'),
-                      'cost': 0.0, 'cost_try': 0.0, 'count': 0})
-            k['cost'] += ext
-            k['cost_try'] += _unit_try(pid) * tqf
-            k['count'] += 1
-        return {'kits': list(kits.values()), 'total': grand,
-                'total_try': grand_try}
+        return self._aggregate_kits(env_sudo, targets, _unit_usd,
+                                    _unit_try)
 
     @api.model
     def _mpp_company_code(self, env_sudo, company_id):
@@ -933,6 +954,54 @@ class MatiaProcurementPlan(models.Model):
                 'company_name': comp[1] if comp else '',
             }
         return res
+
+    @api.model
+    def _kits_from_stored(self, env_sudo, plan, targets):
+        """Kit totals from the stored rolled line values (no writes).
+
+        Same shape as _compute_rollup's return, but the per-unit costs
+        come from the lines written by the last full build instead of
+        being recomputed. Used by the cached tree path.
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record.
+        @param targets: {str(pid): qty} entry quantities.
+        @return: {'kits': [...], 'total': grand_usd,
+            'total_try': grand_try}.
+        """
+        unit_by_pid = {}
+        for line in plan.line_ids:
+            unit_by_pid.setdefault(
+                line.product_id.id,
+                (float(line.rolled_usd or 0.0),
+                 float(line.rolled_try or 0.0)))
+        return self._aggregate_kits(
+            env_sudo, targets,
+            lambda pid: unit_by_pid.get(pid, (0.0, 0.0))[0],
+            lambda pid: unit_by_pid.get(pid, (0.0, 0.0))[1])
+
+    @api.model
+    def _mpp_write_if_changed(self, line, vals):
+        """Write only values that actually changed.
+
+        Preview/rollup recompute the same snapshot on every run;
+        skipping no-op writes avoids one UPDATE plus stored-computed
+        cascades per untouched line. Many2one values compare by id.
+        @param line: matia.procurement.plan.line record.
+        @param vals: write dict.
+        @return: True when a write happened.
+        """
+        diff = {}
+        for field, new in vals.items():
+            cur = line[field]
+            if hasattr(cur, '_name') and cur._name:
+                if (cur.id or False) != (new or False):
+                    diff[field] = new
+            elif cur != new:
+                diff[field] = new
+        if diff:
+            line.write(diff)
+            return True
+        return False
 
     @api.model
     def _last_buy_vals(self, env_sudo, plan, usd, lb, order_dates):
@@ -1080,14 +1149,28 @@ class MatiaProcurementPlan(models.Model):
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
-        summary = self.action_explode_and_net(plan.id)
-        summary = self.action_assign_suppliers(plan.id)
         try:
             targets = json.loads(plan.target_json or '{}')
         except ValueError:
             targets = {}
         targets = {int(k): float(v) for k, v in targets.items()
                    if float(v or 0) > 0}
+        # Cached view: when the lines were already built from these
+        # exact targets, skip the full rebuild (no unlink/recreate,
+        # no re-netting). This also protects RFQ/MO links written on
+        # the lines after the first build. Any target change (or a
+        # plan built before built_target_json existed) rebuilds.
+        if plan.line_ids and (plan.built_target_json or '') == (
+                plan.target_json or ''):
+            summary = self._plan_summary(env_sudo, plan)
+            kits = self._kits_from_stored(env_sudo, plan, {
+                str(k): v for k, v in targets.items()})
+            summary['kits'] = kits['kits']
+            summary['rolled_total_usd'] = kits['total']
+            summary['rolled_total_try'] = kits['total_try']
+        else:
+            summary = self.action_explode_and_net(plan.id)
+            summary = self.action_assign_suppliers(plan.id)
         line_by_pid = {}
         for line in plan.line_ids:
             line_by_pid.setdefault(line.product_id.id, line)
@@ -1108,6 +1191,19 @@ class MatiaProcurementPlan(models.Model):
                 if key not in bom_by_tmpl or b.product_id:
                     bom_by_tmpl[key] = b
         kit_cfgs = _mpp_find_kit_boms(env_sudo)
+        # One query for kit-line templates missing from bom_by_tmpl
+        # (was: one search per line in the loop below).
+        missing_tmpls = set()
+        for kit in kit_cfgs:
+            for bl in kit['bom'].bom_line_ids:
+                _t = bl.product_id.product_tmpl_id.id
+                if _t not in bom_by_tmpl:
+                    missing_tmpls.add(_t)
+        extra_bom_tmpls = set()
+        if missing_tmpls:
+            for b in env_sudo['mrp.bom'].search(
+                    [('product_tmpl_id', 'in', list(missing_tmpls))]):
+                extra_bom_tmpls.add(b.product_tmpl_id.id)
         tree_groups = []
         for kit in kit_cfgs:
             key = kit['key']
@@ -1120,9 +1216,8 @@ class MatiaProcurementPlan(models.Model):
                 pr = prod_by_id.get(pid, {})
                 line = line_by_pid.get(pid)
                 tmpl_id = bl.product_id.product_tmpl_id.id
-                has_bom = tmpl_id in bom_by_tmpl or bool(
-                    env_sudo['mrp.bom'].search(
-                        [('product_tmpl_id', '=', tmpl_id)], limit=1))
+                has_bom = tmpl_id in bom_by_tmpl \
+                    or tmpl_id in extra_bom_tmpls
                 avail = line.avail_tr if line else 0.0
                 items.append({
                     'product_id': pid,
@@ -1372,6 +1467,15 @@ class MatiaProcurementPlan(models.Model):
         for _lb in last_buy.values():
             if _lb.get('order_id') and _lb.get('buy_dt') is not None:
                 order_dates[_lb['order_id']] = _lb['buy_dt']
+        # One query for child templates with a BOM (was: one search
+        # per child in the loop below).
+        child_tmpls = {bl.product_id.product_tmpl_id.id
+                       for bl in bom.bom_line_ids}
+        bom_tmpls = set()
+        if child_tmpls:
+            for b in env_sudo['mrp.bom'].search(
+                    [('product_tmpl_id', 'in', list(child_tmpls))]):
+                bom_tmpls.add(b.product_tmpl_id.id)
         items = []
         for bl in bom.bom_line_ids:
             cp = bl.product_id
@@ -1425,9 +1529,7 @@ class MatiaProcurementPlan(models.Model):
                 seller = _lp[1] if _lp else ''
                 lcompany = self._mpp_company_code(
                     env_sudo, lb.get('company_id'))
-            has_bom = bool(env_sudo['mrp.bom'].search(
-                [('product_tmpl_id', '=', cp.product_tmpl_id.id)],
-                limit=1))
+            has_bom = cp.product_tmpl_id.id in bom_tmpls
             items.append({
                 'product_id': pid,
                 'code': cp.default_code or '',
