@@ -27,6 +27,9 @@ scripts/*.log
 # Scratch
 scratch/
 
+# Build outputs
+dist/
+
 # SSH Keys & Tokens
 .ssh/
 .github_pat

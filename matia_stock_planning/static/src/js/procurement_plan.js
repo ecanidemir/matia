@@ -272,6 +272,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (collapsed) return html;
             for (var i = 0; i < rows.length; i++) {
                 var r = rows[i];
+                var entryName = r.product_name ||
+                    this._plainName(r.product_code, r.display_name);
                 html += '<tr class="item-row" data-group="' + key + '">' +
                     '<td class="td-product">' +
                     '<span class="msp-bom-spacer mr-1">' +
@@ -280,7 +282,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         '<span class="prod-code">[' + r.product_code +
                         ']</span> ' : '') +
                     '<span class="prod-name">' +
-                    (r.display_name || '') + '</span></td>' +
+                    (entryName || '') + '</span></td>' +
                     '<td class="td-stock">' + (r.avail_tr || 0) + '</td>' +
                     '<td class="td-stock">' + (r.stock_usa || 0) + '</td>' +
                     '<td class="td-req"><input type="number" min="0" class="form-control form-control-sm mpp-qty" ' +
@@ -830,6 +832,23 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return map[name] || name;
         },
 
+        // Plain product name without a leading "[CODE]" prefix.
+        // Server now sends plain `name`, but older cached rows may still
+        // carry `display_name` ("[CODE] Name"); strip the prefix so the
+        // "[CODE] Name" cell never renders "[CODE] [CODE] Name".
+        _plainName: function (code, name) {
+            var n = (name || '').toString();
+            if (code) {
+                var prefix = '[' + code + ']';
+                if (n.indexOf(prefix) === 0) {
+                    n = n.slice(prefix.length).replace(/^\s+/, '');
+                }
+            } else {
+                n = n.replace(/^\[[^\]]+\]\s*/, '');
+            }
+            return n;
+        },
+
         _producible: function (r) {
             if (r.producible !== undefined && r.producible !== null &&
                     r.producible !== '') {
@@ -924,9 +943,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 ' title="Per-top: ' + r.top_breakdown + '"' : '';
             var trCls = 'item-row' +
                 (level > 0 ? ' sub-bom-row sub-level-' + lvl : '');
+            var plainName = this._plainName(r.code, r.name);
             var html = '<tr class="' + trCls + '"' +
                 ' data-product-name="' +
-                ((r.name || '').toLowerCase()) + '"' +
+                (plainName.toLowerCase()) + '"' +
                 ' data-group="' + groupKey + '" data-level="' + level + '"' +
                 ' data-uid="' + uid + '"' +
                 ' data-product-id="' + r.product_id + '"' +
@@ -948,7 +968,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         groupKey + '"' : '') +
                     (prodTitle ? ' title="' + prodTitle + '"' : '')) +
                 '>' +
-                (r.name || '') + '</span>' +
+                (plainName || '') + '</span>' +
                 (hasKids ? ' <span class="badge badge-light text-muted border ml-1" ' +
                     'style="font-size:0.65rem;" title="Has Sub-Assembly BOM">BOM</span>' : '') +
                 (level > 0 ?
@@ -1388,7 +1408,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<td class="td-product"><span class="prod-code">' +
                     (r.code || '') + '</span></td>' +
                     '<td class="td-product"><span class="prod-name">' +
-                    (r.name || '') + '</span></td>' +
+                    (self._plainName(r.code, r.name) || '') + '</span></td>' +
                     '<td><span class="badge badge-info">' + (r.route || '') +
                     '</span></td>' +
                     '<td class="td-stock">' + r.order_qty + ' ' +

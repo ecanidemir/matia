@@ -1393,7 +1393,7 @@ class MatiaProcurementPlan(models.Model):
                 'line_id': line.id,
                 'product_id': line.product_id.id,
                 'code': line.product_id.default_code or '',
-                'name': line.product_id.display_name,
+                'name': line.product_id.name or '',
                 'level': line.level,
                 'gross': line.gross_qty,
                 'stock_tr': line.stock_tr,
@@ -1443,7 +1443,7 @@ class MatiaProcurementPlan(models.Model):
             s['lines'].append({
                 'product_id': line.product_id.id,
                 'code': line.product_id.default_code or '',
-                'name': line.product_id.display_name,
+                'name': line.product_id.name or '',
                 'order_qty': line.order_qty,
                 'price': line.unit_price,
                 'subtotal': line.subtotal,
@@ -1570,7 +1570,7 @@ class MatiaProcurementPlan(models.Model):
                 items.append({
                     'product_id': pid,
                     'code': bl.product_id.default_code or '',
-                    'name': bl.product_id.display_name,
+                    'name': bl.product_id.name or '',
                     'display': pr.get('display_name')
                     or bl.product_id.display_name,
                     'bom_qty': 1.0,
@@ -1917,7 +1917,7 @@ class MatiaProcurementPlan(models.Model):
             items.append({
                 'product_id': pid,
                 'code': cp.default_code or '',
-                'name': cp.display_name,
+                'name': cp.name or '',
                 'bom_qty': bqty,
                 'gross': bqty * mult,
                 # Branch demand = parent NET x usage; net deducts own
@@ -1996,7 +1996,7 @@ class MatiaProcurementPlan(models.Model):
                 try:
                     pr = env_sudo['product.product'].browse(int(pid))
                     hit = {'code': pr.default_code or '',
-                           'name': pr.display_name or ''} \
+                           'name': pr.name or ''} \
                         if pr.exists() else {'code': '', 'name': ''}
                 except Exception:
                     hit = {'code': '', 'name': ''}
@@ -2220,7 +2220,7 @@ class MatiaProcurementPlan(models.Model):
             production.append({
                 'line_id': line.id,
                 'code': line.product_id.default_code or '',
-                'name': line.product_id.display_name,
+                'name': line.product_id.name or '',
                 'route': line.route_type,
                 'order_qty': line.order_qty,
                 'uom': _mpp_uom_en(
