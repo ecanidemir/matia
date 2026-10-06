@@ -33,6 +33,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .msp-btn-sub-bom': '_onSubBom',
             'click .msp-clickable-prod': '_onSubBom',
             'click .msp-th-sortable': '_onSort',
+            'click .mpp-btn-sup-toggle': '_onSupToggle',
+            'click .mpp-sup-name': '_onSupToggle',
         },
 
         init: function (parent, action) {
@@ -56,6 +58,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.activeTab = 1;
             this.supSummary = null;
             this.pendingRfqSeller = null;
+            this.expandedSup = {};
             this._expanding = false;
         },
 
@@ -154,6 +157,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.collapsedGroups = {};
             this.supSummary = null;
             this.pendingRfqSeller = null;
+            this.expandedSup = {};
             this.treeSearch = '';
             this.treeSearchMatches = [];
             this.treeSearchDone = false;
@@ -1292,6 +1296,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '</div></td></tr>';
                 rows.forEach(function (sp) {
                     html += self._supplierRowHtml(sp);
+                    if (self.expandedSup[self._supKey(sp)]) {
+                        html += self._supplierLinesHtml(sp);
+                    }
                 });
             });
             html += '</tbody></table></div>';
@@ -1300,6 +1307,64 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _rfqKey: function (seller, company) {
             return seller + ':' + (company || 0);
+        },
+
+        _supKey: function (sp) {
+            return (sp.seller_id || 0) + ':' + (sp.company_id || 0);
+        },
+
+        _onSupToggle: function (ev) {
+            ev.stopPropagation();
+            var el = ev.currentTarget;
+            var key = el.dataset.supKey;
+            if (!key) return;
+            if (this.expandedSup[key]) {
+                delete this.expandedSup[key];
+            } else {
+                this.expandedSup[key] = true;
+            }
+            this._renderSuppliers(this.supSummary);
+        },
+
+        _supplierLinesHtml: function (sp) {
+            var self = this;
+            var lines = sp.lines || [];
+            if (!lines.length) {
+                return '<tr class="mpp-sup-sub-row">' +
+                    '<td></td><td colspan="5">' +
+                    '<span class="text-muted">No part lines.</span>' +
+                    '</td></tr>';
+            }
+            var html = '';
+            lines.forEach(function (ln) {
+                html += '<tr class="mpp-sup-sub-row">' +
+                    '<td class="td-product">' +
+                    '<i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>' +
+                    (ln.code ? '<span class="prod-code sub-prod-code">[' +
+                        ln.code + ']</span> ' : '') +
+                    '<span class="prod-name">' +
+                    (self._plainName(ln.code, ln.name) || '') + '</span>' +
+                    '</td>' +
+                    '<td class="td-stock">' +
+                    self._fmtNum(ln.order_qty, 0) + ' ' +
+                    '<small class="text-muted">' +
+                    (ln.uom || '') + '</small></td>' +
+                    '<td><span class="badge badge-info">' +
+                    (ln.route || '') + '</span></td>' +
+                    '<td class="td-stock">Rolled ' +
+                    self._fmtNum(ln.rolled_usd, 2) + ' USD x ' +
+                    self._fmtNum(ln.order_qty, 0) + ' = <strong>' +
+                    self._fmtNum(ln.total_usd, 2) + ' USD</strong>' +
+                    (ln.last_price ?
+                        '<small class="text-muted d-block" style="font-weight:400;">Last: ' +
+                        self._fmtNum(ln.last_price, 2) + ' ' +
+                        (ln.last_currency || '') +
+                        (ln.last_date ? ' (' + ln.last_date + ')' : '') +
+                        '</small>' : '') +
+                    '</td>' +
+                    '<td colspan="2"></td></tr>';
+            });
+            return html;
         },
 
         _supplierRowHtml: function (sp) {
@@ -1312,11 +1377,19 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
             var key = this._rfqKey(sp.seller_id, sp.company_id);
             var label = sp.rfq_label || 'Create RFQ';
+            var supKey = this._supKey(sp);
+            var isOpen = !!this.expandedSup[supKey];
+            var lineCount = (sp.lines || []).length || sp.line_count;
             return '<tr class="item-row">' +
                 '<td class="td-product">' +
-                '<span class="msp-bom-spacer mr-1">' +
-                '<i class="fa fa-circle msp-no-bom-dot"></i></span>' +
-                '<span class="prod-name"><strong>' + sp.seller_name +
+                '<button type="button" class="btn btn-sm btn-link mpp-btn-sup-toggle p-0 mr-1 text-primary"' +
+                ' data-sup-key="' + supKey + '"' +
+                ' title="Click to show which parts are bought from this supplier">' +
+                '<i class="fa ' + (isOpen ? 'fa-caret-down' : 'fa-caret-right') +
+                ' msp-bom-arrow"></i></button>' +
+                '<span class="prod-name mpp-sup-name" data-sup-key="' + supKey + '"' +
+                ' title="Click to show which parts are bought from this supplier">' +
+                '<strong>' + sp.seller_name +
                 '</strong></span>' +
                 ((sp.currencies || []).length ?
                     '<small class="text-muted d-block" style="font-weight:400;">' +

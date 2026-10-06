@@ -213,6 +213,21 @@
             white-space: nowrap;
         }
     }
+    /* Tab 2 supplier parts: expandable rows show which parts are
+       bought from each supplier. Sub-rows reuse the tree level-1
+       tint; the supplier name looks clickable. */
+    .mpp-sup-name {
+        cursor: pointer;
+    }
+    .mpp-sup-name:hover {
+        text-decoration: underline;
+    }
+    table.msp-table tbody tr.mpp-sup-sub-row td {
+        background-color: #f0f9ff;
+        font-size: 0.78rem;
+        padding: 0.4rem 0.5rem;
+        border-top: 1px dashed #bae6fd;
+    }
     .mpp-need {
         max-width: 84px;
         padding: 0.2rem 0.4rem;

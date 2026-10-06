@@ -2469,7 +2469,9 @@ class MatiaProcurementPlan(models.Model):
         whose lines were last bought from the USA gets its own USA row
         (TR RFQ / US RFQ buttons), because the draft RFQ is created in
         that company. Totals: total_usd = SUM(rolled_usd(unit, children
-        included) x order_qty). No TRY, no product rows.
+        included) x order_qty). Each supplier carries its parts in
+        'lines' (code/name/order_qty/uom/route/prices) so the client can
+        expand the supplier row and show which parts are bought there.
         @param plan_id Plan ID.
         @return Dict with suppliers, supplier_count, grand_total_usd,
             production rows (make/subcontract with linked docs),
@@ -2494,13 +2496,34 @@ class MatiaProcurementPlan(models.Model):
                 'company': self._mpp_company_code(env_sudo, cid),
                 'line_count': 0, 'total_usd': 0.0,
                 'route_types': set(), 'currency_names': set(),
+                'lines': [],
             })
             s['line_count'] += 1
-            s['total_usd'] += float(line.rolled_usd or 0.0) * float(
-                line.order_qty or 0.0)
+            _qty = float(line.order_qty or 0.0)
+            _rolled = float(line.rolled_usd or 0.0)
+            s['total_usd'] += _rolled * _qty
             s['route_types'].add(line.route_type or '')
             if line.last_currency_id:
                 s['currency_names'].add(line.last_currency_id.name)
+            s['lines'].append({
+                'line_id': line.id,
+                'product_id': line.product_id.id,
+                'code': line.product_id.default_code or '',
+                'name': line.product_id.name or '',
+                'order_qty': line.order_qty,
+                'uom': _mpp_uom_en(
+                    line.uom_id.name if line.uom_id else ''),
+                'route': line.route_type,
+                'seller': line.seller_id.display_name
+                if line.seller_id else '',
+                'last_price': line.last_price,
+                'last_currency': line.last_currency_id.name
+                if line.last_currency_id else '',
+                'last_usd': line.last_price_usd,
+                'last_date': self._mpp_month_year(line.last_date),
+                'rolled_usd': line.rolled_usd,
+                'total_usd': round(_rolled * _qty, 2),
+            })
         po_by_seller = {}
         for po in plan.purchase_order_ids:
             po_by_seller.setdefault(
@@ -2528,6 +2551,10 @@ class MatiaProcurementPlan(models.Model):
                 'total_usd': round(s['total_usd'], 2),
                 'routes': sorted(s['route_types']),
                 'currencies': sorted(s['currency_names']),
+                'lines': sorted(
+                    s['lines'],
+                    key=lambda r: ((r['code'] or ''),
+                                   (r['name'] or ''))),
                 'rfqs': rfqs,
                 'has_draft_rfq': any(
                     r['state'] == 'draft' for r in rfqs),
