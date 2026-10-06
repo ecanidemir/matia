@@ -504,6 +504,76 @@ def _mpp_find_kit_boms(env_sudo):
     return found
 
 
+# Override purchase-location codes to company IDs (TR=1, US=2).
+_MPP_OVERRIDE_COMPANY = {'tr': _MPP_TR_COMPANY_ID,
+                         'us': _MPP_US_COMPANY_ID}
+
+
+def _mpp_price_overrides(env_sudo, pids=None):
+    """Manual price/location overrides, keyed by product ID.
+
+    @param env_sudo: sudo environment.
+    @param pids: optional product ID list (None = all rows).
+    @return: {pid: {'price': float, 'location': 'tr'/'us'/False}}.
+    """
+    dom = [('product_id', 'in', list(pids))] if pids else []
+    res = {}
+    try:
+        rows = env_sudo['matia.procurement.price.override'].search_read(
+            dom, ['product_id', 'corrected_price_usd', 'location'])
+    except Exception:
+        return res
+    for row in rows or []:
+        _pp = row.get('product_id')
+        if not _pp:
+            continue
+        res[_pp[0]] = {
+            'price': float(row.get('corrected_price_usd') or 0.0),
+            'location': row.get('location') or False,
+        }
+    return res
+
+
+def _mpp_classify_route(route_names, purchase_ok=False):
+    """One product's route key (Subcontract > Manufacture > Buy).
+
+    Single source of truth for the Tab 3 Type column and the
+    override guards: manufactured products have no own purchase
+    price, so they never accept a corrected price or location.
+    @param route_names: list of stock.location.route names.
+    @param purchase_ok: fallback when no route matches.
+    @return: 'buy' / 'subcontract' / 'make' / 'unknown'.
+    """
+    names = [n or '' for n in (route_names or [])]
+    if any('Subcontract' in n for n in names):
+        return 'subcontract'
+    if any('Manufacture' in n for n in names):
+        return 'make'
+    if any('Buy' in n for n in names):
+        return 'buy'
+    return 'buy' if purchase_ok else 'unknown'
+
+
+def _mpp_product_routes(env_sudo, pids):
+    """Route keys for products (template routes, no plan lines needed).
+
+    @param env_sudo: sudo environment.
+    @param pids: product.product IDs.
+    @return: {pid: route} (missing products omitted).
+    """
+    out = {}
+    prods = env_sudo['product.product'].browse(
+        [p for p in (pids or []) if p])
+    for pr in prods:
+        if not pr.exists():
+            continue
+        tmpl = pr.product_tmpl_id
+        out[pr.id] = _mpp_classify_route(
+            tmpl.route_ids.mapped('name'),
+            tmpl.purchase_ok)
+    return out
+
+
 class MatiaProcurementPlan(models.Model):
     _name = 'matia.procurement.plan'
     _description = 'Matia Bulk Procurement/Production Preview Plan'
@@ -1354,20 +1424,35 @@ class MatiaProcurementPlan(models.Model):
         line_by_pid = {}
         for line in plan.line_ids:
             line_by_pid.setdefault(line.product_id.id, line)
+        # Manual USD overrides win over the last-buy snapshot
+        # (one bulk read, no per-line queries below).
+        _roll_ovr = _mpp_price_overrides(
+            env_sudo, list(line_by_pid))
 
         memo_usd = {}
         memo_try = {}
         visiting = set()
 
         def _own_usd(pid):
+            _ov = _roll_ovr.get(pid, {})
             line = line_by_pid.get(pid)
+            # Overrides never apply to manufactured lines: their own
+            # price is always 0, cost rolls up from the components.
+            if float(_ov.get('price') or 0.0) > 0 and (
+                    not line or line.route_type != 'make'):
+                return float(_ov['price'])
             if line and line.route_type in ('buy', 'subcontract'):
                 return float(line.last_price_usd or 0.0) * \
                     _mpp_line_uom_factor(line)
             return 0.0
 
         def _own_try(pid):
+            _ov = _roll_ovr.get(pid, {})
             line = line_by_pid.get(pid)
+            if float(_ov.get('price') or 0.0) > 0 and (
+                    not line or line.route_type != 'make'):
+                return self._mpp_override_try(
+                    env_sudo, plan, float(_ov['price']))
             if not line or line.route_type not in ('buy', 'subcontract'):
                 return 0.0
             price = float(line.last_price or 0.0) * \
@@ -1649,6 +1734,7 @@ class MatiaProcurementPlan(models.Model):
     @api.model
     def _plan_summary(self, env_sudo, plan):
         groups = {}
+        _sum_ovr = _mpp_price_overrides(env_sudo)
         for line in plan.line_ids:
             key = line.route_type or 'unknown'
             g = groups.setdefault(key, {'route': key, 'lines': [],
@@ -1682,6 +1768,13 @@ class MatiaProcurementPlan(models.Model):
                 'last_uom': _mpp_uom_en(
                     line.last_uom_id.name if line.last_uom_id else ''),
                 'last_usd': line.last_price_usd,
+                'corrected_usd': float(
+                    _sum_ovr.get(
+                        line.product_id.id, {}).get('price') or 0.0),
+                'eff_usd': float(
+                    _sum_ovr.get(
+                        line.product_id.id, {}).get('price') or 0.0)
+                or float(line.last_price_usd or 0.0),
                 'last_date': self._mpp_month_year(line.last_date),
                 'last_company': self._mpp_company_code(
                     env_sudo,
@@ -1892,6 +1985,7 @@ class MatiaProcurementPlan(models.Model):
                     _lineless_pids.add(_bl.product_id.id)
         _live_split = _mpp_stock_split(
             env_sudo, list(_lineless_pids)) if _lineless_pids else {}
+        _tree_ovr = _mpp_price_overrides(env_sudo)
         pool_map, _pool_branch, _share_map, _driver_map, use_notes, par_n = \
             _mpp_load_pools(plan.producible_json)
         for kit in kit_cfgs:
@@ -1989,7 +2083,13 @@ class MatiaProcurementPlan(models.Model):
                         line.last_uom_id.name
                         if line and line.last_uom_id else ''),
                     'last_usd': line.last_price_usd if line else 0.0,
-                    'last_try': self._mpp_line_try(env_sudo, plan, line),
+                    'last_try': self._mpp_line_try(
+                        env_sudo, plan, line, _tree_ovr),
+                    'corrected_usd': float(
+                        _tree_ovr.get(pid, {}).get('price') or 0.0),
+                    'eff_usd': float(
+                        _tree_ovr.get(pid, {}).get('price') or 0.0)
+                    or (line.last_price_usd if line else 0.0),
                     'last_date': self._mpp_month_year(
                         line.last_date) if line else '',
                     'rolled_try': line.rolled_try if line else 0.0,
@@ -2043,13 +2143,58 @@ class MatiaProcurementPlan(models.Model):
                     if ln.get('product_id') in line_by_pid:
                         _l = line_by_pid[ln['product_id']]
                         ln['last_try'] = self._mpp_line_try(
-                            env_sudo, plan, _l)
+                            env_sudo, plan, _l, _tree_ovr)
         return summary
 
     @api.model
-    def _mpp_line_try(self, env_sudo, plan, line):
-        """Last-buy price converted to TRY at the buy-date rate."""
-        if not line or not (line.last_price or 0.0):
+    @api.model
+    def _mpp_override_try(self, env_sudo, plan, price_usd):
+        """Manual USD override converted to the plan currency.
+
+        A manual price has no purchase date, so today's USD rate is
+        used (not a historical rate).
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record (or False).
+        @param price_usd: manual USD unit price.
+        @return: price in the plan currency (or raw USD, fail-safe).
+        """
+        if not price_usd:
+            return 0.0
+        if not plan or not plan.exists() or not plan.currency_id:
+            return float(price_usd)
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        if not usd or plan.currency_id.id == usd.id:
+            return float(price_usd)
+        try:
+            return usd._convert(
+                float(price_usd), plan.currency_id,
+                plan.company_id, fields.Date.today())
+        except Exception as exc:
+            _logger.warning(
+                'MPP override TRY: USD conversion failed '
+                'for manual price %s: %s; using 0.0',
+                price_usd, exc)
+            return 0.0
+
+    @api.model
+    def _mpp_line_try(self, env_sudo, plan, line, overrides=None):
+        """Last-buy price converted to TRY at the buy-date rate.
+
+        A manual USD override wins (converted at today's rate).
+        @param overrides: optional _mpp_price_overrides() map
+            (None = single-product lookup).
+        """
+        if not line:
+            return 0.0
+        _ovm = overrides if overrides is not None \
+            else _mpp_price_overrides(
+                env_sudo, [line.product_id.id])
+        _ov = _ovm.get(line.product_id.id, {})
+        if float(_ov.get('price') or 0.0) > 0:
+            return self._mpp_override_try(
+                env_sudo, plan, float(_ov['price']))
+        if not (line.last_price or 0.0):
             return 0.0
         cur = line.last_currency_id
         if not cur or cur.id == plan.currency_id.id:
@@ -2150,7 +2295,7 @@ class MatiaProcurementPlan(models.Model):
     @api.model
     def _mpp_sub_items(self, env_sudo, plan, parent_pid, mult, bom,
                        split, snap_by_pid, last_buy, bom_tmpls, usd,
-                       pool, ancestors=None):
+                       pool, ancestors=None, overrides=None):
         """Child rows for one parent BOM (shared single/bulk helper).
 
         Same row shape as get_sub_bom_cost; used by both the single
@@ -2169,9 +2314,12 @@ class MatiaProcurementPlan(models.Model):
         @param pool (branch_map, share_map, use_notes) pool lookups.
         @param ancestors Optional set of path pid ints; children in it
             are flagged _is_cycle and must not be expanded further.
+        @param overrides Optional _mpp_price_overrides() map (manual
+            USD price wins over the snapshot for lineless rows).
         @return List of row dicts, code/name sorted.
         """
         branch_map, share_map, use_notes = pool
+        _ov_map = overrides if overrides is not None else {}
         items = []
         for bl in bom.bom_line_ids:
             cp = bl.product_id
@@ -2191,7 +2339,8 @@ class MatiaProcurementPlan(models.Model):
                 luom = _mpp_uom_en(
                     line.last_uom_id.name if line.last_uom_id else '')
                 lusd = float(line.last_price_usd or 0.0)
-                ltry = self._mpp_line_try(env_sudo, plan, line)
+                ltry = self._mpp_line_try(
+                    env_sudo, plan, line, _ov_map)
                 ldate = self._mpp_month_year(line.last_date)
                 rtry = float(line.rolled_try or 0.0)
                 rusd = float(line.rolled_usd or 0.0)
@@ -2255,6 +2404,14 @@ class MatiaProcurementPlan(models.Model):
                 _branch = int(math.floor(avail / bqty)) \
                     if bqty > 0 and avail > 0 else 0
             _sh = share_map.get((parent_pid, pid), (100.0, 1))
+            # Manual USD override wins for lineless rows (same rule
+            # as the overview: corrected is per-BOM-UoM, factor 1.0).
+            _ov = _ov_map.get(pid, {})
+            _corr = float(_ov.get('price') or 0.0)
+            if _corr > 0 and not line:
+                lusd = _corr
+                ltry = self._mpp_override_try(env_sudo, plan, _corr)
+                rtry, rusd = ltry, lusd
             _row = {
                 'product_id': pid,
                 'code': cp.default_code or '',
@@ -2290,6 +2447,8 @@ class MatiaProcurementPlan(models.Model):
                 'last_date': ldate,
                 'rolled_try': rtry,
                 'rolled_usd': rusd,
+                'corrected_usd': _corr,
+                'eff_usd': _corr if _corr > 0 else lusd,
             }
             if ancestors and pid in ancestors:
                 _row['_is_cycle'] = True
@@ -2353,9 +2512,11 @@ class MatiaProcurementPlan(models.Model):
             for b in env_sudo['mrp.bom'].search(
                     [('product_tmpl_id', 'in', list(child_tmpls))]):
                 bom_tmpls.add(b.product_tmpl_id.id)
+        overrides = _mpp_price_overrides(env_sudo)
         items = self._mpp_sub_items(
             env_sudo, plan, prod.id, mult, bom, split, snap, last_buy,
-            bom_tmpls, usd, (branch_map, share_map, use_notes))
+            bom_tmpls, usd, (branch_map, share_map, use_notes),
+            overrides=overrides)
         return {'items': items}
 
     @api.model
@@ -2504,6 +2665,7 @@ class MatiaProcurementPlan(models.Model):
                 bom_tmpls.add(b.product_tmpl_id.id)
         _pool_map, branch_map, share_map, _pool_driver, use_notes, \
             _par_n = _mpp_load_pools(plan.producible_json if plan else '')
+        overrides = _mpp_price_overrides(env_sudo)
         # Phase 3: top-down build. A node's multiplier is its own net:
         # tops come from the client (server fallback below), children
         # reuse the net of their row in the already-built parent.
@@ -2540,7 +2702,8 @@ class MatiaProcurementPlan(models.Model):
                 env_sudo, plan, nd['pid'], mult, nd['bom'], split,
                 snap, last_buy, bom_tmpls, usd,
                 (branch_map, share_map, use_notes),
-                ancestors=set(nd['ancestors'] + (nd['pid'],)))
+                ancestors=set(nd['ancestors'] + (nd['pid'],)),
+                overrides=overrides)
             trees[nd['uid']] = items
             for it in items:
                 _cuid = nd['uid'] + '/' + str(it.get('product_id'))
@@ -2753,13 +2916,23 @@ class MatiaProcurementPlan(models.Model):
         suppliers = {}
         unsourced = 0
         unpriced = 0
+        _sup_ovr = _mpp_price_overrides(env_sudo)
         for line in plan.line_ids.filtered(
                 lambda l: (l.order_qty or 0) > 0
                 and (l.route_type or 'unknown') in (
                     'buy', 'subcontract', 'unknown')):
             sid = line.seller_id.id if line.seller_id else 0
-            cid = line.last_company_id.id if line.last_company_id \
-                else plan.company_id.id
+            # Manual override wins: corrected USD (per line UoM) is
+            # the PO-value basis, and the override location routes
+            # the RFQ company (else the last-buy company rule).
+            _sov = _sup_ovr.get(line.product_id.id, {})
+            _scorr = float(_sov.get('price') or 0.0)
+            _oloc = _sov.get('location')
+            if _oloc in _MPP_OVERRIDE_COMPANY:
+                cid = _MPP_OVERRIDE_COMPANY[_oloc]
+            else:
+                cid = line.last_company_id.id if line.last_company_id \
+                    else plan.company_id.id
             key = (sid, cid)
             s = suppliers.setdefault(key, {
                 'seller_id': sid,
@@ -2775,10 +2948,14 @@ class MatiaProcurementPlan(models.Model):
             s['line_count'] += 1
             _qty = float(line.order_qty or 0.0)
             # PO-value basis (same as the draft RFQ subtotal): own
-            # last-buy USD per line UoM x order. Rolled (own +
-            # children) is info only, never summed into the total.
-            _own = float(line.last_price_usd or 0.0) * \
-                _mpp_line_uom_factor(line)
+            # last-buy USD per line UoM x order (manual corrected USD
+            # when set). Rolled (own + children) is info only, never
+            # summed into the total.
+            if _scorr > 0:
+                _own = _scorr
+            else:
+                _own = float(line.last_price_usd or 0.0) * \
+                    _mpp_line_uom_factor(line)
             _ptotal = round(_own * _qty, 2)
             _rolled = float(line.rolled_usd or 0.0)
             s['total_usd'] += _ptotal
@@ -2792,6 +2969,8 @@ class MatiaProcurementPlan(models.Model):
             s['route_types'].add(line.route_type or 'unknown')
             if line.last_currency_id:
                 s['currency_names'].add(line.last_currency_id.name)
+            if _scorr > 0:
+                s['currency_names'].add('USD')
             s['lines'].append({
                 'line_id': line.id,
                 'product_id': line.product_id.id,
@@ -2807,6 +2986,8 @@ class MatiaProcurementPlan(models.Model):
                 'last_currency': line.last_currency_id.name
                 if line.last_currency_id else '',
                 'last_usd': line.last_price_usd,
+                'corrected_usd': _scorr,
+                'effective_usd': _own,
                 'last_date': self._mpp_month_year(line.last_date),
                 'rolled_usd': line.rolled_usd,
                 'rolled_total_usd': round(_rolled * _qty, 2),
@@ -3059,6 +3240,299 @@ class MatiaProcurementPlan(models.Model):
             'skipped': skipped,
             'supplier_summary': self.get_supplier_summary(plan.id),
         }
+
+    # ------------------------------------------------------------------
+    # Tab 3 "Prices": quantity-independent product list with manual
+    # USD price + TR/US purchase-location overrides (global per
+    # product, stored in matia.procurement.price.override).
+    # ------------------------------------------------------------------
+    @api.model
+    def get_price_overview(self, plan_id=False):
+        """Every product in the 4 kit BOMs down to the lowest level.
+
+        Quantity-independent: no Needed/planned math, only identity
+        (code/name), automatic type from routes, last purchase info,
+        and the stored manual overrides.
+        @param plan_id: optional plan (sellers prefer its lines).
+        @return: {'items': [...], 'count': int, 'override_count': int}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(
+            int(plan_id)) if plan_id else False
+        if not plan or not plan.exists():
+            plan = env_sudo['matia.procurement.plan'].search(
+                [], order='id desc', limit=1)
+        if not plan:
+            company = env_sudo['res.company'].browse(
+                _MPP_TR_COMPANY_ID)
+            seq = env_sudo['ir.sequence'].sudo().next_by_code(
+                'matia.procurement.plan') or _('MPP')
+            plan = env_sudo['matia.procurement.plan'].create({
+                'name': seq,
+                'company_id': company.id,
+                'state': 'draft',
+                'target_json': '{}',
+                'currency_id': company.currency_id.id,
+            })
+        Product = env_sudo['product.product']
+        Bom = env_sudo['mrp.bom']
+        kits = _mpp_find_kit_boms(env_sudo)
+        if not kits:
+            raise UserError(_('No kit BOM found.'))
+        # BFS walk of all 4 kits (variant BOM wins, depth + cycle
+        # guards mirror the explosion logic).
+        bom_cache = {}
+        seen = set()
+        pids = set()
+        stack = []
+        for kit in kits:
+            for bl in kit['bom'].bom_line_ids:
+                stack.append((bl.product_id.id, 0, ()))
+        iter_guard = 0
+        while stack:
+            iter_guard += 1
+            if iter_guard > 60000:
+                raise UserError(
+                    _('Tree too deep/wide, explosion limited.'))
+            pid, level, path = stack.pop()
+            if pid in path or level > _MPP_MAX_LEVEL:
+                continue
+            pids.add(pid)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            prod = Product.browse(pid)
+            if not prod.exists():
+                continue
+            tmpl_id = prod.product_tmpl_id.id
+            if tmpl_id not in bom_cache:
+                bom = Bom.search(
+                    [('product_id', '=', pid)], limit=1)
+                if not bom:
+                    bom = Bom.search(
+                        [('product_tmpl_id', '=', tmpl_id)], limit=1)
+                bom_cache[tmpl_id] = bom
+            bom = bom_cache[tmpl_id]
+            if bom:
+                for bl in bom.bom_line_ids:
+                    stack.append(
+                        (bl.product_id.id, level + 1, path + (pid,)))
+        pids = sorted(pids)
+        if not pids:
+            return {'items': [], 'count': 0, 'override_count': 0}
+        # Bulk product info + routes (same classifier as line build:
+        # Subcontract > Manufacture > Buy > purchase_ok fallback).
+        prod_info = {}
+        for pr in Product.browse(pids).read(
+                ['default_code', 'name', 'route_ids', 'purchase_ok']):
+            prod_info[pr['id']] = pr
+        route_names = {}
+        all_route_ids = set()
+        for pr in prod_info.values():
+            all_route_ids.update(pr.get('route_ids') or [])
+        if all_route_ids:
+            for rdr in env_sudo['stock.location.route'].browse(
+                    list(all_route_ids)).read(['name']):
+                route_names[rdr['id']] = rdr['name']
+        # Sellers prefer the plan lines (already assigned snapshot);
+        # otherwise the last real purchase wins.
+        line_by_pid = {}
+        if plan:
+            for line in plan.line_ids:
+                line_by_pid.setdefault(line.product_id.id, line)
+        need_last = [p for p in pids if p not in line_by_pid]
+        last_buy = self._mpp_last_buys(env_sudo, need_last)
+        order_dates = {}
+        for _lb in last_buy.values():
+            if _lb.get('order_id') and _lb.get('buy_dt') is not None:
+                order_dates[_lb['order_id']] = _lb['buy_dt']
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        overrides = _mpp_price_overrides(env_sudo, pids)
+        items = []
+        for pid in pids:
+            info = prod_info.get(pid, {})
+            rnames = [route_names.get(rid, '')
+                      for rid in (info.get('route_ids') or [])]
+            route = _mpp_classify_route(
+                rnames, info.get('purchase_ok'))
+            line = line_by_pid.get(pid)
+            if line:
+                seller = line.seller_id.display_name \
+                    if line.seller_id else ''
+                lp = float(line.last_price or 0.0)
+                lcur = line.last_currency_id.name \
+                    if line.last_currency_id else ''
+                lusd = float(line.last_price_usd or 0.0)
+                ldate = self._mpp_month_year(line.last_date)
+            else:
+                lb = last_buy.get(pid, {})
+                _pp = lb.get('partner_id')
+                seller = _pp[1] if _pp else ''
+                vals = self._last_buy_vals(
+                    env_sudo, plan, usd, lb, order_dates) \
+                    if lb else {}
+                lp = float(vals.get('last_price') or 0.0)
+                cur = lb.get('currency_id')
+                lcur = cur[1] if cur else ''
+                lusd = float(vals.get('last_price_usd') or 0.0)
+                ldate = self._mpp_month_year(vals.get('last_date')) \
+                    if vals.get('last_date') else ''
+            ovr = overrides.get(pid, {})
+            corr = float(ovr.get('price') or 0.0)
+            eff = corr if corr > 0 else lusd
+            items.append({
+                'product_id': pid,
+                'code': info.get('default_code') or '',
+                'name': info.get('name') or '',
+                'route': route,
+                'route_label': {
+                    'buy': 'Buy', 'subcontract': 'Subcontract',
+                    'make': 'Manufacture'}.get(route, 'Unknown'),
+                'seller': seller,
+                'last_price': lp,
+                'last_currency': lcur,
+                'last_usd': lusd,
+                'last_date': ldate,
+                'corrected': corr,
+                'location': ovr.get('location') or '',
+                'effective_usd': eff,
+                'has_override': bool(corr > 0 or ovr.get('location')),
+            })
+        items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
+        return {
+            'items': items,
+            'count': len(items),
+            'override_count': sum(
+                1 for it in items if it['has_override']),
+        }
+
+    @api.model
+    def save_price_override(self, product_id, corrected_price_usd=False,
+                            location=False):
+        """Create or update one product override (global, all plans).
+
+        @param product_id: product.product ID.
+        @param corrected_price_usd: manual USD price (>= 0; False
+            keeps the stored value).
+        @param location: 'tr' / 'us' / False (False keeps stored).
+        @return: {'product_id': id, 'corrected': float, 'location': str}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        env_sudo = _mpp_env_sudo(self)
+        try:
+            pid = int(product_id)
+        except (TypeError, ValueError):
+            raise UserError(_('Invalid product.'))
+        prod = env_sudo['product.product'].browse(pid)
+        if not prod.exists():
+            raise UserError(_('Product not found.'))
+        vals = {}
+        if corrected_price_usd is not False and corrected_price_usd \
+                is not None and corrected_price_usd != '':
+            try:
+                price = float(corrected_price_usd)
+            except (TypeError, ValueError):
+                raise UserError(_('Invalid corrected price.'))
+            if price < 0:
+                raise UserError(
+                    _('Corrected price cannot be negative.'))
+            vals['corrected_price_usd'] = price
+        if location is not False and location is not None:
+            loc = (location or '').lower()
+            if loc not in ('', 'tr', 'us'):
+                raise UserError(_('Invalid location.'))
+            vals['location'] = loc or False
+        if not vals:
+            raise UserError(_('Nothing to save.'))
+        # Manufactured products have no own purchase price (their cost
+        # is the sum of the components), so a corrected price is
+        # rejected. Location stays allowed: it marks the production
+        # site (TR/US) for reporting.
+        if vals.get('corrected_price_usd') and \
+                _mpp_product_routes(env_sudo, [pid]).get(pid) == 'make':
+            raise UserError(_(
+                'Manufactured products have no purchase price: '
+                'corrected price cannot be set (their cost rolls up '
+                'from the components). Location can still be set as '
+                'the production site.'))
+        Ov = env_sudo['matia.procurement.price.override']
+        rec = Ov.search([('product_id', '=', pid)], limit=1)
+        if rec:
+            rec.write(vals)
+        else:
+            vals['product_id'] = pid
+            rec = Ov.create(vals)
+        return {'product_id': pid,
+                'corrected': float(rec.corrected_price_usd or 0.0),
+                'location': rec.location or ''}
+
+    @api.model
+    def bulk_set_location(self, product_ids, location):
+        """Set the purchase location for many products at once.
+
+        Existing corrected prices are kept; products without a row
+        get one with price 0.0. Manufactured products take part too:
+        their location marks the production site (TR/US).
+        @param product_ids: list of product.product IDs.
+        @param location: 'tr' or 'us'.
+        @return: {'updated': int, 'location': str}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        env_sudo = _mpp_env_sudo(self)
+        loc = (location or '').lower()
+        if loc not in ('tr', 'us'):
+            raise UserError(_('Invalid location.'))
+        pids = []
+        for _p in product_ids or []:
+            try:
+                _pid = int(_p)
+            except (TypeError, ValueError):
+                continue
+            if _pid > 0:
+                pids.append(_pid)
+        if not pids:
+            raise UserError(_('No products selected.'))
+        Ov = env_sudo['matia.procurement.price.override']
+        done = 0
+        for rec in Ov.search([('product_id', 'in', pids)]):
+            rec.write({'location': loc})
+            done += 1
+        have = Ov.search(
+            [('product_id', 'in', pids)]).mapped('product_id').ids
+        for _pid in pids:
+            if _pid not in have:
+                Ov.create({'product_id': _pid,
+                           'corrected_price_usd': 0.0,
+                           'location': loc})
+                done += 1
+        return {'updated': done, 'location': loc}
+
+    @api.model
+    def clear_price_overrides(self, product_ids):
+        """Delete override rows for the given products.
+
+        @param product_ids: list of product.product IDs.
+        @return: {'cleared': int}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        env_sudo = _mpp_env_sudo(self)
+        pids = []
+        for _p in product_ids or []:
+            try:
+                _pid = int(_p)
+            except (TypeError, ValueError):
+                continue
+            if _pid > 0:
+                pids.append(_pid)
+        if not pids:
+            raise UserError(_('No products selected.'))
+        recs = env_sudo['matia.procurement.price.override'].search(
+            [('product_id', 'in', pids)])
+        count = len(recs)
+        recs.unlink()
+        return {'cleared': count}
 
 
 class MatiaProcurementPlanLine(models.Model):

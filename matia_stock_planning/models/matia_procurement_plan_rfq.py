@@ -22,7 +22,12 @@ from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 import logging
 
-from .matia_procurement_plan import _mpp_env_sudo, _mpp_line_uom_factor
+from .matia_procurement_plan import (
+    _MPP_OVERRIDE_COMPANY,
+    _mpp_env_sudo,
+    _mpp_line_uom_factor,
+    _mpp_price_overrides,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -54,12 +59,52 @@ class MatiaProcurementPlanRfq(models.Model):
         for plan in self:
             plan.rfq_count = len(plan.purchase_order_ids)
 
+    @api.model
+    def _rfq_line_eff(self, env_sudo, usd, plan, line, overrides):
+        """Effective RFQ price/company for one plan line.
+
+        A manual USD override wins: corrected price (per line UoM,
+        factor 1.0) in USD, routed to the override purchase location.
+        Otherwise the last-buy snapshot with the last-buy company.
+        @param env_sudo: sudo environment.
+        @param usd: res.currency USD record (or False).
+        @param plan: matia.procurement.plan record.
+        @param line: matia.procurement.plan.line record.
+        @param overrides: _mpp_price_overrides() map.
+        @return: {price, currency_id, currency_name, company_id}.
+        """
+        _ov = (overrides or {}).get(line.product_id.id, {})
+        _corr = float(_ov.get('price') or 0.0)
+        if _corr > 0:
+            _loc = _ov.get('location')
+            return {
+                'price': _corr,
+                'currency_id': usd.id if usd else 0,
+                'currency_name': 'USD',
+                'company_id': _MPP_OVERRIDE_COMPANY.get(_loc) or (
+                    line.last_company_id.id if line.last_company_id
+                    else plan.company_id.id),
+            }
+        # RFQ PO lines use the plan line UoM, so the PO-UoM snapshot
+        # must be converted first (e.g. per-m price -> per-mm price).
+        return {
+            'price': (line.last_price or 0.0)
+            * _mpp_line_uom_factor(line),
+            'currency_id': line.last_currency_id.id
+            if line.last_currency_id else 0,
+            'currency_name': line.last_currency_id.name
+            if line.last_currency_id else '',
+            'company_id': line.last_company_id.id
+            if line.last_company_id else plan.company_id.id,
+        }
+
     def _rfq_groups(self, plan):
         """Bucket RFQ-eligible lines by (seller, currency, company).
 
-        The company comes from each line's last purchase (TR or USA):
-        the draft PO is created in that company so the receipt lands in
-        the right warehouse (WHTR vs WHUS).
+        The company comes from each line's last purchase (TR or USA),
+        or from the manual purchase location when set: the draft PO
+        is created in that company so the receipt lands in the right
+        warehouse (WHTR vs WHUS).
         @param plan: matia.procurement.plan record (sudo env).
         @return: (groups, skipped) where groups is a list of dicts
             {seller_id, seller_name, currency_id, currency_name,
@@ -71,6 +116,10 @@ class MatiaProcurementPlanRfq(models.Model):
             'make': 0, 'subcontract': 0, 'unknown': 0, 'zero_qty': 0,
             'no_supplier': 0,
         }
+        env_sudo = plan.env
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        overrides = _mpp_price_overrides(env_sudo)
         for line in plan.line_ids:
             route = line.route_type or 'unknown'
             if route not in ('buy', 'subcontract'):
@@ -82,16 +131,16 @@ class MatiaProcurementPlanRfq(models.Model):
             if not line.seller_id:
                 skipped['no_supplier'] += 1
                 continue
-            cur_id = line.last_currency_id.id if line.last_currency_id else 0
-            comp_id = line.last_company_id.id if line.last_company_id \
-                else plan.company_id.id
+            eff = self._rfq_line_eff(
+                env_sudo, usd, plan, line, overrides)
+            cur_id = eff['currency_id']
+            comp_id = eff['company_id']
             key = (line.seller_id.id, cur_id, comp_id)
             bucket = groups.setdefault(key, {
                 'seller_id': line.seller_id.id,
                 'seller_name': line.seller_id.display_name,
                 'currency_id': cur_id,
-                'currency_name': line.last_currency_id.name
-                if line.last_currency_id else '',
+                'currency_name': eff['currency_name'],
                 'company_id': comp_id,
                 'company': self._mpp_company_code(
                     plan.env, comp_id),
@@ -99,11 +148,8 @@ class MatiaProcurementPlanRfq(models.Model):
                 'subtotal': 0.0,
             })
             bucket['lines'].append(line)
-            # RFQ PO lines use the plan line UoM, so the PO-UoM snapshot
-            # must be converted first (e.g. per-m price -> per-mm price).
             bucket['subtotal'] += (
-                (line.order_qty or 0.0) * (line.last_price or 0.0)
-                * _mpp_line_uom_factor(line))
+                (line.order_qty or 0.0) * eff['price'])
         return list(groups.values()), skipped
 
     def _rfq_plan(self, plan_id):
@@ -132,8 +178,23 @@ class MatiaProcurementPlanRfq(models.Model):
         # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo, plan = self._rfq_plan(plan_id)
         groups, skipped = self._rfq_groups(plan)
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        overrides = _mpp_price_overrides(env_sudo)
         preview_groups = []
         for grp in groups:
+            _plines = []
+            for line in grp['lines']:
+                _eff = self._rfq_line_eff(
+                    env_sudo, usd, plan, line, overrides)
+                _plines.append({
+                    'product_id': line.product_id.id,
+                    'code': line.product_id.default_code or '',
+                    'name': line.product_id.display_name,
+                    'order_qty': line.order_qty,
+                    'last_price': _eff['price'],
+                    'last_currency': _eff['currency_name'],
+                })
             preview_groups.append({
                 'seller_id': grp['seller_id'],
                 'seller_name': grp['seller_name'],
@@ -143,15 +204,7 @@ class MatiaProcurementPlanRfq(models.Model):
                 'company': grp['company'],
                 'line_count': len(grp['lines']),
                 'subtotal': grp['subtotal'],
-                'lines': [{
-                    'product_id': line.product_id.id,
-                    'code': line.product_id.default_code or '',
-                    'name': line.product_id.display_name,
-                    'order_qty': line.order_qty,
-                    'last_price': (line.last_price or 0.0)
-                    * _mpp_line_uom_factor(line),
-                    'last_currency': grp['currency_name'],
-                } for line in grp['lines']],
+                'lines': _plines,
             })
         return {
             'plan_id': plan.id,
@@ -213,6 +266,9 @@ class MatiaProcurementPlanRfq(models.Model):
                 pickings[cid] = pick
             return pickings[cid]
 
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        overrides = _mpp_price_overrides(env_sudo)
         created = []
         try:
             for grp in groups:
@@ -233,8 +289,9 @@ class MatiaProcurementPlanRfq(models.Model):
                     uom = (line.uom_id.id if line.uom_id
                            else line.product_id.uom_po_id.id
                            if line.product_id.uom_po_id else False)
-                    _conv = (line.last_price or 0.0) \
-                        * _mpp_line_uom_factor(line)
+                    _conv = self._rfq_line_eff(
+                        env_sudo, usd, plan, line,
+                        overrides)['price']
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,
@@ -337,6 +394,9 @@ class MatiaProcurementPlanRfq(models.Model):
         if not picking:
             raise UserError(_(
                 'No incoming picking type found for %s.') % company.name)
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        overrides = _mpp_price_overrides(env_sudo)
         created = []
         try:
             for grp in groups:
@@ -354,8 +414,9 @@ class MatiaProcurementPlanRfq(models.Model):
                     uom = (line.uom_id.id if line.uom_id
                            else line.product_id.uom_po_id.id
                            if line.product_id.uom_po_id else False)
-                    _conv2 = (line.last_price or 0.0) \
-                        * _mpp_line_uom_factor(line)
+                    _conv2 = self._rfq_line_eff(
+                        env_sudo, usd, plan, line,
+                        overrides)['price']
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,

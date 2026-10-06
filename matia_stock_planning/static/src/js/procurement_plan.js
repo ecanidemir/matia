@@ -16,9 +16,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         events: {
             'click .mpp-btn-reload': '_onReload',
             'click .mpp-nav-tab': '_onNavTab',
-            'click .mpp-btn-recalc': '_onRecalc',
-            'click .mpp-btn-needfill': '_onNeedFill',
-            'click .mpp-btn-to-suppliers': '_onToSuppliers',
+            'click .mpp-btn-needfill-all': '_onNeedFillAll',
             'click .mpp-btn-excel': '_onExportExcel',
             'click .mpp-btn-excel-tree': '_onExportTree',
             'click .mpp-btn-create-rfq': '_onCreateRfq',
@@ -35,6 +33,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .msp-th-sortable': '_onSort',
             'click .mpp-btn-sup-toggle': '_onSupToggle',
             'click .mpp-sup-name': '_onSupToggle',
+            'click .mpp-btn-price-reload': '_onPriceReload',
+            'click .mpp-btn-price-tr': '_onPriceBulkTr',
+            'click .mpp-btn-price-us': '_onPriceBulkUs',
+            'click .mpp-btn-price-clear': '_onPriceClear',
+            'click .mpp-btn-price-save': '_onPriceSave',
+            'click .mpp-th-price-sort': '_onPriceSort',
+            'input .mpp-price-filter': '_onPriceFilter',
+            'change .mpp-price-filter': '_onPriceFilter',
+            'change .mpp-price-check': '_onPriceCheck',
+            'change .mpp-price-check-all': '_onPriceCheckAll',
         },
 
         init: function (parent, action) {
@@ -60,6 +68,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.pendingRfqSeller = null;
             this.expandedSup = {};
             this._expanding = false;
+            // Tab 3 Prices: quantity-free product list with manual
+            // USD/location overrides (global per product, stored in DB).
+            this.priceRows = [];
+            this.priceCount = 0;
+            this.priceOverrideCount = 0;
+            this.priceLoaded = false;
+            this.priceSel = {};
+            this.priceFilters = {part: '', type: '', seller: '',
+                last: '', usd: '', date: '', corr: '', loc: ''};
+            this.priceSort = {key: 'part', dir: 1};
         },
 
         willStart: function () {
@@ -112,8 +130,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     this.classList.add('d-none');
                 }
             });
+            this.$('.mpp-fill-bar').each(function () {
+                var t = parseInt(this.dataset.pane, 10) || 1;
+                if (t === n) {
+                    this.classList.remove('d-none');
+                } else {
+                    this.classList.add('d-none');
+                }
+            });
             if (n === 1) this._renderTree();
             if (n === 2) this._renderSup();
+            if (n === 3) this._renderPrices();
         },
 
         _onNavTab: function (ev) {
@@ -130,6 +157,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 }
                 this._showTab(2);
                 if (!this.supSummary) this._fetchSupSummary();
+                return;
+            }
+            if (n === 3) {
+                this._showTab(3);
+                if (!this.priceLoaded) this._fetchPrices();
                 return;
             }
             this._showTab(n);
@@ -239,63 +271,64 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // Group header auto-fill: Needed = N (gross want) for every
-        // top in the group, then persist + rebuild. Stock is netted
-        // ONCE by the server cascade (net = demand - avail), so the
-        // fill must NOT pre-subtract avail here: that double-counted
-        // stock (every 0 < avail < N row ordered avail units short)
-        // and starved shared parts. Shared consumption by other
-        // parents pools into Planned on rebuild.
-        _onNeedFill: function (ev) {
+        // Fill bar (above the Plan tab): Needed = N (gross want) for
+        // every top in each group, then persist + rebuild. Each of the
+        // four inputs is read independently; an empty/invalid input
+        // leaves that group untouched. Stock is netted ONCE by the
+        // server cascade (net = demand - avail), so the fill must NOT
+        // pre-subtract avail here: that double-counted stock (every
+        // 0 < avail < N row ordered avail units short) and starved
+        // shared parts. Shared consumption by other parents pools
+        // into Planned on rebuild.
+        _onNeedFillAll: function () {
             var self = this;
-            var key = ev && ev.currentTarget &&
-                ev.currentTarget.dataset.group;
-            if (!key || !this._planId()) return;
-            var nInput = this.$('.mpp-fill-n[data-group="' + key + '"]').val();
-            var n = parseInt(nInput, 10);
-            if (isNaN(n) || n < 0) n = 50;
-            this.fillN[key] = n;
+            if (!this.summary || !this._planId()) {
+                this.displayNotification({
+                    title: _t('Warning'),
+                    message: _t('The plan is still loading.'),
+                    type: 'warning',
+                });
+                return;
+            }
+            var keys = ['base', 'outdoor', 'seat', 'screws'];
+            var filled = [];
             var count = 0;
-            this.treeGroups.forEach(function (g) {
-                if (g.key !== key) return;
-                (g.items || []).forEach(function (r) {
-                    self.needMap[r.product_id] =
-                        Math.max(0, Math.ceil(n));
-                    count += 1;
+            keys.forEach(function (key) {
+                var nInput = self.$('.mpp-fill-n[data-group="' + key + '"]').val();
+                var n = parseInt(nInput, 10);
+                if (isNaN(n) || n < 0) return;
+                self.fillN[key] = n;
+                filled.push(key + '=' + n);
+                self.treeGroups.forEach(function (g) {
+                    if (g.key !== key) return;
+                    (g.items || []).forEach(function (r) {
+                        self.needMap[r.product_id] =
+                            Math.max(0, Math.ceil(n));
+                        count += 1;
+                    });
                 });
             });
+            if (!filled.length || !count) {
+                this.displayNotification({
+                    title: _t('Warning'),
+                    message: _t('Enter at least one quantity first.'),
+                    type: 'warning',
+                });
+                return;
+            }
             this._onNeedChange().then(function () {
                 self.displayNotification({
                     title: _t('Filled'),
-                    message: n + ' ' +
-                        _t('set as Needed for ') + count + ' ' +
+                    message: filled.join(', ') +
+                        _t(' set as Needed for ') + count + ' ' +
                         _t('parts (stock netted on rebuild).'),
                     type: 'success',
                 });
             });
         },
 
-        // Recalculate: persist current Needed numbers and rebuild.
-        _onRecalc: function () {
-            var self = this;
-            if (!this.summary) return;
-            this._onNeedChange().then(function () {
-                self.displayNotification({
-                    title: _t('Recalculated'),
-                    message: _t('Tree rebuilt from the Needed numbers.'),
-                    type: 'success',
-                });
-            });
-        },
-
-        // Group header auto-fill lives in the Plan group headers
-        // (see _renderTree); the per-group N inputs above feed it.
-
-        _onToSuppliers: function () {
-            if (!this._planId()) return;
-            this._showTab(2);
-            if (!this.supSummary) this._fetchSupSummary();
-        },
+        // Fill-bar visibility follows the active tab (groups only
+        // make sense on the Plan tab; see _showTab).
 
         _fetchSupSummary: function () {
             var self = this;
@@ -1086,8 +1119,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     return self._subtreeMatch(g.key + ':' + r.product_id, r);
                 });
                 items = self._sortItems(items.slice());
-                var n = self.fillN[g.key] !== undefined ?
-                    self.fillN[g.key] : 50;
                 html += '<tr class="group-row group-' + g.key +
                     '" data-group="' + g.key + '"><td colspan="14">' +
                     '<div class="group-title-badge">' +
@@ -1095,20 +1126,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<span>' + g.title + '</span>' +
                     '<span class="group-count ml-2">(' + items.length +
                     ' Parts)</span>' +
-                    '<span class="mpp-autofill ml-auto" title="' +
-                    _t('Sets Needed to N (gross want) for every top ' +
-                        'product in this group. TR+US stock is netted ' +
-                        'once on rebuild; shared use by other parents ' +
-                        'pools into Planned.') + '">' +
-                    '<i class="fa fa-magic"></i>' +
-                    '<span>' + _t('Auto-fill') + ' ' + g.title + ' ' +
-                    _t('to') + '</span>' +
-                    '<input type="number" min="0" value="' + n + '" ' +
-                    'class="form-control form-control-sm mpp-fill-n" ' +
-                    'data-group="' + g.key + '" style="width:80px;"/>' +
-                    '<button type="button" class="btn btn-secondary btn-sm mpp-btn-needfill" ' +
-                    'data-group="' + g.key + '">Apply</button>' +
-                    '</span>' +
                     '<span class="ml-2 text-muted" style="font-size: 0.75rem;">' +
                     'BOM: ' + (g.bom_name || '') + '</span>' +
                     '<button type="button" class="btn btn-sm msp-btn-toggle-group ml-2 ' +
@@ -1628,6 +1645,480 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             _t('No MO created.')) +
                         (sk ? ' (' + sk + ')' : ''),
                     type: n ? 'success' : 'warning',
+                });
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        // ---------------- tab 3: prices (manual overrides) ----------------
+        // Quantity-free list of every product in the 4 kit BOMs.
+        // Corrected USD + TR/US location persist per product in the DB
+        // (matia.procurement.price.override) and win over the last-buy
+        // snapshot in rolled costs, supplier totals and draft RFQs.
+        // Plain English strings below (no _t): the dashboard is
+        // English-only and short words clash with core translations.
+        _fetchPrices: function () {
+            var self = this;
+            this.$('.mpp-price-body').html(
+                '<div class="alert alert-info">Loading...</div>');
+            this._rpcPlan('get_price_overview',
+                [this._planId() || false]).then(function (res) {
+                self.priceRows = (res && res.items) || [];
+                self.priceCount = (res && res.count) ||
+                    self.priceRows.length;
+                self.priceOverrideCount = (res && res.override_count) || 0;
+                self.priceLoaded = true;
+                var keep = {};
+                self.priceRows.forEach(function (r) {
+                    if (self.priceSel[r.product_id]) {
+                        keep[r.product_id] = true;
+                    }
+                });
+                self.priceSel = keep;
+                if (self.activeTab === 3) self._renderPrices();
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        _onPriceReload: function () {
+            this._fetchPrices();
+        },
+
+        _escHtml: function (s) {
+            return (s === undefined || s === null ? '' : String(s))
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        },
+
+        _priceTypeBadge: function (route) {
+            var map = {
+                buy: ['Buy', 'badge-primary'],
+                subcontract: ['Subcontract', 'badge-warning'],
+                make: ['Manufacture', 'badge-success'],
+            };
+            var m = map[route] || ['Unknown', 'badge-secondary'];
+            return '<span class="badge ' + m[1] + '">' + m[0] + '</span>';
+        },
+
+        _priceSortVal: function (r, k) {
+            if (k === 'part') {
+                return ((r.code || '') + ' ' + (r.name || ''))
+                    .toLowerCase();
+            }
+            if (k === 'type') return r.route_label || '';
+            if (k === 'seller') return (r.seller || '').toLowerCase();
+            if (k === 'last') return parseFloat(r.last_price) || 0;
+            if (k === 'usd') return parseFloat(r.last_usd) || 0;
+            if (k === 'date') return r.last_date || '';
+            if (k === 'corr') return parseFloat(r.corrected) || 0;
+            if (k === 'loc') return r.location || '';
+            return '';
+        },
+
+        _priceArrow: function (col) {
+            if (this.priceSort.key !== col) return '';
+            return this.priceSort.dir === 1 ?
+                ' <i class="fa fa-sort-asc"></i>' :
+                ' <i class="fa fa-sort-desc"></i>';
+        },
+
+        _priceFiltered: function () {
+            var self = this;
+            var f = this.priceFilters;
+            var part = (f.part || '').toLowerCase();
+            var seller = (f.seller || '').toLowerCase();
+            var last = (f.last || '').toLowerCase();
+            var usd = (f.usd || '').toLowerCase();
+            var date = (f.date || '').toLowerCase();
+            var corr = (f.corr || '').toLowerCase();
+            var rows = this.priceRows.filter(function (r) {
+                if (part && (((r.code || '') + ' ' + (r.name || ''))
+                    .toLowerCase().indexOf(part) < 0)) return false;
+                if (f.type && (r.route || '') !== f.type) return false;
+                if (seller && ((r.seller || '').toLowerCase()
+                    .indexOf(seller) < 0)) return false;
+                if (last && (((r.last_price || '') + ' ' +
+                    (r.last_currency || '')).toLowerCase()
+                    .indexOf(last) < 0)) return false;
+                if (usd && String(r.last_usd || '')
+                    .indexOf(usd) < 0) return false;
+                if (date && ((r.last_date || '').toLowerCase()
+                    .indexOf(date) < 0)) return false;
+                if (corr && String(r.corrected || '')
+                    .indexOf(corr) < 0) return false;
+                if (f.loc === 'none') {
+                    if (r.location) return false;
+                } else if (f.loc && (r.location || '') !== f.loc) {
+                    return false;
+                }
+                return true;
+            });
+            var k = this.priceSort.key, d = this.priceSort.dir;
+            rows.sort(function (a, b) {
+                var va = self._priceSortVal(a, k);
+                var vb = self._priceSortVal(b, k);
+                if (va < vb) return -d;
+                if (va > vb) return d;
+                var ca = (a.code || ''), cb = (b.code || '');
+                if (ca < cb) return -1;
+                if (ca > cb) return 1;
+                return 0;
+            });
+            return rows;
+        },
+
+        _priceFilterOpts: function (cur, opts) {
+            var html = '';
+            opts.forEach(function (o) {
+                html += '<option value="' + o[0] + '"' +
+                    (cur === o[0] ? ' selected="selected"' : '') +
+                    '>' + o[1] + '</option>';
+            });
+            return html;
+        },
+
+        _renderPrices: function () {
+            if (!this.priceLoaded) {
+                this.$('.mpp-price-body').html(
+                    '<div class="alert alert-info">Loading...</div>');
+                return;
+            }
+            var f = this.priceFilters;
+            var html = '<div class="table-responsive">' +
+                '<table class="msp-table mpp-price-table">' +
+                '<thead><tr>' +
+                '<th style="width:28px;"><input type="checkbox" ' +
+                'class="mpp-price-check-all" ' +
+                'title="Select all visible rows"/></th>' +
+                '<th class="mpp-th-price-sort" data-col="part" ' +
+                'style="cursor:pointer;" title="Sort by part">' +
+                'Part' + this._priceArrow('part') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="type" ' +
+                'style="cursor:pointer;" title="Sort by type">' +
+                'Type' + this._priceArrow('type') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="seller" ' +
+                'style="cursor:pointer;" title="Sort by seller">' +
+                'Seller' + this._priceArrow('seller') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="last" ' +
+                'style="cursor:pointer;" title="Sort by last price">' +
+                'Last Price' + this._priceArrow('last') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="usd" ' +
+                'style="cursor:pointer;" title="Sort by USD">' +
+                'USD' + this._priceArrow('usd') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="date" ' +
+                'style="cursor:pointer;" title="Sort by last buy">' +
+                'Last Buy' + this._priceArrow('date') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="corr" ' +
+                'style="cursor:pointer;" ' +
+                'title="Sort by corrected price">' +
+                'Corrected USD' + this._priceArrow('corr') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="loc" ' +
+                'style="cursor:pointer;" title="Sort by location">' +
+                'Location' + this._priceArrow('loc') + '</th>' +
+                '<th style="width:64px;"></th>' +
+                '</tr><tr class="mpp-filter-row">' +
+                '<td></td>' +
+                '<td><input type="text" class="form-control ' +
+                'form-control-sm mpp-price-filter" data-f="part" value="' +
+                this._escHtml(f.part) + '" placeholder="Code or name"/>' +
+                '</td>' +
+                '<td><select class="form-control form-control-sm ' +
+                'mpp-price-filter" data-f="type">' +
+                this._priceFilterOpts(f.type, [['', 'All'],
+                    ['buy', 'Buy'], ['subcontract', 'Subcontract'],
+                    ['make', 'Manufacture'], ['unknown', 'Unknown']]) +
+                '</select></td>' +
+                '<td><input type="text" class="form-control ' +
+                'form-control-sm mpp-price-filter" data-f="seller" value="' +
+                this._escHtml(f.seller) + '" placeholder="Seller"/></td>' +
+                '<td><input type="text" class="form-control ' +
+                'form-control-sm mpp-price-filter" data-f="last" value="' +
+                this._escHtml(f.last) + '" placeholder="Price/curr."/>' +
+                '</td>' +
+                '<td><input type="text" class="form-control ' +
+                'form-control-sm mpp-price-filter" data-f="usd" value="' +
+                this._escHtml(f.usd) + '" placeholder="USD"/></td>' +
+                '<td><input type="text" class="form-control ' +
+                'form-control-sm mpp-price-filter" data-f="date" value="' +
+                this._escHtml(f.date) + '" placeholder="Mon YYYY"/></td>' +
+                '<td><input type="text" class="form-control ' +
+                'form-control-sm mpp-price-filter" data-f="corr" value="' +
+                this._escHtml(f.corr) + '" placeholder="USD"/></td>' +
+                '<td><select class="form-control form-control-sm ' +
+                'mpp-price-filter" data-f="loc">' +
+                this._priceFilterOpts(f.loc, [['', 'All'],
+                    ['tr', 'TR'], ['us', 'US'], ['none', '(empty)']]) +
+                '</select></td>' +
+                '<td></td>' +
+                '</tr></thead><tbody class="mpp-price-tbody"/>' +
+                '</table></div>';
+            this.$('.mpp-price-body').html(html);
+            this._renderPriceRows();
+        },
+
+        _priceRowHtml: function (r) {
+            var checked = this.priceSel[r.product_id] ?
+                ' checked="checked"' : '';
+            var corrVal = (parseFloat(r.corrected) || 0) > 0 ?
+                r.corrected : '';
+            var loc = (r.location || '').toLowerCase();
+            var lastTxt = r.last_price ?
+                this._fmtNum(r.last_price, 4) +
+                (r.last_currency ? ' ' + r.last_currency : '') : '';
+            var usdTxt = r.last_usd ?
+                this._fmtNum(r.last_usd, 4) : '';
+            var manualBadge = r.has_override ?
+                ' <span class="badge badge-warning" ' +
+                'title="Manual price/location stored in the database">' +
+                'manual</span>' : '';
+            // Manufactured products have no own purchase price: their
+            // cost rolls up from the components, so the corrected
+            // input stays disabled (the server rejects it as well).
+            // Location stays enabled: it marks the production site.
+            var isMake = r.route === 'make';
+            var disAttr = isMake ? ' disabled="disabled"' : '';
+            var disTitle = isMake ?
+                'Manufactured products take no manual price ' +
+                '(cost rolls up from the components)' :
+                'Manual USD unit price';
+            return '<tr class="item-row' +
+                (r.has_override ? ' mpp-row-manual' : '') +
+                '" data-pid="' + r.product_id + '">' +
+                '<td><input type="checkbox" class="mpp-price-check" ' +
+                'data-pid="' + r.product_id + '"' + checked + '/></td>' +
+                '<td class="td-product" title="' +
+                this._escHtml('[' + (r.code || '') + '] ' +
+                    this._plainName(r.code, r.name)) + '">[' +
+                this._escHtml(r.code || '') + '] ' +
+                this._escHtml(this._plainName(r.code, r.name)) +
+                manualBadge + '</td>' +
+                '<td>' + this._priceTypeBadge(r.route) + '</td>' +
+                '<td class="td-seller" title="' +
+                this._escHtml(r.seller || '') + '">' +
+                this._escHtml(r.seller || '') + '</td>' +
+                '<td style="white-space:nowrap;">' + lastTxt + '</td>' +
+                '<td style="white-space:nowrap;">' + usdTxt + '</td>' +
+                '<td>' + this._escHtml(r.last_date || '') + '</td>' +
+                '<td><input type="number" class="form-control ' +
+                'form-control-sm mpp-corr-input" data-pid="' +
+                r.product_id + '" value="' + corrVal + '" min="0" ' +
+                'step="0.0001" title="' + disTitle + '"' +
+                disAttr + '/></td>' +
+                '<td><select class="form-control form-control-sm ' +
+                'mpp-loc-select" data-pid="' + r.product_id + '" ' +
+                'title="Purchase location (production site for ' +
+                'manufactured products)">' +
+                '<option value="">-</option>' +
+                '<option value="tr"' +
+                (loc === 'tr' ? ' selected="selected"' : '') +
+                '>TR</option>' +
+                '<option value="us"' +
+                (loc === 'us' ? ' selected="selected"' : '') +
+                '>US</option>' +
+                '</select></td>' +
+                '<td><button class="btn btn-sm btn-outline-primary ' +
+                'mpp-btn-price-save" data-pid="' + r.product_id + '" ' +
+                'title="Save this row">Save</button></td>' +
+                '</tr>';
+        },
+
+        _renderPriceRows: function () {
+            var self = this;
+            var rows = this._priceFiltered();
+            var html = '';
+            rows.forEach(function (r) {
+                html += self._priceRowHtml(r);
+            });
+            if (!rows.length) {
+                html = '<tr><td colspan="10">' +
+                    '<div class="alert alert-info" style="margin:0.5rem;">' +
+                    'No products match the filters.</div></td></tr>';
+            }
+            var head = '<div class="mpp-filter-count">' + rows.length +
+                ' of ' + this.priceCount + ' products' +
+                (this.priceOverrideCount ?
+                    ' (' + this.priceOverrideCount +
+                    ' with manual values)' : '') + '</div>';
+            this.$('.mpp-price-body').find('.mpp-filter-count').remove();
+            this.$('.mpp-price-body').prepend(head);
+            var tbody = this.$('.mpp-price-tbody');
+            if (tbody.length) {
+                tbody.html(html);
+            } else {
+                this._renderPrices();
+                return;
+            }
+            this._updatePriceSelCount();
+        },
+
+        _updatePriceSelCount: function () {
+            var n = Object.keys(this.priceSel).length;
+            this.$('.mpp-price-selcount').text(n);
+        },
+
+        _priceSelIds: function () {
+            return Object.keys(this.priceSel).map(function (k) {
+                return parseInt(k, 10);
+            }).filter(function (v) {
+                return v > 0;
+            });
+        },
+
+        _onPriceFilter: function (ev) {
+            var el = ev.currentTarget;
+            this.priceFilters[el.dataset.f] = el.value || '';
+            this._renderPriceRows();
+        },
+
+        _onPriceSort: function (ev) {
+            var col = ev.currentTarget.dataset.col;
+            if (!col) return;
+            if (this.priceSort.key === col) {
+                this.priceSort.dir *= -1;
+            } else {
+                this.priceSort = {key: col, dir: 1};
+            }
+            this._renderPrices();
+        },
+
+        _onPriceCheck: function (ev) {
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            if (!pid) return;
+            if (ev.currentTarget.checked) {
+                this.priceSel[pid] = true;
+            } else {
+                delete this.priceSel[pid];
+            }
+            this._updatePriceSelCount();
+            var row = this.$(ev.currentTarget).closest('tr');
+            if (row.length) {
+                row.toggleClass('mpp-row-checked',
+                    !!ev.currentTarget.checked);
+            }
+        },
+
+        _onPriceCheckAll: function (ev) {
+            var on = !!ev.currentTarget.checked;
+            var rows = this._priceFiltered();
+            var self = this;
+            rows.forEach(function (r) {
+                if (on) {
+                    self.priceSel[r.product_id] = true;
+                } else {
+                    delete self.priceSel[r.product_id];
+                }
+            });
+            this._renderPriceRows();
+        },
+
+        _onPriceSave: function (ev) {
+            var self = this;
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            if (!pid) return;
+            var corrEl = this.$('.mpp-corr-input[data-pid="' + pid + '"]');
+            var locEl = this.$('.mpp-loc-select[data-pid="' + pid + '"]');
+            var corrRaw = corrEl.length ? (corrEl.val() || '') : '';
+            var loc = locEl.length ? (locEl.val() || '') : '';
+            var corr = false;
+            if (String(corrRaw).trim() !== '') {
+                corr = parseFloat(corrRaw);
+                if (isNaN(corr) || corr < 0) {
+                    this.displayNotification({
+                        title: 'Invalid price',
+                        message: 'Corrected price must be zero or more.',
+                        type: 'warning',
+                    });
+                    return;
+                }
+            }
+            this._rpcPlan('save_price_override',
+                [pid, corr, loc]).then(function (res) {
+                for (var i = 0; i < self.priceRows.length; i++) {
+                    if (self.priceRows[i].product_id ===
+                        (res && res.product_id)) {
+                        self.priceRows[i].corrected = res.corrected || 0;
+                        self.priceRows[i].location = res.location || '';
+                        self.priceRows[i].has_override =
+                            (res.corrected || 0) > 0 ||
+                            !!(res.location);
+                        self.priceRows[i].effective_usd =
+                            (res.corrected || 0) > 0 ?
+                            res.corrected :
+                            self.priceRows[i].last_usd;
+                        break;
+                    }
+                }
+                var n = 0;
+                self.priceRows.forEach(function (r) {
+                    if (r.has_override) n++;
+                });
+                self.priceOverrideCount = n;
+                self._renderPriceRows();
+                self.displayNotification({
+                    title: 'Saved',
+                    message: 'Manual values stored in the database.',
+                    type: 'success',
+                });
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        _onPriceBulkTr: function () {
+            this._onPriceBulk('tr');
+        },
+
+        _onPriceBulkUs: function () {
+            this._onPriceBulk('us');
+        },
+
+        _onPriceBulk: function (loc) {
+            var self = this;
+            var ids = this._priceSelIds();
+            if (!ids.length) {
+                this.displayNotification({
+                    title: 'Nothing selected',
+                    message: 'Check one or more rows first.',
+                    type: 'warning',
+                });
+                return;
+            }
+            this._rpcPlan('bulk_set_location',
+                [ids, loc]).then(function (res) {
+                self._fetchPrices();
+                self.displayNotification({
+                    title: 'Saved',
+                    message: (res && res.updated ? res.updated : 0) +
+                        ' product(s) set to ' +
+                        (loc === 'tr' ? 'TR' : 'US') + '.',
+                    type: 'success',
+                });
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        _onPriceClear: function () {
+            var self = this;
+            var ids = this._priceSelIds();
+            if (!ids.length) {
+                this.displayNotification({
+                    title: 'Nothing selected',
+                    message: 'Check one or more rows first.',
+                    type: 'warning',
+                });
+                return;
+            }
+            this._rpcPlan('clear_price_overrides',
+                [ids]).then(function (res) {
+                self._fetchPrices();
+                self.displayNotification({
+                    title: 'Cleared',
+                    message: (res && res.cleared ? res.cleared : 0) +
+                        ' override(s) deleted.',
+                    type: 'success',
                 });
             }, function (err) {
                 self._notifyErr(err);

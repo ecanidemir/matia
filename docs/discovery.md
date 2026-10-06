@@ -382,3 +382,11 @@
 - Dogrulama: `node --check` OK; `scratch/verify_openqty.js` gercek koddan fonksiyon cekip 15/15 PASS (P2CPAS32 60/9/51, M3 rozetsiz, needMap fallback); odoo-reviewer salt-okunur denetim: kritik yok (XSS yeni risk yok, export fazladan anahtari server yoksayar).
 - Deploy: sadece JS -> modulu upgrade + Ctrl+F5 (Git Deploy/restart gerekmez, asset bundle yenilenir). Plan: `plans/dual_qty_cost_display.md`. Commit/push YOK.
 
+
+## Production Prices Tab (2026-10-06, Tab 3, commit bekliyor)
+
+- Yeni model matia.procurement.price.override (product unique, corrected_price_usd, location tr/us; ACL group_system). Global: tum planlarda gecerli, DB'de kalici.
+- Server: get_price_overview (4 kit BFS, depth<=10, variant-BOM oncelikli), save_price_override / ulk_set_location / clear_price_overrides. Override = efektif USD (faktor 1.0): _compute_rollup._own_usd/_own_try, supplier PO-degeri, RFQ fiyat+currency(USD)+company hepsinde last-buy yerine gecer. Location TR->sirket 1, US->sirket 2 (_MPP_OVERRIDE_COMPANY).
+- Tree/summary satirlari corrected_usd + eff_usd tasir (Tab 1/2 rozet henuz yok, server alani hazir). Tab 3 client: kolon-basi filtre, tikla-sort, checkbox + Set TR/US + Clear, satir-basi Save.
+- Dogrulama: py_compile + node --check + XML parse OK; TR-karakter taramasi temiz (tek eslesme eski UoM map anahtari). Plan: plans/production_price_tab.md. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); sonrasi Ctrl+F5. Commit/push YOK.
+- Rota kurali (2026-10-06, guncelleme): Manufacture urunlerde corrected YASAK (server save reddeder, UI input kilitli, _own_usd/_own_try yoksayar); location SERBEST (uretim yeri TR/US raporu icin, bulk dahil). Tek kaynak: _mpp_classify_route (Subcontract>Manufacture>Buy>purchase_ok). Subcontract own = fason hizmet bedeli (duzeltilebilir); rolled = own + cocuklar.
