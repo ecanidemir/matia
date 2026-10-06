@@ -15,6 +15,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-reload': '_onReload',
             'click .mpp-nav-tab': '_onNavTab',
             'click .mpp-btn-fill': '_onFill',
+            'click .mpp-btn-entry-toggle': '_onEntryGroupToggle',
             'click .mpp-btn-clear': '_onClear',
             'click .mpp-btn-calc': '_onCalc',
             'click .mpp-btn-to-suppliers': '_onToSuppliers',
@@ -44,7 +45,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.collapsedGroups = {};
             this.treeSearch = '';
             this.treeSort = {key: 'planned', dir: -1};
-            this.fillN = 50;
+            // Per-group auto-fill targets (Tab 1 entry headers).
+            this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
+            this.collapsedEntry = {};
             this.activeTab = 1;
             this.supSummary = null;
             this.pendingRfqSeller = null;
@@ -165,21 +168,53 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // Fill-to-N: qty = max(0, N - (TR on-hand + USA on-hand)).
-        // Reserves are deliberately ignored (user rule).
-        _onFill: function () {
-            var nInput = this.$('.mpp-fill-n').val();
+        // Entry groups in Capacity Plan order. Titles mirror the
+        // capacity KPI cards: Base / Outdoor Parts / Seat Parts /
+        // Common Screws. Icons reuse the tree-tab _groupIcon map.
+        _entryGroupOrder: function () {
+            return [
+                {key: 'base', title: _t('Base')},
+                {key: 'outdoor', title: _t('Outdoor Parts')},
+                {key: 'seat', title: _t('Seat Parts')},
+                {key: 'screws', title: _t('Common Screws')},
+            ];
+        },
+
+        _entryGroupTitle: function (key) {
+            var order = this._entryGroupOrder();
+            for (var i = 0; i < order.length; i++) {
+                if (order[i].key === key) return order[i].title;
+            }
+            return key;
+        },
+
+        _onEntryGroupToggle: function (ev) {
+            var key = ev.currentTarget.dataset.groupKey;
+            if (!key) return;
+            this.collapsedEntry[key] = !this.collapsedEntry[key];
+            this._renderEntry();
+        },
+
+        // Per-group auto-fill: qty = max(0, N - (TR on-hand + USA on-hand)).
+        // Only the clicked header's group is filled; each group remembers
+        // its own N. Reserves are deliberately ignored (user rule).
+        _onFill: function (ev) {
+            var key = ev && ev.currentTarget &&
+                ev.currentTarget.dataset.group;
+            if (!key) return;
+            var nInput = this.$('.mpp-fill-n[data-group="' + key + '"]').val();
             var n = parseInt(nInput, 10);
             if (isNaN(n) || n < 0) n = 50;
-            this.fillN = n;
+            this.fillN[key] = n;
             for (var i = 0; i < this.items.length; i++) {
+                if (this.items[i].kit_key !== key) continue;
                 var base = parseFloat(this.items[i].fill_base) || 0;
                 this.items[i].qty_input = Math.max(0, Math.ceil(n - base));
             }
             this._renderEntry();
             this.displayNotification({
                 title: _t('Filled'),
-                message: n + ' ' +
+                message: this._entryGroupTitle(key) + ': ' + n + ' ' +
                     _t('units filled (TR+USA on-hand, reserves ignored).'),
                 type: 'success',
             });
@@ -192,26 +227,82 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._renderEntry();
         },
 
-        _renderEntry: function () {
-            var html = '';
-            for (var i = 0; i < this.items.length; i++) {
-                var r = this.items[i];
-                html += '<tr>' +
+        // Group header row: identical look to the Capacity Plan /
+        // tree tab (tr.group-row + .group-title-badge + Show/Hide),
+        // plus this group's own auto-fill control on the right.
+        _entryGroupHtml: function (key, title, rows) {
+            var collapsed = !!this.collapsedEntry[key];
+            var n = this.fillN[key] !== undefined ?
+                this.fillN[key] : 50;
+            var html = '<tr class="group-row group-' + key +
+                '" data-group="' + key + '"><td colspan="5">' +
+                '<div class="group-title-badge">' +
+                '<i class="fa ' + this._groupIcon(key) + ' mr-1"></i>' +
+                '<span>' + title + '</span>' +
+                '<span class="group-count ml-2">(' + rows.length +
+                ' Parts)</span>' +
+                '<span class="mpp-autofill ml-auto" title="' +
+                _t('Sets Qty = target − (TR on-hand + USA on-hand) for every ' +
+                    'product in this group. Reserves are ignored.') + '">' +
+                '<i class="fa fa-magic"></i>' +
+                '<span>' + _t('Auto-fill') + ' ' + title + ' ' +
+                _t('to') + '</span>' +
+                '<input type="number" min="0" value="' + n + '" ' +
+                'class="form-control form-control-sm mpp-fill-n" ' +
+                'data-group="' + key + '" style="width:80px;"/>' +
+                '<button type="button" class="btn btn-secondary btn-sm mpp-btn-fill" ' +
+                'data-group="' + key + '">' + _t('Apply') + '</button>' +
+                '</span>' +
+                '<button type="button" class="btn btn-sm mpp-btn-entry-toggle ml-2 ' +
+                (collapsed ? 'msp-btn-group-show' : 'msp-btn-group-hide') +
+                '" data-group-key="' + key + '"' +
+                ' title="' + (collapsed ? _t('Show this group') :
+                    _t('Hide this group')) + '"' +
+                ' style="padding:1px 10px; font-size:0.75rem; font-weight:600;">' +
+                (collapsed ?
+                    '<i class="fa fa-eye mr-1"></i>' + _t('Show') :
+                    '<i class="fa fa-eye-slash mr-1"></i>' + _t('Hide')) +
+                '</button></div></td></tr>';
+            if (collapsed) return html;
+            for (var i = 0; i < rows.length; i++) {
+                var r = rows[i];
+                html += '<tr class="item-row" data-group="' + key + '">' +
                     '<td>' + (r.product_code || '') + '</td>' +
                     '<td>' + (r.display_name || '') + '</td>' +
-                    '<td><span class="badge badge-info">' + (r.kit_key || '') +
-                    '</span></td>' +
                     '<td class="text-center">' + (r.avail_tr || 0) + '</td>' +
                     '<td class="text-center">' + (r.stock_usa || 0) + '</td>' +
-                    '<td class="text-center"><strong>' +
-                    (r.fill_base || 0) + '</strong></td>' +
                     '<td><input type="number" min="0" class="form-control form-control-sm mpp-qty" ' +
                     'data-pid="' + r.product_id + '" value="' +
                     (r.qty_input || 0) + '"/></td>' +
                     '</tr>';
             }
+            return html;
+        },
+
+        _renderEntry: function () {
+            var self = this;
+            var byKey = {};
+            for (var i = 0; i < this.items.length; i++) {
+                var k = this.items[i].kit_key || 'other';
+                (byKey[k] = byKey[k] || []).push(this.items[i]);
+            }
+            var html = '';
+            var order = this._entryGroupOrder();
+            var seen = {};
+            order.forEach(function (g) {
+                seen[g.key] = true;
+                html += self._entryGroupHtml(
+                    g.key, g.title, byKey[g.key] || []);
+            });
+            // Unknown kit_key values (if any) render as trailing groups
+            // instead of silently disappearing.
+            Object.keys(byKey).forEach(function (k) {
+                if (!seen[k]) {
+                    html += self._entryGroupHtml(
+                        k, self._entryGroupTitle(k), byKey[k]);
+                }
+            });
             this.$('.mpp-entry-body').html(html);
-            this.$('.mpp-fill-n').val(this.fillN);
         },
 
         // Calculate -> creates the plan, builds the tree, jumps to Tab 2.
@@ -221,7 +312,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (!sel.length) {
                 self.displayNotification({
                     title: _t('Warning'),
-                    message: _t('Enter a quantity for at least one product (or use Fill to N).'),
+                    message: _t('Enter a quantity for at least one product (or use a group auto-fill).'),
                     type: 'warning',
                 });
                 return;

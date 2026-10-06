@@ -28,4 +28,24 @@
 
     .mpp-entry-toolbar .btn { margin-left: 0.35rem; }
     .mpp-fill-n { margin: 0 0.35rem; }
+
+    // Tab 1 group headers reuse the capacity/tree group-row look
+    // (tr.group-row + .group-title-badge come from stock_planning.scss
+    // via table.msp-table). The toggle below mirrors
+    // .msp-btn-toggle-group with its own hook class so tree-tab
+    // handlers never fire on entry headers.
+    .mpp-autofill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-weight: 600;
+        font-size: 0.78rem;
+    }
+    .mpp-btn-entry-toggle {
+        flex-shrink: 0;
+        border-radius: 5px;
+        font-size: 0.72rem !important;
+        padding: 2px 10px !important;
+        line-height: 1.5;
+    }
 }

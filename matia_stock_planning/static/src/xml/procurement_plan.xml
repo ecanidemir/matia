@@ -26,30 +26,30 @@
                 </li>
             </ul>
 
-            <!-- TAB 1: flat entry, NO expandable rows -->
+            <!-- TAB 1: grouped entry (same group look as Capacity Plan) -->
             <div class="mpp-pane" data-pane="1">
-                <h4 class="mt-2">Enter quantities (TR+USA on-hand shown)</h4>
+                <h4 class="mt-2">Enter quantities by group (TR+USA on-hand shown)</h4>
                 <div class="mpp-entry-toolbar mb-2">
-                    <label>Fill to N:
-                        <input type="number" min="0" value="50"
-                            class="form-control form-control-sm mpp-fill-n d-inline-block"
-                            style="width:90px;"/>
-                    </label>
-                    <button class="btn btn-secondary btn-sm mpp-btn-fill"
-                        title="Fills qty = N − (TR on-hand + USA on-hand). Reserves are ignored.">
-                        Fill to N (TR+USA on-hand)</button>
-                    <button class="btn btn-outline-secondary btn-sm mpp-btn-clear">Clear</button>
+                    <span class="text-muted small">
+                        <i class="fa fa-magic mr-1"></i>
+                        Each group has its own auto-fill in its header
+                        (target − on-hand per group).</span>
+                    <button class="btn btn-outline-secondary btn-sm mpp-btn-clear ml-2">Clear</button>
                     <button class="btn btn-primary btn-sm mpp-btn-calc">Calculate tree + cost</button>
                 </div>
-                <table class="table table-sm table-striped">
-                    <thead>
-                        <tr>
-                            <th>Code</th><th>Product</th><th>Kit</th>
-                            <th>TR Avail.</th><th>USA Stock</th><th>On-Hand Base</th><th>Qty</th>
-                        </tr>
-                    </thead>
-                    <tbody class="mpp-entry-body"/>
-                </table>
+                <div class="msp-table-card mt-2">
+                    <div class="table-responsive">
+                        <table class="msp-table">
+                            <thead>
+                                <tr>
+                                    <th>Code</th><th>Product</th>
+                                    <th>TR Avail.</th><th>USA Stock</th><th>Qty</th>
+                                </tr>
+                            </thead>
+                            <tbody class="mpp-entry-body"/>
+                        </table>
+                    </div>
+                </div>
             </div>
 
             <!-- TAB 2: capacity-identical tree -->
