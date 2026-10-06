@@ -3,6 +3,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
     var AbstractAction = require('web.AbstractAction');
     var core = require('web.core');
+    var Dialog = require('web.Dialog');
     var _t = core._t;
 
     // Production Plan dashboard: 2 tabs in ONE client action (no navigation).
@@ -16,6 +17,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         events: {
             'click .mpp-btn-reload': '_onReload',
             'click .mpp-nav-tab': '_onNavTab',
+            'change .mpp-slot-select': '_onSlotChange',
+            'click .mpp-btn-slot-save': '_onSlotSave',
             'click .mpp-btn-needfill-all': '_onNeedFillAll',
             'click .mpp-btn-excel': '_onExportExcel',
             'click .mpp-btn-excel-tree': '_onExportTree',
@@ -61,6 +64,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.treeSort = {key: 'planned', dir: -1};
             // Editable Needed numbers per top product (persisted on plan).
             this.needMap = {};
+            // Study slots 0-9 (persisted on the plan record).
+            this.slots = [];
+            this.activeSlot = 0;
             // Per-group auto-fill targets (Plan group headers).
             this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
             this.activeTab = 1;
@@ -92,6 +98,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return this._super.apply(this, arguments).then(function () {
                 self._showTab(1);
                 self._renderTree();
+                self._renderSlotBar();
             });
         },
 
@@ -208,6 +215,117 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 self.needMap[parseInt(k, 10)] =
                     Math.max(0, parseInt(targets[k], 10) || 0);
             });
+            // Slot list survives plain rebuilds (set_targets responses
+            // carry no slots); slot responses overwrite it. active_slot
+            // 0 is valid, so no truthiness check here.
+            if (summary && summary.slots) {
+                this.slots = summary.slots;
+            }
+            if (summary &&
+                    Object.prototype.hasOwnProperty.call(
+                        summary, 'active_slot') &&
+                    summary.active_slot !== null &&
+                    summary.active_slot !== undefined &&
+                    summary.active_slot !== false) {
+                this.activeSlot = summary.active_slot;
+            }
+            // NOTE: willStart runs before mount (no $el yet) - touch the
+            // DOM only when the widget is attached.
+            if (this.$el) {
+                this._renderSlotBar();
+            }
+        },
+
+        // Slot bar (header): study slots 0-9. Rebuilt from the cached
+        // slot list; a no-op before mount or before the first load.
+        _renderSlotBar: function () {
+            var $sel = this.$('.mpp-slot-select');
+            if (!$sel.length) return;
+            var self = this;
+            var html = '';
+            (this.slots || []).forEach(function (s) {
+                html += '<option value="' + s.slot + '"' +
+                    (s.slot === self.activeSlot ?
+                        ' selected="selected"' : '') +
+                    '>Slot ' + s.slot + '</option>';
+            });
+            $sel.html(html);
+            var entry = null;
+            (this.slots || []).forEach(function (s) {
+                if (s.slot === self.activeSlot) entry = s;
+            });
+            var status = 'Slot ' + this.activeSlot;
+            if (!entry || !entry.plan_id) {
+                status += ' - empty';
+            }
+            this.$('.mpp-slot-status').text(status);
+        },
+
+        // Switching the dropdown loads that slot's study (no write).
+        _onSlotChange: function () {
+            var self = this;
+            var slot = parseInt(this.$('.mpp-slot-select').val(), 10);
+            if (isNaN(slot) || slot < 0 || slot > 9) return;
+            if (slot === this.activeSlot) return;
+            this._rpcPlan('load_slot', [slot]).then(function (res) {
+                self._applySummary(res);
+                self._renderSlotBar();
+                self._showTab(self.activeTab);
+                if (self.activeTab === 2) self._fetchSupSummary();
+                if (self.activeTab === 3) {
+                    self.priceLoaded = false;
+                    self._fetchPrices();
+                }
+            }, function (err) {
+                self._notifyErr(err);
+                self._renderSlotBar();
+            });
+        },
+
+        // Save writes the current Needed numbers into the selected slot
+        // (same slot = plain save, other slot = save as). Overwriting a
+        // study that already has linked RFQs asks for confirmation.
+        _onSlotSave: function () {
+            var self = this;
+            var slot = parseInt(this.$('.mpp-slot-select').val(), 10);
+            if (isNaN(slot) || slot < 0 || slot > 9) return;
+            var entry = null;
+            (this.slots || []).forEach(function (s) {
+                if (s.slot === slot) entry = s;
+            });
+            var doSave = function () {
+                self._rpcPlan('save_slot', [slot, self.needMap]).then(
+                    function (res) {
+                        self._applySummary(res);
+                        self._renderSlotBar();
+                        self._showTab(self.activeTab);
+                        if (self.activeTab === 2) self._fetchSupSummary();
+                        if (self.activeTab === 3) {
+                            self.priceLoaded = false;
+                            self._fetchPrices();
+                        }
+                        self.displayNotification({
+                            title: _t('Saved'),
+                            message: _t('Study saved to slot ') + slot +
+                                '.',
+                            type: 'success',
+                        });
+                    }, function (err) {
+                        self._notifyErr(err);
+                    });
+            };
+            if (entry && entry.plan_id &&
+                    (slot !== this.activeSlot ||
+                        (entry.rfq_count || 0) > 0)) {
+                var msg = (entry.rfq_count || 0) > 0 ?
+                    'Slot ' + slot + ' (' + entry.name +
+                    ') already has a study with linked RFQs. Overwrite it?' :
+                    'Slot ' + slot + ' (' + entry.name +
+                    ') already has a study. Overwrite it?';
+                Dialog.confirm(this, msg, { confirm_callback: doSave });
+                return;
+            }
+            doSave();
         },
 
         _onReload: function () {

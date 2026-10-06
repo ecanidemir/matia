@@ -25,6 +25,19 @@
                 </div>
             </div>
 
+            <!-- Study slots 0-9: each slot stores one full study (Needed
+                 numbers persist on the slot's plan record). Switching the
+                 dropdown loads that study; Save writes into it. -->
+            <div class="mpp-slot-bar">
+                <i class="fa fa-archive"></i>
+                <span class="mpp-slot-title">Study</span>
+                <select class="form-control form-control-sm mpp-slot-select"/>
+                <button type="button" class="btn btn-primary btn-sm mpp-btn-slot-save" title="Save current Needed numbers into the selected slot">
+                    <i class="fa fa-save mr-1"></i>Save
+                </button>
+                <span class="mpp-slot-status text-muted"/>
+            </div>
+
             <!-- 2. Step navigation -->
             <ul class="nav nav-tabs mpp-nav-tabs">
                 <li class="nav-item">

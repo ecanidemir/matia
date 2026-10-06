@@ -184,6 +184,30 @@
         white-space: nowrap;
     }
 
+    // Slot bar under the header: study selector 0-9 + save.
+    .mpp-slot-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-top: 0;
+        padding: 0.5rem 0.75rem;
+        flex-wrap: wrap;
+    }
+    .mpp-slot-title {
+        font-weight: 700;
+        color: #0f172a;
+    }
+    .mpp-slot-select {
+        width: auto;
+        min-width: 150px;
+        font-weight: 600;
+    }
+    .mpp-slot-status {
+        font-size: 0.75rem;
+    }
+
     @media (max-width: 991px) {
         height: auto !important;
         min-height: 100% !important;

@@ -40,6 +40,11 @@ _MPP_MAX_LEVEL = 10
 _MPP_TR_COMPANY_ID = 1
 _MPP_US_COMPANY_ID = 2
 
+# Study slots: the Plan tab stores up to 10 named studies (slot 0..9).
+# Each slot binds one plan header; saving overwrites that slot's plan.
+# slot=-1 marks legacy plans created before slots existed (untouched).
+_MPP_SLOT_COUNT = 10
+
 # UoM display names are stored in the DB language (TR). The whole preview
 # UI is English-only (user rule), so raw names like 'Adet' must never
 # reach the client. Same map as the Capacity page (stock_planning.py).
@@ -578,8 +583,16 @@ class MatiaProcurementPlan(models.Model):
     _name = 'matia.procurement.plan'
     _description = 'Matia Bulk Procurement/Production Preview Plan'
     _order = 'id desc'
+    _sql_constraints = [
+        ('slot_range', 'CHECK(slot >= -1 AND slot <= 9)',
+         'Slot must be between 0 and 9.'),
+    ]
 
     name = fields.Char(required=True, default=lambda self: _('New'))
+    slot = fields.Integer(
+        default=-1,
+        help='Study slot 0..9 shown in the Plan tab header. '
+             '-1 marks plans created before slots existed.')
     company_id = fields.Many2one(
         'res.company', required=True, default=_MPP_TR_COMPANY_ID,
         help='Owning company of the plan (currency/origin). '
@@ -1826,6 +1839,7 @@ class MatiaProcurementPlan(models.Model):
         return {
             'plan_id': plan.id,
             'name': plan.name,
+            'slot': plan.slot if isinstance(plan.slot, int) else -1,
             'state': plan.state,
             'total_cost': plan.total_cost,
             'groups': groups,
@@ -1839,29 +1853,168 @@ class MatiaProcurementPlan(models.Model):
     # ------------------------------------------------------------------
     @api.model
     def get_startup_tree(self):
-        """Latest plan with its saved Needed values (or a fresh plan).
+        """Latest slot plan with its saved Needed values (or a fresh plan).
 
         The Plan tab opens with this: numbers persist on the plan, so
-        the user continues where they left off. When no plan exists
-        yet, an empty one is created and skeleton groups (need=0)
-        are returned.
-        @return Same dict as get_tree_with_cost (tree_groups + targets).
+        the user continues where they left off. Prefers the most
+        recently written slot plan (slot 0..9); falls back to the
+        latest legacy plan (which is then bound to slot 0), else
+        creates an empty plan on slot 0.
+        @return Same dict as get_tree_with_cost (tree_groups + targets),
+            plus slots/active_slot.
         """
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].search(
-            [], order='id desc', limit=1)
+            [('slot', '>=', 0)], order='write_date desc, id desc', limit=1)
         if not plan:
-            company = env_sudo['res.company'].browse(_MPP_TR_COMPANY_ID)
-            seq = env_sudo['ir.sequence'].sudo().next_by_code(
-                'matia.procurement.plan') or _('MPP')
-            plan = env_sudo['matia.procurement.plan'].create({
-                'name': seq,
-                'company_id': company.id,
-                'state': 'draft',
-                'target_json': '{}',
-                'currency_id': company.currency_id.id,
-            })
-        return self.get_tree_with_cost(plan.id)
+            plan = env_sudo['matia.procurement.plan'].search(
+                [], order='id desc', limit=1)
+            if plan and not isinstance(plan.slot, int):
+                plan.write({'slot': 0})
+        if not plan:
+            plan = self._mpp_create_slot_plan(env_sudo, 0)
+        res = self.get_tree_with_cost(plan.id)
+        res['slots'] = self.get_slot_list()['slots']
+        res['active_slot'] = plan.slot if isinstance(
+            plan.slot, int) else 0
+        return res
+
+    @staticmethod
+    def _mpp_check_slot(slot):
+        """Validate a study slot number.
+
+        @param slot: candidate slot value.
+        @return: int slot 0..9.
+        """
+        try:
+            _s = int(slot)
+        except (TypeError, ValueError):
+            _s = -1
+        if _s < 0 or _s >= _MPP_SLOT_COUNT:
+            raise UserError(_('Slot must be between 0 and 9.'))
+        return _s
+
+    @api.model
+    def _mpp_slot_plan(self, env_sudo, slot):
+        """Latest plan bound to a slot (or an empty recordset).
+
+        @param env_sudo: sudo environment.
+        @param slot: int 0..9.
+        @return: plan record (possibly empty).
+        """
+        return env_sudo['matia.procurement.plan'].search(
+            [('slot', '=', int(slot))], order='id desc', limit=1)
+
+    @api.model
+    def _mpp_create_slot_plan(self, env_sudo, slot):
+        """Create an empty plan bound to a slot.
+
+        @param env_sudo: sudo environment.
+        @param slot: int 0..9.
+        @return: new plan record.
+        """
+        company = env_sudo['res.company'].browse(_MPP_TR_COMPANY_ID)
+        seq = env_sudo['ir.sequence'].sudo().next_by_code(
+            'matia.procurement.plan') or _('MPP')
+        return env_sudo['matia.procurement.plan'].create({
+            'name': seq,
+            'company_id': company.id,
+            'state': 'draft',
+            'slot': int(slot),
+            'target_json': '{}',
+            'currency_id': company.currency_id.id,
+        })
+
+    @api.model
+    def get_slot_list(self):
+        """All study slots with their bound plan (if any). Read-only.
+
+        @return: {'slots': [{slot, plan_id, name, state, target_count,
+            rfq_count, write_date}]}. Empty slots carry plan_id=False.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        latest = {}
+        for plan in env_sudo['matia.procurement.plan'].search(
+                [('slot', '>=', 0)]):
+            if plan.slot not in latest or plan.id > latest[plan.slot].id:
+                latest[plan.slot] = plan
+        slots = []
+        for _s in range(_MPP_SLOT_COUNT):
+            plan = latest.get(_s)
+            if plan:
+                try:
+                    targets = json.loads(plan.target_json or '{}')
+                except ValueError:
+                    targets = {}
+                _wd = plan.write_date
+                slots.append({
+                    'slot': _s,
+                    'plan_id': plan.id,
+                    'name': plan.name,
+                    'state': plan.state,
+                    'target_count': len(targets),
+                    'rfq_count': len(plan.purchase_order_ids),
+                    'write_date': _wd.strftime('%Y-%m-%d %H:%M')
+                    if _wd else '',
+                })
+            else:
+                slots.append({
+                    'slot': _s,
+                    'plan_id': False,
+                    'name': '',
+                    'state': '',
+                    'target_count': 0,
+                    'rfq_count': 0,
+                    'write_date': '',
+                })
+        return {'slots': slots}
+
+    @api.model
+    def load_slot(self, slot):
+        """Open the plan bound to a slot (creating it when empty).
+
+        @param slot: int 0..9.
+        @return: Same dict as get_tree_with_cost, plus slots/active_slot.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        _s = self._mpp_check_slot(slot)
+        plan = self._mpp_slot_plan(env_sudo, _s)
+        if not plan:
+            plan = self._mpp_create_slot_plan(env_sudo, _s)
+        res = self.get_tree_with_cost(plan.id)
+        res['slots'] = self.get_slot_list()['slots']
+        res['active_slot'] = _s
+        return res
+
+    @api.model
+    def save_slot(self, slot, targets):
+        """Save Needed numbers into a slot and rebuild the tree.
+
+        Overwrites the slot's plan (the latest one wins when several
+        exist). Only positive quantities are kept; missing rows mean 0.
+        @param slot: int 0..9.
+        @param targets: {product_id: qty} Needed numbers from the client.
+        @return: Same dict as get_tree_with_cost, plus slots/active_slot.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        _s = self._mpp_check_slot(slot)
+        plan = self._mpp_slot_plan(env_sudo, _s)
+        if not plan:
+            plan = self._mpp_create_slot_plan(env_sudo, _s)
+        clean = {}
+        for _k, _v in (targets or {}).items():
+            try:
+                _pid = int(_k)
+                _qty = int(float(_v))
+            except (TypeError, ValueError):
+                continue
+            if _pid > 0 and _qty > 0:
+                clean[str(_pid)] = _qty
+        plan.write({'target_json': json.dumps(clean)})
+        res = self.get_tree_with_cost(plan.id)
+        res['slots'] = self.get_slot_list()['slots']
+        res['active_slot'] = _s
+        return res
 
     @api.model
     def set_targets_and_rebuild(self, plan_id, targets):
