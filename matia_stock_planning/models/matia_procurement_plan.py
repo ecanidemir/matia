@@ -3630,11 +3630,26 @@ class MatiaProcurementPlan(models.Model):
                 sorted(kit_top_pids))
         except Exception:
             _logger.exception('MPP-TEMP price overview log failed')
+        # TEMP-DEBUG: same data inside the JSON response, because the
+        # panel log view does not show INFO lines. Read it in the
+        # browser: Network -> get_price_overview -> Response -> debug.
+        # Remove together with the MPP-TEMP block above.
+        _debug = {'db': self.env.cr.dbname}
+        try:
+            _debug.update({
+                'uid': self.env.uid,
+                'plan': plan.id if plan else False,
+                'hist': _hist,
+                'probe': _probe,
+            })
+        except Exception:
+            pass
         return {
             'items': items,
             'count': len(items),
             'override_count': sum(
                 1 for it in items if it['has_override']),
+            'debug': _debug,
         }
 
     @api.model
