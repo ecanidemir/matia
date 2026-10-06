@@ -396,3 +396,14 @@
 - `matia.procurement.plan.slot` Integer (default -1 = slotsuz legacy; CHECK -1..9, Odoo 15 tuple `_sql_constraints`; DB unique YOK, slot basi en yeni plan gecerli). Metodlar: `get_slot_list` (10 girdi: plan_id/name/state/target_count/rfq_count/write_date, bosta plan_id=False), `load_slot`, `save_slot` (hedef temizligi `set_targets_and_rebuild` ile ayni), `get_startup_tree` artik en son yazilan slot planini acar (yoksa latest legacy'yi slot 0'a baglar, o da yoksa slot 0'da bos plan acar); sonuc `slots` + `active_slot` tasir (`_plan_summary` de `slot` ekler, RFQ override super() ile korunur). JS'te `ensure_one` YOK (RPC bos recordset ile gelir).
 - Client: header'da slot bar (select 0-9 + Save + durum rozeti); dropdown degisimi `load_slot` (yazma yok), Save secili slota `save_slot` (baska dolu slot veya RFQ'lu plan uzerine yazarken `Dialog.confirm`). `active_slot` 0 gecerli degerdir, truthiness kontrolu YOK (`hasOwnProperty` + null/undefined/false karsilastirmasi). `set_targets` yaniti slotsuz gelir -> `_applySummary` listeyi korur.
 - Kural: slot karsilastirma Excel'i (orn. slot 0 vs 3 tek dosyada) AYRI is; veri modeli hazir (slot + target_json + line snapshot). Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); sonrasi Ctrl+F5. Plan: `plans/production_plan_slots.md`. Manifest 15.0.2.1.0. Commit/push YOK.
+
+## Production Prices 964 Dogrulama (2026-10-06, staging)
+
+- `get_price_overview` 964 satir dondu (unique product_id 964, duplicate 0, kod duplicate 0, boskod 0); bagimsiz BFS (4 kit BOM 1766/1737/1738/1736, variant-oncelikli, depth<=10, `scratch/verify_prices_964.py`) ayni 964 kumeyi verdi: disaridan urun 0, eksik 0 (MATCH). Top-level giris 125 tekil urun.
+- Not: prod instance'ta `matia.procurement.plan` modeli yok (Fault 2) — dogrulama staging'de yapildi.
+
+## Prices Kit Tipi + TEMP Route Log (2026-10-06, henuz deploy edilmedi)
+
+- Kit = aktif phantom BOM'lu urun (_mpp_kit_tmpl_ids); Prices'ta route 'kit'/'Kit' (rozet badge-info, filtre secenegi), corrected-price make gibi yasak (JS input disabled + save_price_override guard). 4 kit'in kendisi de satir olarak eklendi (once BFS'e girmiyordu). Paylasilan classifier'a dokunulmadi (Tab1/2 etkilenmez). Manifest 15.0.2.2.0.
+- TEMP-DEBUG: get_price_overview sonunda _logger.info('MPP-TEMP ...') (uid/plan/histogram/route tablosu/E2CBAN03-M2H1WN05-N2PGAN02-M2WHAN04 izi). Filtre sorunu cozulunce silinecek.
+- Arka plan: tarayici Network'te route=unknown + sifir make/subcontract, ayni metoda MCP make donuyor; staging restart cozum olmadi.

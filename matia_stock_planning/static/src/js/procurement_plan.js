@@ -1815,6 +1815,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 buy: ['Buy', 'badge-primary'],
                 subcontract: ['Subcontract', 'badge-warning'],
                 make: ['Manufacture', 'badge-success'],
+                kit: ['Kit', 'badge-info'],
             };
             var m = map[route] || ['Unknown', 'badge-secondary'];
             return '<span class="badge ' + m[1] + '">' + m[0] + '</span>';
@@ -1946,7 +1947,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 'mpp-price-filter" data-f="type">' +
                 this._priceFilterOpts(f.type, [['', 'All'],
                     ['buy', 'Buy'], ['subcontract', 'Subcontract'],
-                    ['make', 'Manufacture'], ['unknown', 'Unknown']]) +
+                    ['make', 'Manufacture'], ['kit', 'Kit'],
+                    ['unknown', 'Unknown']]) +
                 '</select></td>' +
                 '<td><input type="text" class="form-control ' +
                 'form-control-sm mpp-price-filter" data-f="seller" value="' +
@@ -1991,14 +1993,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 ' <span class="badge badge-warning" ' +
                 'title="Manual price/location stored in the database">' +
                 'manual</span>' : '';
-            // Manufactured products have no own purchase price: their
-            // cost rolls up from the components, so the corrected
-            // input stays disabled (the server rejects it as well).
-            // Location stays enabled: it marks the production site.
-            var isMake = r.route === 'make';
-            var disAttr = isMake ? ' disabled="disabled"' : '';
-            var disTitle = isMake ?
-                'Manufactured products take no manual price ' +
+            // Manufactured/kit products have no own purchase price:
+            // their cost rolls up from the components, so the
+            // corrected input stays disabled (the server rejects it
+            // as well). Location stays enabled: it marks the
+            // production site.
+            var isProduced = r.route === 'make' || r.route === 'kit';
+            var disAttr = isProduced ? ' disabled="disabled"' : '';
+            var disTitle = isProduced ?
+                'Manufactured/kit products take no manual price ' +
                 '(cost rolls up from the components)' :
                 'Manual USD unit price';
             return '<tr class="item-row' +
@@ -2027,7 +2030,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td><select class="form-control form-control-sm ' +
                 'mpp-loc-select" data-pid="' + r.product_id + '" ' +
                 'title="Purchase location (production site for ' +
-                'manufactured products)">' +
+                'manufactured/kit products)">' +
                 '<option value="">-</option>' +
                 '<option value="tr"' +
                 (loc === 'tr' ? ' selected="selected"' : '') +

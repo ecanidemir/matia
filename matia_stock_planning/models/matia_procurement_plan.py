@@ -539,6 +539,27 @@ def _mpp_price_overrides(env_sudo, pids=None):
     return res
 
 
+def _mpp_kit_tmpl_ids(env_sudo, tmpl_ids):
+    """Template IDs sold as kits (active phantom BOM).
+
+    @param env_sudo: sudo environment.
+    @param tmpl_ids: product.template IDs.
+    @return: set of template IDs having a phantom BOM.
+    """
+    tids = [t for t in (tmpl_ids or []) if t]
+    if not tids:
+        return set()
+    try:
+        rows = env_sudo['mrp.bom'].search_read(
+            [('product_tmpl_id', 'in', tids),
+             ('type', '=', 'phantom')],
+            ['product_tmpl_id'])
+    except Exception:
+        return set()
+    return {r['product_tmpl_id'][0] for r in (rows or [])
+            if r.get('product_tmpl_id')}
+
+
 def _mpp_classify_route(route_names, purchase_ok=False):
     """One product's route key (Subcontract > Manufacture > Buy).
 
@@ -3472,14 +3493,38 @@ class MatiaProcurementPlan(models.Model):
                     stack.append(
                         (bl.product_id.id, level + 1, path + (pid,)))
         pids = sorted(pids)
+        # Kit top products are not BOM children, so the BFS above
+        # never adds them: include them explicitly as 'kit' rows.
+        kit_top_pids = set()
+        for kit in kits:
+            kbom = kit['bom']
+            kpid = kbom.product_id.id if kbom.product_id else False
+            if not kpid and kbom.product_tmpl_id:
+                kvar = Product.search(
+                    [('product_tmpl_id', '=',
+                      kbom.product_tmpl_id.id)], limit=1)
+                kpid = kvar.id if kvar else False
+            if kpid:
+                kit_top_pids.add(kpid)
+        pids = sorted(set(pids) | kit_top_pids)
         if not pids:
             return {'items': [], 'count': 0, 'override_count': 0}
         # Bulk product info + routes (same classifier as line build:
         # Subcontract > Manufacture > Buy > purchase_ok fallback).
+        # Kit (phantom BOM) wins over every route: kits have no own
+        # price either, so they take no corrected price.
         prod_info = {}
         for pr in Product.browse(pids).read(
-                ['default_code', 'name', 'route_ids', 'purchase_ok']):
+                ['default_code', 'name', 'route_ids', 'purchase_ok',
+                 'product_tmpl_id']):
             prod_info[pr['id']] = pr
+        kit_tmpls = _mpp_kit_tmpl_ids(
+            env_sudo,
+            [pr.get('product_tmpl_id')[0] for pr in prod_info.values()
+             if pr.get('product_tmpl_id')]) | {
+            kit['bom'].product_tmpl_id.id for kit in kits
+            if kit['bom'].product_tmpl_id
+            and kit['bom'].type == 'phantom'}
         route_names = {}
         all_route_ids = set()
         for pr in prod_info.values():
@@ -3510,6 +3555,9 @@ class MatiaProcurementPlan(models.Model):
                       for rid in (info.get('route_ids') or [])]
             route = _mpp_classify_route(
                 rnames, info.get('purchase_ok'))
+            _tmpl = info.get('product_tmpl_id')
+            if _tmpl and _tmpl[0] in kit_tmpls:
+                route = 'kit'
             line = line_by_pid.get(pid)
             if line:
                 seller = line.seller_id.display_name \
@@ -3542,7 +3590,8 @@ class MatiaProcurementPlan(models.Model):
                 'route': route,
                 'route_label': {
                     'buy': 'Buy', 'subcontract': 'Subcontract',
-                    'make': 'Manufacture'}.get(route, 'Unknown'),
+                    'make': 'Manufacture',
+                    'kit': 'Kit'}.get(route, 'Unknown'),
                 'seller': seller,
                 'last_price': lp,
                 'last_currency': lcur,
@@ -3554,6 +3603,33 @@ class MatiaProcurementPlan(models.Model):
                 'has_override': bool(corr > 0 or ovr.get('location')),
             })
         items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
+        # TEMP-DEBUG (route split-brain): log what THIS worker computed
+        # so the browser Network response can be compared 1:1. Remove
+        # once the Manufacture/Subcontract filter issue is resolved.
+        try:
+            _hist = {}
+            for _it in items:
+                _hist[_it['route']] = _hist.get(_it['route'], 0) + 1
+            _probe = {
+                _it['code']: (
+                    _it['product_id'],
+                    [route_names.get(
+                        rid, '?') for rid in (
+                        prod_info.get(
+                            _it['product_id'], {}).get(
+                            'route_ids') or [])],
+                    _it['route'])
+                for _it in items
+                if _it.get('code') in (
+                    'E2CBAN03', 'M2H1WN05', 'N2PGAN02', 'M2WHAN04')}
+            _logger.info(
+                'MPP-TEMP get_price_overview uid=%s plan=%s count=%s '
+                'hist=%s routes=%s probe=%s kit_tops=%s',
+                self.env.uid, plan.id if plan else False,
+                len(items), _hist, route_names, _probe,
+                sorted(kit_top_pids))
+        except Exception:
+            _logger.exception('MPP-TEMP price overview log failed')
         return {
             'items': items,
             'count': len(items),
@@ -3599,14 +3675,17 @@ class MatiaProcurementPlan(models.Model):
             vals['location'] = loc or False
         if not vals:
             raise UserError(_('Nothing to save.'))
-        # Manufactured products have no own purchase price (their cost
-        # is the sum of the components), so a corrected price is
-        # rejected. Location stays allowed: it marks the production
-        # site (TR/US) for reporting.
-        if vals.get('corrected_price_usd') and \
-                _mpp_product_routes(env_sudo, [pid]).get(pid) == 'make':
+        # Manufactured and kit products have no own purchase price
+        # (their cost is the sum of the components), so a corrected
+        # price is rejected. Location stays allowed: it marks the
+        # production site (TR/US) for reporting.
+        _route = _mpp_product_routes(env_sudo, [pid]).get(pid)
+        _tmpl = prod.product_tmpl_id
+        if _tmpl and _tmpl.id in _mpp_kit_tmpl_ids(env_sudo, [_tmpl.id]):
+            _route = 'kit'
+        if vals.get('corrected_price_usd') and _route in ('make', 'kit'):
             raise UserError(_(
-                'Manufactured products have no purchase price: '
+                'Manufactured/kit products have no purchase price: '
                 'corrected price cannot be set (their cost rolls up '
                 'from the components). Location can still be set as '
                 'the production site.'))
