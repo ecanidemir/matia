@@ -159,8 +159,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.treeSearchDone = false;
             this.treeSearchLoading = false;
             this.treeSearchToken++;
-            var $input = this.$('.mpp-tree-search');
-            if ($input.length) $input.val('');
+            // NOTE: willStart runs before mount (no $el yet) - touch the
+            // DOM only when the widget is attached.
+            if (this.$el) {
+                var $input = this.$('.mpp-tree-search');
+                if ($input.length) $input.val('');
+            }
             this.needMap = {};
             var targets = (summary && summary.targets) || {};
             var self = this;
