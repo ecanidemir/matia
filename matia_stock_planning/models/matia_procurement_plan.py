@@ -65,6 +65,35 @@ def _mpp_tr_stock_locs(env_sudo):
     return stock, ncr
 
 
+def _mpp_load_pools(pool_json):
+    """Parse a stored bottom-up producible snapshot.
+
+    @param pool_json: content of matia.procurement.plan.producible_json.
+    @return: (pool, branch) where pool maps product id -> bottom-up units
+        (float) and branch maps (parent id, child id) -> allocated units
+        (int). Unparseable input yields ({}, {}) so callers fall back to
+        the legacy own-stock formula.
+    """
+    try:
+        data = json.loads(pool_json or '{}')
+    except ValueError:
+        return {}, {}
+    pool = {}
+    try:
+        for _k, _v in (data.get('pool') or {}).items():
+            pool[int(_k)] = float(_v)
+    except (TypeError, ValueError):
+        pass
+    branch = {}
+    for _k, _v in (data.get('branch') or {}).items():
+        try:
+            _p, _c = str(_k).split('>')
+            branch[(int(_p), int(_c))] = int(_v)
+        except (TypeError, ValueError):
+            continue
+    return pool, branch
+
+
 def _mpp_find_kit_boms(env_sudo):
     """Find the 4 kit BOMs, ID-first with name fallback."""
     found = []
@@ -117,6 +146,10 @@ class MatiaProcurementPlan(models.Model):
         help='Copy of target_json the lines were built from. '
              'get_tree_with_cost skips the full rebuild when it '
              'still matches (cached view: no unlink/recreate).')
+    producible_json = fields.Text(
+        help='JSON: {"pool": {product_id: bottom-up units}, '
+             '"branch": {"parent>child": allocated units}} - display-only '
+             'producible snapshot written by action_explode_and_net.')
     currency_id = fields.Many2one(
         'res.currency', help='Total cost currency (default company).')
     total_cost = fields.Float(compute='_compute_total_cost', store=True)
@@ -414,6 +447,7 @@ class MatiaProcurementPlan(models.Model):
             if _p not in topo:
                 topo.append(_p)
         net_map = {}
+        contrib = {}  # (parent, child) -> net units P pushes to C
         for _p in topo:
             _d = demand.get(_p, 0.0)
             if btype.get(_p) == 'phantom':
@@ -426,9 +460,45 @@ class MatiaProcurementPlan(models.Model):
             for _c, _q in edges.get(_p, {}).items():
                 if _c in demand:
                     try:
-                        demand[_c] += _n * float(_q or 0.0)
+                        _add = _n * float(_q or 0.0)
                     except (TypeError, ValueError):
                         continue
+                    demand[_c] += _add
+                    contrib[(_p, _c)] = contrib.get(
+                        (_p, _c), 0.0) + _add
+
+        # Bottom-up producible pools (display only, purchase math
+        # untouched): pool(X) = own stock + min over children of
+        # floor(share(C->X) / usage). A shared child's pool is split
+        # among its parents proportional to each parent's NET
+        # contribution (demand-weighted); own stock never moves.
+        # Reverse topo order settles children before parents.
+        # Phantom nodes hold no stock (own = 0, pass-through).
+        pool_map, branch_map = {}, {}
+        for _x in reversed(topo):
+            _kids = edges.get(_x, {}) or {}
+            _own = 0.0 if btype.get(_x) == 'phantom' else \
+                avail_map.get(_x, 0.0)
+            if not _kids:
+                pool_map[_x] = _own
+                continue
+            _mins = []
+            for _c, _q in _kids.items():
+                try:
+                    _usage = float(_q or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                _inflow = demand.get(_c, 0.0)
+                if _inflow > 0 and _usage > 0:
+                    _share = pool_map.get(_c, 0.0) * contrib.get(
+                        (_x, _c), 0.0) / _inflow
+                else:
+                    _share = 0.0
+                _b = int(math.floor(_share / _usage)) \
+                    if _usage > 0 and _share > 0 else 0
+                branch_map[(_x, _c)] = _b
+                _mins.append(_b)
+            pool_map[_x] = _own + min(_mins) if _mins else _own
 
         # Info: confirmed incoming POs + open MO output (NOT netted, display only)
         incoming, mo_out = {}, {}
@@ -516,6 +586,11 @@ class MatiaProcurementPlan(models.Model):
         plan.edge_json = json.dumps(
             {str(p): {str(c): q for c, q in ch.items()}
              for p, ch in edges.items()})
+        plan.producible_json = json.dumps({
+            'pool': {str(k): v for k, v in pool_map.items()},
+            'branch': {'%s>%s' % (p, c): v
+                       for (p, c), v in branch_map.items()},
+        })
         plan.state = 'calculated'
         plan.built_target_json = plan.target_json
         return self._plan_summary(env_sudo, plan)
@@ -1213,6 +1288,7 @@ class MatiaProcurementPlan(models.Model):
                     [('product_tmpl_id', 'in', list(missing_tmpls))]):
                 extra_bom_tmpls.add(b.product_tmpl_id.id)
         tree_groups = []
+        pool_map, _pool_branch = _mpp_load_pools(plan.producible_json)
         for kit in kit_cfgs:
             key = kit['key']
             bom = kit['bom']
@@ -1227,6 +1303,9 @@ class MatiaProcurementPlan(models.Model):
                 has_bom = tmpl_id in bom_by_tmpl \
                     or tmpl_id in extra_bom_tmpls
                 avail = line.avail_tr if line else 0.0
+                # Bottom-up pool (own stock + assemblable from children);
+                # legacy own-stock value when the plan predates pools.
+                _pool = pool_map.get(pid, avail)
                 items.append({
                     'product_id': pid,
                     'code': bl.product_id.default_code or '',
@@ -1249,8 +1328,8 @@ class MatiaProcurementPlan(models.Model):
                     # exact). Children show their own net via sub-BOM.
                     'planned': max(
                         0.0, float(targets.get(pid, 0)) - avail),
-                    'producible': int(math.floor(avail))
-                    if avail > 0 else 0,
+                    'producible': int(math.floor(_pool))
+                    if _pool > 0 else 0,
                     'net': line.net_qty if line else 0.0,
                     'order_qty': line.order_qty if line else 0.0,
                     'seller': line.seller_id.display_name
@@ -1461,6 +1540,8 @@ class MatiaProcurementPlan(models.Model):
         snap = {}
         plan = env_sudo['matia.procurement.plan'].browse(
             int(plan_id)) if plan_id else False
+        _pool_map, branch_map = _mpp_load_pools(
+            plan.producible_json if plan else '')
         if plan and plan.exists():
             for line in plan.line_ids.filtered(
                     lambda l: l.product_id.id in child_ids):
@@ -1538,6 +1619,13 @@ class MatiaProcurementPlan(models.Model):
                 lcompany = self._mpp_company_code(
                     env_sudo, lb.get('company_id'))
             has_bom = cp.product_tmpl_id.id in bom_tmpls
+            # Branch producible: this parent's allocated share of the
+            # child's pool; legacy own-stock formula when the plan
+            # predates pools (or no plan was passed).
+            _branch = branch_map.get((prod.id, pid))
+            if _branch is None:
+                _branch = int(math.floor(avail / bqty)) \
+                    if bqty > 0 and avail > 0 else 0
             items.append({
                 'product_id': pid,
                 'code': cp.default_code or '',
@@ -1554,8 +1642,7 @@ class MatiaProcurementPlan(models.Model):
                 'stock_tr': oh,
                 'reserved_tr': rs,
                 'avail_tr': avail,
-                'producible': int(math.floor(avail / bqty))
-                if bqty > 0 and avail > 0 else 0,
+                'producible': _branch,
                 'seller': seller,
                 'last_company': lcompany,
                 'last_price': lp,

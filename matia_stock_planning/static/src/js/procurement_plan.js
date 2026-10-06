@@ -560,8 +560,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             var avail = parseFloat(r.avail_tr) || 0;
             var bq = parseFloat(r.bom_qty) || 0;
-            if (bq > 0) return Math.floor(avail / bq);
-            return avail;
+            if (bq > 0) return Math.max(0, Math.floor(avail / bq));
+            return Math.max(0, avail);
         },
 
         // Net shortage after the cascade (tops: planned; subs: net).

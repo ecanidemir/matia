@@ -223,3 +223,10 @@
 - Cozum: kok selector `.o_matia_stock_planning, .o_matia_procurement_plan` oldu; capacity XML deseni (ikonlu header, table-card+search+legend, KPI accent) procurement XML/JS'e tasindi (Tab 1 4 sutun, Tab 2 thead 15 sutun korundu, Tab 3 sirket grup satirli `msp-table`). Detay: `plans/production_plan_capacity_template.md`.
 - Kural: shared `msp-*` sinifi ureten her yeni ekran kokunu bu scope'a ekle; scoped SCSS'ta sinif yeniden kullanmadan once kok eslesmesini kontrol et. Static-only degisiklik Upgrade ile yeter, restart gerekmez.
 
+## Bottom-up Producible (2026-10-06, production plan)
+
+- `Producible` artik bottom-up: `pool(X)=own+min_C floor(pay(C->X)/kullanim)`, paylasilan cocuk NET-talep agirlikli bolunur (`pay(C->P)=pool(C)*katki[P->C]/girdi(C)`). Satinalma (planned/net/cascade) aynen durur, sadece goruntu kolonu.
+- Saklama: `matia.procurement.plan.producible_json` (`{"pool":{},"branch":{"P>C":int}}`), explode'da yazilir; onbellekli gorunum + sub-BOM buradan okur, eski plansiz cagrilar legacy formüle duser. Phantom own=0.
+- Dogrulama: staging canli verisi E2CBAN02 hedef 50 -> net 47, dallar [10,2,43,283,248,24], pool 5 (kullanicinin el hesabi birebir). Paylasim sizinti testi OK (`scratch/verify_pool.py`).
+- Plan: `plans/producible_bottomup.md`. Deploy: Python degisikligi Git Deploy + Upgrade/restart (mesai disi + backup).
+
