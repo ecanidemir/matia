@@ -224,8 +224,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // Group header auto-fill: Needed = max(0, N - unreserved TR+US)
-        // for every top in the group, then persist + rebuild.
+        // Group header auto-fill: Needed = N (gross want) for every
+        // top in the group, then persist + rebuild. Stock is netted
+        // ONCE by the server cascade (net = demand - avail), so the
+        // fill must NOT pre-subtract avail here: that double-counted
+        // stock (every 0 < avail < N row ordered avail units short)
+        // and starved shared parts. Shared consumption by other
+        // parents pools into Planned on rebuild.
         _onNeedFill: function (ev) {
             var self = this;
             var key = ev && ev.currentTarget &&
@@ -235,22 +240,21 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var n = parseInt(nInput, 10);
             if (isNaN(n) || n < 0) n = 50;
             this.fillN[key] = n;
+            var count = 0;
             this.treeGroups.forEach(function (g) {
                 if (g.key !== key) return;
                 (g.items || []).forEach(function (r) {
-                    var avail = parseFloat(r.avail_total);
-                    if (isNaN(avail)) {
-                        avail = parseFloat(r.avail_tr) || 0;
-                    }
                     self.needMap[r.product_id] =
-                        Math.max(0, Math.ceil(n - avail));
+                        Math.max(0, Math.ceil(n));
+                    count += 1;
                 });
             });
             this._onNeedChange().then(function () {
                 self.displayNotification({
                     title: _t('Filled'),
                     message: n + ' ' +
-                        _t('units filled (TR+US unreserved).'),
+                        _t('set as Needed for ') + count + ' ' +
+                        _t('parts (stock netted on rebuild).'),
                     type: 'success',
                 });
             });
@@ -932,7 +936,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'class="form-control form-control-sm mpp-need" ' +
                     'data-pid="' + r.product_id + '" ' +
                     'data-avail="' + avail + '" ' +
-                    'title="Needed units (saved on the plan)" value="' +
+                    'title="Wanted units, gross (stock and shared use net into Planned)" value="' +
                     need + '"/>' :
                     '<span class="text-muted">—</span>') + '</td>' +
                 '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
@@ -999,9 +1003,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'assemblable pool from children (differs from ' +
                     'Capacity self-stock figure)') +
                 th('need', 'Needed', 'th-req',
-                    'Wanted units (editable, saved on the plan)') +
+                    'Wanted units, gross (editable, saved on the plan; ' +
+                    'TR+US stock and shared use are netted into Planned)') +
                 th('planned', 'Planned', 'th-req',
-                    'Net shortage after TR+US stock netting') +
+                    'Pooled net shortage after TR+US stock netting ' +
+                    '(includes this part being used inside other parents)') +
                 th(null, 'Seller', '', 'Last supplier') +
                 th(null, 'Source', '', 'Company of the last buy') +
                 th(null, 'Last Price', '', 'Last purchase price') +
@@ -1059,8 +1065,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<span class="group-count ml-2">(' + items.length +
                     ' Parts)</span>' +
                     '<span class="mpp-autofill ml-auto" title="' +
-                    _t('Sets Needed = target − (TR + US unreserved) for ' +
-                        'every top product in this group.') + '">' +
+                    _t('Sets Needed to N (gross want) for every top ' +
+                        'product in this group. TR+US stock is netted ' +
+                        'once on rebuild; shared use by other parents ' +
+                        'pools into Planned.') + '">' +
                     '<i class="fa fa-magic"></i>' +
                     '<span>' + _t('Auto-fill') + ' ' + g.title + ' ' +
                     _t('to') + '</span>' +

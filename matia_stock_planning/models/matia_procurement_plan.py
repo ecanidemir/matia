@@ -1881,6 +1881,17 @@ class MatiaProcurementPlan(models.Model):
                     [('product_tmpl_id', 'in', list(missing_tmpls))]):
                 extra_bom_tmpls.add(b.product_tmpl_id.id)
         tree_groups = []
+        # Live stock for kit tops without lines (never exploded):
+        # one bulk split so their TR/US show true unreserved stock
+        # instead of stale 0/0 (the client and producible fallback
+        # read these fields).
+        _lineless_pids = set()
+        for _kit in kit_cfgs:
+            for _bl in _kit['bom'].bom_line_ids:
+                if _bl.product_id.id not in line_by_pid:
+                    _lineless_pids.add(_bl.product_id.id)
+        _live_split = _mpp_stock_split(
+            env_sudo, list(_lineless_pids)) if _lineless_pids else {}
         pool_map, _pool_branch, _share_map, _driver_map, use_notes, par_n = \
             _mpp_load_pools(plan.producible_json)
         for kit in kit_cfgs:
@@ -1895,9 +1906,25 @@ class MatiaProcurementPlan(models.Model):
                 has_bom = tmpl_id in bom_by_tmpl \
                     or tmpl_id in extra_bom_tmpls
                 # TR + US combined unreserved (user rule); the split
-                # stays on the row for the TR / US columns.
-                a_tr = line.avail_tr if line else 0.0
-                a_us = line.avail_us if line else 0.0
+                # stays on the row for the TR / US columns. Tops
+                # without lines show LIVE stock (bulk read above),
+                # never stale 0/0.
+                if line:
+                    a_tr = line.avail_tr
+                    a_us = line.avail_us
+                    s_tr = line.stock_tr
+                    r_tr = line.reserved_tr
+                    s_us = line.stock_us
+                    r_us = line.reserved_us
+                else:
+                    _oht, _rst, _ohu, _rsu = _live_split.get(
+                        pid, (0.0, 0.0, 0.0, 0.0))
+                    s_tr = max(0.0, _oht)
+                    r_tr = max(0.0, _rst)
+                    s_us = max(0.0, _ohu)
+                    r_us = max(0.0, _rsu)
+                    a_tr = max(0.0, s_tr - r_tr)
+                    a_us = max(0.0, s_us - r_us)
                 avail = a_tr + a_us
                 need = float(targets.get(pid, 0) or 0)
                 # Bottom-up pool (own stock + assemblable from children);
@@ -1924,21 +1951,23 @@ class MatiaProcurementPlan(models.Model):
                             if pr.get('uom_id') else '')),
                     'has_bom': bool(has_bom),
                     'level': 0,
-                    'stock_tr': line.stock_tr if line else 0.0,
-                    'reserved_tr': line.reserved_tr if line else 0.0,
+                    'stock_tr': s_tr,
+                    'reserved_tr': r_tr,
                     'avail_tr': a_tr,
-                    'stock_us': line.stock_us if line else 0.0,
-                    'reserved_us': line.reserved_us if line else 0.0,
+                    'stock_us': s_us,
+                    'reserved_us': r_us,
                     'avail_us': a_us,
                     'avail_total': avail,
                     'gross': line.gross_qty if line else 0.0,
-                    # Needed = saved target for this top (editable on
-                    # the client, persisted via set_targets_and_rebuild).
+                    # Needed = saved gross want for this top (editable
+                    # on the client, persisted via
+                    # set_targets_and_rebuild; the server cascade nets
+                    # stock exactly once, so no pre-netting here).
                     'need': need,
-                    # Planned = net cascade value for tops: need minus
-                    # combined avail (level-0 nodes have no parents,
-                    # so this is exact). Children show their own net
-                    # via sub-BOM.
+                    # Planned = fallback net for tops: need minus
+                    # combined avail (own tree only; shared use inside
+                    # other parents pools into the line net on rebuild,
+                    # which the client prefers when a line exists).
                     'planned': max(0.0, need - avail),
                     'producible': int(math.floor(_pool))
                     if _pool > 0 else 0,
