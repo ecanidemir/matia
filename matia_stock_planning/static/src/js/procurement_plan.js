@@ -26,7 +26,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-create-mo': '_onCreateMo',
             'input .mpp-qty': '_onQtyInput',
             'input .mpp-tree-search': '_onTreeSearch',
-            'click .mpp-match-jump': '_onMatchJump',
             'click .msp-btn-expand-all': '_onExpandAll',
             'click .msp-btn-collapse-all': '_onCollapseAll',
             'click .msp-btn-toggle-group': '_onGroupToggle',
@@ -381,12 +380,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // ---------------- tab 2: tree (msp-identical) ----------------
-        // Typing filters the TABLE itself across the WHOLE forest
+        // Typing filters the TREE itself across the WHOLE forest
         // (collapsed subtrees included): a debounced server search
-        // finds every match, their ancestor paths auto-expand for
-        // exact numbers, and the table renders only matching rows
-        // (flat, each with its location trail). Click a match to
-        // jump to it in the tree.
+        // finds every match, ancestor paths auto-expand for exact
+        // numbers, and the tree renders only matching rows with
+        // their parents (no separate results panel).
         _onTreeSearch: function (ev) {
             var self = this;
             var q = (ev.currentTarget.value || '').trim();
@@ -510,131 +508,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // Match click: back to the tree, expanded to the hit.
-        _onMatchJump: function (ev) {
-            var self = this;
-            var group = ev.currentTarget.dataset.group;
-            var ids = String(
-                ev.currentTarget.dataset.path || '').split('/').map(
-                function (x) { return parseInt(x, 10); }).filter(
-                function (x) { return x; });
-            if (!group || !ids.length) return;
-            this.treeSearch = '';
-            this.treeSearchMatches = [];
-            this.treeSearchDone = false;
-            this.$('.mpp-tree-search').val('');
-            this.collapsedGroups[group] = false;
-            this._expandPath(group, ids, true).then(function (uid) {
-                self._renderTree();
-                self._flashRow(uid);
-            });
-        },
-
-        _flashRow: function (uid) {
-            if (!uid) return;
-            var el = this.$('tr[data-uid="' + uid + '"]');
-            if (!el.length) return;
-            el[0].scrollIntoView({block: 'center'});
-            el.addClass('msp-flash');
-            setTimeout(function () {
-                el.removeClass('msp-flash');
-            }, 2200);
-        },
-
-        // Filter mode: flat table of every whole-forest match with
-        // exact numbers (rows come from the expanded caches) plus a
-        // location trail, so identical parts stay distinguishable.
-        _renderFilter: function () {
-            var self = this;
-            var order = {};
-            this.treeGroups.forEach(function (g, i) {
-                order[g.key] = i;
-            });
-            var list = (this.treeSearchMatches || []).slice();
-            list.sort(function (a, b) {
-                var ga = order[a.group_key] || 0,
-                    gb = order[b.group_key] || 0;
-                if (ga !== gb) return ga - gb;
-                var ca = (a.code || '') + ' ' + (a.name || ''),
-                    cb = (b.code || '') + ' ' + (b.name || '');
-                return ca < cb ? -1 : (ca > cb ? 1 : 0);
-            });
-            var html = '<div class="mpp-filter-count">' +
-                '<i class="fa fa-filter mr-1"></i>' + list.length +
-                (list.length === 1 ? ' part' : ' parts') +
-                ' in all BOMs match &ldquo;' + this.treeSearch +
-                '&rdquo; - click a part to show it in the tree.</div>';
-            html += '<table class="msp-table">' + this._theadHtml() +
-                '<tbody>';
-            var skipped = 0;
-            list.forEach(function (m) {
-                var row = self._matchRowHtml(m);
-                if (row) {
-                    html += row;
-                } else {
-                    skipped++;
-                }
-            });
-            if (!list.length) {
-                html += '<tr><td colspan="15">' +
-                    '<div class="alert alert-info">No parts match ' +
-                    '&ldquo;' + this.treeSearch +
-                    '&rdquo; in any BOM.</div></td></tr>';
+        // Tree UID scheme (canonical, shared by manual expand, search
+        // expand, walk and export): group + ':' + path.join('/').
+        // Top: "base:123", child: "base:123/456". _walkRows builds the
+        // same keys so search-expanded caches render in the tree.
+        _canonUid: function (parentUid, pid) {
+            if (!parentUid) return String(pid);
+            if (parentUid.charAt(parentUid.length - 1) === ':') {
+                return parentUid + pid;
             }
-            this.$('.mpp-tree-body').html(html + '</tbody></table>');
-            if (skipped) {
-                this.displayNotification({
-                    title: _t('Partial results'),
-                    message: _t('Some matches failed to load.') +
-                        ' (' + skipped + ')',
-                    type: 'warning',
-                });
-            }
-        },
-
-        _matchRowHtml: function (m) {
-            var r = this._matchRow(m);
-            if (!r) return '';
-            var uid = (m.group_key || '') + ':' +
-                (m.path_ids || []).join('/');
-            var trail = (m.trail || []).slice(0, -1).map(function (t) {
-                return (t.code ? '[' + t.code + '] ' : '') +
-                    (t.name || '');
-            });
-            var trailHtml = '<span class="mpp-trail-group">' +
-                (m.group_title || m.group_key || '') + '</span>' +
-                (trail.length ?
-                    ' <span class="mpp-search-sep">&rsaquo;</span> ' +
-                    trail.join(
-                        ' <span class="mpp-search-sep">&rsaquo;</span> ')
-                    : '');
-            return this._rowHtml(r, m.level || 0, m.group_key, uid,
-                trailHtml, (m.path_ids || []).join('/'));
-        },
-
-        // Row dict behind a match: tops live in treeGroups, deeper
-        // rows in the (now expanded) parent cache.
-        _matchRow: function (m) {
-            var pid = m.product_id;
-            var grp = null;
-            this.treeGroups.forEach(function (g) {
-                if (g.key === m.group_key) grp = g;
-            });
-            if (!grp) return null;
-            var kids, k;
-            if (!m.level) {
-                kids = grp.items || [];
-            } else {
-                var parentUid = (m.group_key || '') + ':' +
-                    (m.path_ids || []).slice(0, -1).join('/');
-                var cached = this.subCache[parentUid];
-                if (!cached) return null;
-                kids = cached.items || [];
-            }
-            for (k = 0; k < kids.length; k++) {
-                if (kids[k].product_id === pid) return kids[k];
-            }
-            return null;
+            return parentUid + '/' + pid;
         },
 
         _onSort: function (ev) {
@@ -1000,23 +883,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return 'fa-sort';
         },
 
-        _rowHtml: function (r, level, groupKey, uid, filterTrail,
-                filterPath) {
+        _rowHtml: function (r, level, groupKey, uid) {
             var self = this;
             var lvl = Math.min(level, 5);
             var hasKids = !!r.has_bom && !r._is_cycle;
             var isOpen = !!this.expanded[uid];
             var net = this._rowNet(r);
-            var filterMode = !!filterTrail;
-            var prodCls = (!filterMode && hasKids) ?
+            var prodCls = hasKids ?
                 'cursor-pointer msp-clickable-prod' : '';
             var prodTitle = hasKids ? 'Click to show BOM components' : '';
             var toggle;
-            if (filterMode) {
-                toggle = '<span class="msp-level-badge ' +
-                    (level > 0 ? 'msp-lvl-' + lvl : '') + ' mr-1">' +
-                    (level > 0 ? 'L' + level : 'TOP') + '</span>';
-            } else if (hasKids) {
+            if (hasKids) {
                 toggle = '<button type="button" class="btn btn-sm btn-link msp-btn-sub-bom p-0 mr-1 text-primary"' +
                     ' data-uid="' + uid + '" data-pid="' + r.product_id + '"' +
                     ' data-net="' + net + '" data-level="' + level + '"' +
@@ -1056,22 +933,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<span class="prod-code' +
                 (level > 0 ? ' sub-prod-code' : '') + '">[' + r.code +
                 ']</span> ' : '') +
-                '<span class="prod-name ' + prodCls +
-                (filterMode ? ' mpp-match-jump' : '') + '"' +
-                (filterMode ?
-                    ' data-path="' + (filterPath || '') +
-                    '" data-group="' + groupKey + '"' +
-                    ' title="Show in tree"' :
-                    (hasKids ? ' data-uid="' + uid + '" data-pid="' +
+                '<span class="prod-name ' + prodCls + '"' +
+                ((hasKids ? ' data-uid="' + uid + '" data-pid="' +
                         r.product_id + '" data-net="' + net +
                         '" data-level="' + level + '" data-group="' +
                         groupKey + '"' : '') +
                     (prodTitle ? ' title="' + prodTitle + '"' : '')) +
                 '>' +
                 (r.name || '') + '</span>' +
-                (filterMode ?
-                    '<div class="mpp-match-trail">' + filterTrail +
-                    '</div>' : '') +
                 (hasKids ? ' <span class="badge badge-light text-muted border ml-1" ' +
                     'style="font-size:0.65rem;" title="Has Sub-Assembly BOM">BOM</span>' : '') +
                 (level > 0 ?
@@ -1186,7 +1055,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _walkRows: function (items, level, groupKey, parentUid, out) {
             var self = this;
             items.forEach(function (r) {
-                var uid = parentUid + '/' + r.product_id;
+                var uid = self._canonUid(parentUid, r.product_id);
                 if (!self._subtreeMatch(uid, r)) return;
                 out.push(self._rowHtml(r, level, groupKey, uid));
                 var cached = self.subCache[uid];
@@ -1204,14 +1073,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<div class="alert alert-info">Calculate the tree first (Tab 1).</div>');
                 return;
             }
-            if (this.treeSearch && this.treeSearchDone) {
-                this._renderFilter();
-                return;
-            }
+            // Search filters the TREE itself (no separate results panel):
+            // server search_tree auto-expands every ancestor chain, then
+            // _subtreeMatch keeps only matching rows + their parents.
+            var searching = !!(this.treeSearch && this.treeSearch.length >= 2);
             var html = '<table class="msp-table">';
             html += this._theadHtml() + '<tbody>';
+            var visibleTotal = 0;
             this.treeGroups.forEach(function (g) {
-                var collapsed = !!self.collapsedGroups[g.key];
+                var collapsed = searching ? false : !!self.collapsedGroups[g.key];
                 var items = (g.items || []).filter(function (r) {
                     return self._subtreeMatch(g.key + ':' + r.product_id, r);
                 });
@@ -1238,8 +1108,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     var out = [];
                     self._walkRows(items, 0, g.key, g.key + ':', out);
                     html += out.join('');
+                    visibleTotal += out.length;
                 }
             });
+            if (searching && !visibleTotal && !this.treeSearchLoading) {
+                html += '<tr><td colspan="15">' +
+                    '<div class="alert alert-info">No parts match ' +
+                    '&ldquo;' + this.treeSearch +
+                    '&rdquo; in any BOM.</div></td></tr>';
+            }
             var banner = this.treeSearchLoading ?
                 '<div class="mpp-filter-count">' +
                 '<i class="fa fa-spinner fa-spin mr-1"></i>' +
@@ -1253,7 +1130,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var rows = [];
             var walk = function (items, level, groupKey, parentUid) {
                 items.forEach(function (r) {
-                    var uid = parentUid + '/' + r.product_id;
+                    var uid = self._canonUid(parentUid, r.product_id);
                     if (!self._subtreeMatch(uid, r)) return;
                     var net = self._rowNet(r);
                     var order = (r.order_qty !== undefined &&
