@@ -8,7 +8,7 @@
                 <div class="mpp-title-area">
                     <i class="fa fa-industry"></i>
                     <div>
-                        <h2>Production Plan (TR)</h2>
+                        <h2>Production Plan</h2>
                         <p>Admin only. RFQs/MOs are created as drafts; nothing is confirmed automatically.</p>
                     </div>
                 </div>
@@ -29,59 +29,18 @@
             <ul class="nav nav-tabs mpp-nav-tabs">
                 <li class="nav-item">
                     <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">
-                        <i class="fa fa-pencil mr-1"></i>1. Enter Quantities
+                        <i class="fa fa-sitemap mr-1"></i>1. Plan
                     </a>
                 </li>
                 <li class="nav-item">
                     <a href="#" class="nav-link mpp-nav-tab" data-tab="2">
-                        <i class="fa fa-sitemap mr-1"></i>2. Tree + Cost
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a href="#" class="nav-link mpp-nav-tab" data-tab="3">
-                        <i class="fa fa-truck mr-1"></i>3. Suppliers &amp; Production
+                        <i class="fa fa-truck mr-1"></i>2. Suppliers &amp; Production
                     </a>
                 </li>
             </ul>
 
-            <!-- TAB 1: grouped entry (same group look as Capacity Plan) -->
+            <!-- TAB 1: single-page plan (quantities + tree + cost) -->
             <div class="mpp-pane" data-pane="1">
-                <div class="msp-table-card mt-2">
-                    <div class="msp-table-search">
-                        <div class="table-legend">
-                            <span class="text-muted" style="font-size:0.75rem;">
-                                <i class="fa fa-magic mr-1"></i>
-                                Each group has its own auto-fill in its header
-                                (target − on-hand per group).
-                            </span>
-                        </div>
-                        <div class="msp-tool-buttons">
-                            <button class="btn btn-outline-secondary btn-sm mpp-btn-clear" title="Clear all quantities">
-                                <i class="fa fa-eraser mr-1"></i> Clear
-                            </button>
-                            <button class="btn btn-primary btn-sm mpp-btn-calc" title="Build tree + cost from entered quantities">
-                                <i class="fa fa-calculator mr-1"></i> Calculate tree + cost
-                            </button>
-                        </div>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="msp-table">
-                            <thead>
-                                <tr>
-                                    <th class="th-product">Part Name &amp; Code</th>
-                                    <th class="th-stock" title="Net usable stock in TR (on-hand minus reserved)">TR Avail.</th>
-                                    <th class="th-stock">USA Stock</th>
-                                    <th class="th-req-20">Qty</th>
-                                </tr>
-                            </thead>
-                            <tbody class="mpp-entry-body"/>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- TAB 2: capacity-identical tree -->
-            <div class="mpp-pane d-none" data-pane="2">
                 <div class="msp-table-card mt-2">
                     <div class="msp-table-search">
                         <div class="search-input-box">
@@ -95,9 +54,12 @@
                                 <i class="fa fa-info-circle mr-1"></i> Reserved &amp; NCR quantities are excluded from netting
                             </span>
                             <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
-                            <span class="text-muted" style="font-size:0.7rem;"><span class="msp-level-badge msp-lvl-2">L2</span> Deeper BOM levels have their own colors</span>
+                            <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-database mr-1"></i> TR + US Unreserved: on-hand minus reserved per warehouse</span>
                         </div>
                         <div class="msp-tool-buttons">
+                            <button class="btn btn-primary btn-sm mpp-btn-recalc" title="Rebuild the tree from the Needed numbers">
+                                <i class="fa fa-calculator mr-1"></i> Recalculate
+                            </button>
                             <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs">
                                 <i class="fa fa-plus-square-o mr-1"></i> Expand All BOMs
                             </button>
@@ -113,8 +75,8 @@
                 </button>
             </div>
 
-            <!-- TAB 3: suppliers + production -->
-            <div class="mpp-pane d-none" data-pane="3">
+            <!-- TAB 2: suppliers + production -->
+            <div class="mpp-pane d-none" data-pane="2">
                 <div class="msp-kpi-grid mpp-sup-cards mt-2"/>
                 <div class="msp-table-card mt-2">
                     <div class="msp-table-search">

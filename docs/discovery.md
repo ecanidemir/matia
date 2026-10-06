@@ -285,3 +285,9 @@
 - Cozum: server `name` artik `product.name` (plain); JS `_plainName(code,name)` bastaki `[CODE]` one ekini soyuyor (eski cache guvencesi). Capacity etkilenmedi (zaten `p.name` kullaniyor).
 - Kural: kodu ayri gosteren her satirda `name` plain olmali; `display_name` yalniz tek-hucrelik alanlarda kullanilir. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup).
 
+## Production Plan Tek Sayfa (2026-10-06, implemented - live dogrulama bekliyor)
+
+- Enter Quantities kaldirildi; tek "Plan" tab'i (baslik "Production Plan"): 14 sutun Part | Usage | TR | US | Producible | Needed | Planned | ... TR/US = unreserved (on-hand - reserved, NCR haric), netting + producible havuzlari TR+US toplami (`_mpp_stock_split`: sirket basina tek read_group). PO/MO domainleri [TR,US]. USA tedarikci ayrimi aynen.
+- Needed kalici: `set_targets_and_rebuild` target_json'a yazar; acilis `get_startup_tree()` son plani yukler (yoksa bos draft). Grup basligi N fill: `need=max(0,ceil(N-avail_toplam))`. Alt satirlarda Needed = bagimli brut ihtiyac (salt-okunur). `_MPP_KIT_BOMS` sira base/outdoor/seat/screws (Screws en altta).
+- Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Recalculate edilmeden yeni gorunumu gostermez.
+

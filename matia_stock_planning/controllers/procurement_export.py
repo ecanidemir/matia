@@ -130,14 +130,13 @@ class MatiaProcurementPlanController(http.Controller):
     def _export_tree(self, data, plan_name, kits, rolled_total):
         """Capacity-style indented tree export (visible rows only).
 
-        Columns mirror Tab 2 (On Hand / Reserved / Net / Order are
-        hidden there too, user rule): no TRY, no legacy Subtotal (that
-        model field is only written for buy lines, which is why it
-        looked empty); Est. USD = rolled_usd x order/net instead.
+        Columns mirror the Plan tab: TR / US unreserved, Producible
+        (TR+US), editable Needed, net Planned. Est. USD = rolled_usd x
+        order/net.
         """
         rows = data.get('tree_rows', [])
-        headers = ['Part', 'Usage', 'Unreserved',
-                   'Producible', 'Planned', 'Seller',
+        headers = ['Part', 'Usage', 'TR', 'US',
+                   'Producible', 'Needed', 'Planned', 'Seller',
                    'Source', 'Last Price', 'USD', 'Last Buy', 'Rolled USD',
                    'Est. USD', 'Per-top']
         if not xlsxwriter:
@@ -150,11 +149,13 @@ class MatiaProcurementPlanController(http.Controller):
                     continue
                 pad = '  ' * int(r.get('level') or 0)
                 lines.append(
-                    '%s%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s'
+                    '%s%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s'
                     % (
                         pad, r.get('code', ''), r.get('name', ''),
-                        r.get('bom_qty', ''), r.get('uom', ''),
-                        r.get('avail', ''), r.get('producible', ''),
+                        '%s %s' % (r.get('bom_qty', ''),
+                                   r.get('uom', '')),
+                        r.get('tr', ''), r.get('us', ''),
+                        r.get('producible', ''), r.get('need', ''),
                         r.get('planned', ''), r.get('seller', ''),
                         r.get('source', ''),
                         r.get('last', ''), r.get('usd', ''),
@@ -199,17 +200,19 @@ class MatiaProcurementPlanController(http.Controller):
             ws.write(row, 1, str(r.get('name', '')), fmt)
             ws.write(row, 2, '%s %s' % (
                 r.get('bom_qty', ''), r.get('uom', '')), fmt)
-            ws.write(row, 3, r.get('avail', '') or 0, num_fmt)
-            ws.write(row, 4, r.get('producible', '') or 0, num_fmt)
-            ws.write(row, 5, r.get('planned', '') or 0, num_fmt)
-            ws.write(row, 6, r.get('seller', ''), fmt)
-            ws.write(row, 7, r.get('source', ''), fmt)
-            ws.write(row, 8, r.get('last', ''), fmt)
-            ws.write(row, 9, r.get('usd', '') or 0, num_fmt)
-            ws.write(row, 10, r.get('date', ''), fmt)
-            ws.write(row, 11, r.get('rolled_usd', '') or 0, num_fmt)
-            ws.write(row, 12, r.get('est_usd', '') or 0, num_fmt)
-            ws.write(row, 13, r.get('breakdown', ''), fmt)
+            ws.write(row, 3, r.get('tr', '') or 0, num_fmt)
+            ws.write(row, 4, r.get('us', '') or 0, num_fmt)
+            ws.write(row, 5, r.get('producible', '') or 0, num_fmt)
+            ws.write(row, 6, r.get('need', '') or 0, num_fmt)
+            ws.write(row, 7, r.get('planned', '') or 0, num_fmt)
+            ws.write(row, 8, r.get('seller', ''), fmt)
+            ws.write(row, 9, r.get('source', ''), fmt)
+            ws.write(row, 10, r.get('last', ''), fmt)
+            ws.write(row, 11, r.get('usd', '') or 0, num_fmt)
+            ws.write(row, 12, r.get('date', ''), fmt)
+            ws.write(row, 13, r.get('rolled_usd', '') or 0, num_fmt)
+            ws.write(row, 14, r.get('est_usd', '') or 0, num_fmt)
+            ws.write(row, 15, r.get('breakdown', ''), fmt)
             row += 1
         workbook.close()
         output.seek(0)

@@ -24,15 +24,16 @@ _logger = logging.getLogger(__name__)
 
 
 # Kit BOMs: same source as the existing Capacity Plan (same ID + name fallback).
+# Order is the display order: Base, Outdoor, Seat, Screws last (user rule).
 _MPP_KIT_BOMS = [
     {'key': 'base', 'preferred_id': 1766,
      'names': ['TekRMD Common Parts v2', 'TekRMD Common Parts']},
-    {'key': 'screws', 'preferred_id': 1736,
-     'names': ['TekRMD Common Screws']},
     {'key': 'outdoor', 'preferred_id': 1737,
      'names': ['TekRMD Outdoor Parts']},
     {'key': 'seat', 'preferred_id': 1738,
      'names': ['TekRMD Seat Parts']},
+    {'key': 'screws', 'preferred_id': 1736,
+     'names': ['TekRMD Common Screws']},
 ]
 
 _MPP_MAX_LEVEL = 10
@@ -141,6 +142,58 @@ def _mpp_tr_stock_locs(env_sudo):
     return stock, ncr
 
 
+def _mpp_us_stock_locs(env_sudo):
+    """WHUS/Stock% internal locations (excluding NCR)."""
+    locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
+    stock = []
+    for loc in locs:
+        cname = loc.complete_name or ''
+        cid = loc.company_id.id if loc.company_id else False
+        if ('WHUS' in cname or cid == _MPP_US_COMPANY_ID) \
+                and 'NCR' not in cname \
+                and cname.startswith('WHUS/Stock'):
+            stock.append(loc.id)
+    return stock
+
+
+def _mpp_stock_split(env_sudo, pids):
+    """TR + US on-hand/reserved per product (NCR excluded, both sides).
+
+    One read_group per company (was: TR-only in most callers, and the
+    entry screen read US on-hand without reserves).
+    @param env_sudo: sudo environment.
+    @param pids: product IDs.
+    @return: {pid: (oh_tr, rs_tr, oh_us, rs_us)} floats, missing -> zeros.
+    """
+    res = {}
+    pids = [p for p in (pids or []) if p]
+    if not pids:
+        return res
+    tr_locs = _mpp_tr_stock_locs(env_sudo)[0]
+    us_locs = _mpp_us_stock_locs(env_sudo)
+    if tr_locs:
+        for sq in env_sudo['stock.quant'].read_group(
+                [('product_id', 'in', pids),
+                 ('location_id', 'in', tr_locs)],
+                ['product_id', 'quantity', 'reserved_quantity'],
+                ['product_id']):
+            pid = sq['product_id'][0]
+            cur = res.setdefault(pid, [0.0, 0.0, 0.0, 0.0])
+            cur[0] = float(sq.get('quantity') or 0.0)
+            cur[1] = float(sq.get('reserved_quantity') or 0.0)
+    if us_locs:
+        for sq in env_sudo['stock.quant'].read_group(
+                [('product_id', 'in', pids),
+                 ('location_id', 'in', us_locs)],
+                ['product_id', 'quantity', 'reserved_quantity'],
+                ['product_id']):
+            pid = sq['product_id'][0]
+            cur = res.setdefault(pid, [0.0, 0.0, 0.0, 0.0])
+            cur[2] = float(sq.get('quantity') or 0.0)
+            cur[3] = float(sq.get('reserved_quantity') or 0.0)
+    return {pid: tuple(v) for pid, v in res.items()}
+
+
 def _mpp_load_pools(pool_json):
     """Parse a stored bottom-up producible snapshot.
 
@@ -224,13 +277,14 @@ def _mpp_find_kit_boms(env_sudo):
 
 class MatiaProcurementPlan(models.Model):
     _name = 'matia.procurement.plan'
-    _description = 'Matia Bulk Procurement/Production Preview Plan (TR)'
+    _description = 'Matia Bulk Procurement/Production Preview Plan'
     _order = 'id desc'
 
     name = fields.Char(required=True, default=lambda self: _('New'))
     company_id = fields.Many2one(
         'res.company', required=True, default=_MPP_TR_COMPANY_ID,
-        help='This plan is for the TR company only (ID=1).')
+        help='Owning company of the plan (currency/origin). '
+             'Stock netting covers TR + US warehouses.')
     state = fields.Selection([
         ('draft', 'Draft (qty entry)'),
         ('calculated', 'Net requirement calculated'),
@@ -309,52 +363,28 @@ class MatiaProcurementPlan(models.Model):
                     }
 
         pids = list(top_map)
-        tr_locs, _ncr = _mpp_tr_stock_locs(env_sudo)
-        # USA locations (info only, excluded from netting)
-        usa_locs = []
-        for loc in env_sudo['stock.location'].search(
-                [('usage', '=', 'internal')]):
-            cname = loc.complete_name or ''
-            cid = loc.company_id.id if loc.company_id else False
-            if ('WHUS' in cname or cid == _MPP_US_COMPANY_ID) and 'NCR' not in cname \
-                    and cname.startswith('WHUS/Stock'):
-                usa_locs.append(loc.id)
-
-        tr_qty, usa_qty, reserved = {}, {}, {}
-        if pids and tr_locs:
-            for sq in env_sudo['stock.quant'].read_group(
-                    [('product_id', 'in', pids),
-                     ('location_id', 'in', tr_locs)],
-                    ['product_id', 'quantity', 'reserved_quantity'],
-                    ['product_id']):
-                pid = sq['product_id'][0]
-                tr_qty[pid] = float(sq.get('quantity') or 0.0)
-                reserved[pid] = float(sq.get('reserved_quantity') or 0.0)
-        if pids and usa_locs:
-            for sq in env_sudo['stock.quant'].read_group(
-                    [('product_id', 'in', pids),
-                     ('location_id', 'in', usa_locs)],
-                    ['product_id', 'quantity'],
-                    ['product_id']):
-                usa_qty[sq['product_id'][0]] = float(
-                    sq.get('quantity') or 0.0)
+        # Legacy entry endpoint (the Tab 1 UI is gone, but external
+        # scripts may still call this). TR + US unreserved, NCR excluded.
+        split = _mpp_stock_split(env_sudo, pids)
 
         items = []
         for pid, info in sorted(
                 top_map.items(),
                 key=lambda kv: kv[1]['display_name'] or ''):
-            t = tr_qty.get(pid, 0.0)
-            r = reserved.get(pid, 0.0)
-            u = usa_qty.get(pid, 0.0)
+            oh_t, rs_t, oh_u, rs_u = split.get(pid, (0.0, 0.0, 0.0, 0.0))
+            a_t = max(0.0, oh_t - rs_t)
+            a_u = max(0.0, oh_u - rs_u)
             items.append(dict(
                 info,
-                stock_tr=t,
-                reserved_tr=r,
-                avail_tr=max(0.0, t - r),
-                stock_usa=u,
+                stock_tr=oh_t,
+                reserved_tr=rs_t,
+                avail_tr=a_t,
+                stock_usa=oh_u,
+                reserved_usa=rs_u,
+                avail_usa=a_u,
                 # Fill-to-N base: physical on-hand TR+USA, reserves
                 # ignored (user rule for the Fill-to-N button).
-                fill_base=max(0.0, t + u),
+                fill_base=max(0.0, oh_t + oh_u),
                 qty_input=0,
             ))
         return {'items': items, 'total': len(items)}
@@ -493,19 +523,22 @@ class MatiaProcurementPlan(models.Model):
         if not need:
             raise UserError(_('Explosion returned no products.'))
 
-        # TR stock (single read_group) + info columns
-        tr_locs, _ncr = _mpp_tr_stock_locs(env_sudo)
+        # TR + US stock (single read_group per company) + info columns.
+        # Netting, producible pools and purchase math all run on the
+        # COMBINED unreserved total (user rule); the per-company split
+        # is kept on the lines for the TR / US display columns.
         pids = list(need)
+        all_net_pids = set(need) | set(edges)
+        for _ep, _ech in edges.items():
+            all_net_pids.update(_ech)
+        split = _mpp_stock_split(env_sudo, list(all_net_pids))
         onhand, reserv = {}, {}
-        if tr_locs:
-            for sq in env_sudo['stock.quant'].read_group(
-                    [('product_id', 'in', pids),
-                     ('location_id', 'in', tr_locs)],
-                    ['product_id', 'quantity', 'reserved_quantity'],
-                    ['product_id']):
-                pid = sq['product_id'][0]
-                onhand[pid] = float(sq.get('quantity') or 0.0)
-                reserv[pid] = float(sq.get('reserved_quantity') or 0.0)
+        onhand_us, reserv_us = {}, {}
+        for _pid, (_oht, _rst, _ohu, _rsu) in split.items():
+            onhand[_pid] = max(0.0, _oht)
+            reserv[_pid] = max(0.0, _rst)
+            onhand_us[_pid] = max(0.0, _ohu)
+            reserv_us[_pid] = max(0.0, _rsu)
 
         # Net cascade (user rule): targets seed demand; nodes are
         # processed parent-first (Kahn topological order over edges).
@@ -513,14 +546,13 @@ class MatiaProcurementPlan(models.Model):
         # receive only the NET qty x usage. Phantom nodes hold no stock
         # and pass the full demand through. Shared sub-products
         # accumulate demand from every parent before they are netted.
-        all_net_pids = set(need) | set(edges)
-        for _ep, _ech in edges.items():
-            all_net_pids.update(_ech)
+        # (all_net_pids was collected above, before the stock read.)
         avail_map = {}
         for _ap in all_net_pids:
-            _oh = max(0.0, onhand.get(_ap, 0.0))
-            _rs = max(0.0, reserv.get(_ap, 0.0))
-            avail_map[_ap] = max(0.0, _oh - _rs)
+            _a_tr = max(0.0, onhand.get(_ap, 0.0) - reserv.get(_ap, 0.0))
+            _a_us = max(0.0, onhand_us.get(_ap, 0.0)
+                        - reserv_us.get(_ap, 0.0))
+            avail_map[_ap] = _a_tr + _a_us
         demand = {pid: 0.0 for pid in all_net_pids}
         for pid, qty in targets.items():
             if pid in demand:
@@ -693,7 +725,7 @@ class MatiaProcurementPlan(models.Model):
         # Info: confirmed incoming POs + open MO output (NOT netted, display only)
         incoming, mo_out = {}, {}
         po_ids = env_sudo['purchase.order'].search([
-            ('company_id', '=', _MPP_TR_COMPANY_ID),
+            ('company_id', 'in', [_MPP_TR_COMPANY_ID, _MPP_US_COMPANY_ID]),
             ('state', 'in', ['purchase', 'done']),
         ])
         if po_ids:
@@ -705,7 +737,7 @@ class MatiaProcurementPlan(models.Model):
                 incoming[g['product_id'][0]] = float(
                     g.get('product_qty') or 0.0)
         mo_ids = env_sudo['mrp.production'].search([
-            ('company_id', '=', _MPP_TR_COMPANY_ID),
+            ('company_id', 'in', [_MPP_TR_COMPANY_ID, _MPP_US_COMPANY_ID]),
             ('state', 'in', ['confirmed', 'progress', 'to_close']),
         ])
         if mo_ids:
@@ -773,7 +805,9 @@ class MatiaProcurementPlan(models.Model):
             info = prod_info.get(pid, {})
             oh = max(0.0, onhand.get(pid, 0.0))
             rs = max(0.0, reserv.get(pid, 0.0))
-            avail = max(0.0, oh - rs)
+            oh_u = max(0.0, onhand_us.get(pid, 0.0))
+            rs_u = max(0.0, reserv_us.get(pid, 0.0))
+            avail = max(0.0, oh - rs) + max(0.0, oh_u - rs_u)
             # Net comes from the cascade (demand minus own avail,
             # children already fed with this net). Gross stays raw.
             netf = net_map.get(pid, max(0.0, gross - avail))
@@ -797,7 +831,10 @@ class MatiaProcurementPlan(models.Model):
                 'gross_qty': gross,
                 'stock_tr': oh,
                 'reserved_tr': rs,
-                'avail_tr': avail,
+                'avail_tr': max(0.0, oh - rs),
+                'stock_us': oh_u,
+                'reserved_us': rs_u,
+                'avail_us': max(0.0, oh_u - rs_u),
                 'incoming_info': incoming.get(pid, 0.0),
                 'open_mo_info': mo_out.get(pid, 0.0),
                 'net_qty': net_qty,
@@ -1399,6 +1436,9 @@ class MatiaProcurementPlan(models.Model):
                 'stock_tr': line.stock_tr,
                 'reserved_tr': line.reserved_tr,
                 'avail_tr': line.avail_tr,
+                'stock_us': line.stock_us,
+                'reserved_us': line.reserved_us,
+                'avail_us': line.avail_us,
                 'incoming_info': line.incoming_info,
                 'open_mo_info': line.open_mo_info,
                 'net': line.net_qty,
@@ -1474,15 +1514,69 @@ class MatiaProcurementPlan(models.Model):
 
     # ------------------------------------------------------------------
     # Tree UI (capacity-style): kit groups + lazy sub-BOM with cost.
-    # Single-screen flow: create_plan -> get_tree_with_cost.
+    # Single-page flow: get_startup_tree -> set_targets_and_rebuild ->
+    # get_tree_with_cost. Needed numbers persist on target_json.
     # ------------------------------------------------------------------
+    @api.model
+    def get_startup_tree(self):
+        """Latest plan with its saved Needed values (or a fresh plan).
+
+        The Plan tab opens with this: numbers persist on the plan, so
+        the user continues where they left off. When no plan exists
+        yet, an empty one is created and skeleton groups (need=0)
+        are returned.
+        @return Same dict as get_tree_with_cost (tree_groups + targets).
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].search(
+            [], order='id desc', limit=1)
+        if not plan:
+            company = env_sudo['res.company'].browse(_MPP_TR_COMPANY_ID)
+            seq = env_sudo['ir.sequence'].sudo().next_by_code(
+                'matia.procurement.plan') or _('MPP')
+            plan = env_sudo['matia.procurement.plan'].create({
+                'name': seq,
+                'company_id': company.id,
+                'state': 'draft',
+                'target_json': '{}',
+                'currency_id': company.currency_id.id,
+            })
+        return self.get_tree_with_cost(plan.id)
+
+    @api.model
+    def set_targets_and_rebuild(self, plan_id, targets):
+        """Save Needed numbers on the plan and rebuild the tree.
+
+        Only positive quantities are kept; missing rows mean 0.
+        @param plan_id Plan to update.
+        @param targets {product_id: qty} Needed numbers from the client.
+        @return Same dict as get_tree_with_cost.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        clean = {}
+        for _k, _v in (targets or {}).items():
+            try:
+                _pid = int(_k)
+                _qty = int(float(_v))
+            except (TypeError, ValueError):
+                continue
+            if _pid > 0 and _qty > 0:
+                clean[str(_pid)] = _qty
+        plan.write({'target_json': json.dumps(clean)})
+        return self.get_tree_with_cost(plan.id)
+
     @api.model
     def get_tree_with_cost(self, plan_id):
         """Explode + net + suppliers, then return capacity-style groups.
 
-        Groups are the 4 kit BOMs; items are the kit's top products
-        (level 0). Children load lazily via get_sub_bom_cost.
-        @param plan_id Plan ID from create_plan.
+        Groups are the 4 kit BOMs in Base/Outdoor/Seat/Screws order;
+        items are ALL of the kit's top products (level 0), each with
+        its saved Needed value (0 when not entered). Children load
+        lazily via get_sub_bom_cost.
+        @param plan_id Plan ID (see get_startup_tree).
         @return Summary dict plus 'tree_groups' and 'targets'.
         """
         env_sudo = _mpp_env_sudo(self)
@@ -1500,7 +1594,14 @@ class MatiaProcurementPlan(models.Model):
         # no re-netting). This also protects RFQ/MO links written on
         # the lines after the first build. Any target change (or a
         # plan built before built_target_json existed) rebuilds.
-        if plan.line_ids and (plan.built_target_json or '') == (
+        # Empty plan (startup before any Needed entry): skeleton
+        # groups, no explosion.
+        if not targets and not plan.line_ids:
+            summary = self._plan_summary(env_sudo, plan)
+            summary['kits'] = []
+            summary['rolled_total_usd'] = 0.0
+            summary['rolled_total_try'] = 0.0
+        elif plan.line_ids and (plan.built_target_json or '') == (
                 plan.target_json or ''):
             summary = self._plan_summary(env_sudo, plan)
             kits = self._kits_from_stored(env_sudo, plan, {
@@ -1514,11 +1615,19 @@ class MatiaProcurementPlan(models.Model):
         line_by_pid = {}
         for line in plan.line_ids:
             line_by_pid.setdefault(line.product_id.id, line)
+        kit_cfgs = _mpp_find_kit_boms(env_sudo)
+        # ALL kit tops resolve (not just entered targets): rows with
+        # no Needed value show need=0 and stay expandable.
+        top_pids = set(targets)
+        for kit in kit_cfgs:
+            for bl in kit['bom'].bom_line_ids:
+                top_pids.add(bl.product_id.id)
         prod_by_id = {}
-        if targets:
+        if top_pids:
             for pr in env_sudo['product.product'].browse(
-                    list(targets)).read(
-                    ['default_code', 'name', 'display_name', 'uom_id']):
+                    list(top_pids)).read(
+                    ['default_code', 'name', 'display_name', 'uom_id',
+                     'product_tmpl_id']):
                 prod_by_id[pr['id']] = pr
         bom_by_tmpl = {}
         tmpl_ids = [p.get('product_tmpl_id', [0])[0]
@@ -1530,9 +1639,9 @@ class MatiaProcurementPlan(models.Model):
                 key = b.product_tmpl_id.id
                 if key not in bom_by_tmpl or b.product_id:
                     bom_by_tmpl[key] = b
-        kit_cfgs = _mpp_find_kit_boms(env_sudo)
         # One query for kit-line templates missing from bom_by_tmpl
         # (was: one search per line in the loop below).
+        # (kit_cfgs was found above, before the product read.)
         missing_tmpls = set()
         for kit in kit_cfgs:
             for bl in kit['bom'].bom_line_ids:
@@ -1553,14 +1662,17 @@ class MatiaProcurementPlan(models.Model):
             items = []
             for bl in bom.bom_line_ids:
                 pid = bl.product_id.id
-                if pid not in targets:
-                    continue
                 pr = prod_by_id.get(pid, {})
                 line = line_by_pid.get(pid)
                 tmpl_id = bl.product_id.product_tmpl_id.id
                 has_bom = tmpl_id in bom_by_tmpl \
                     or tmpl_id in extra_bom_tmpls
-                avail = line.avail_tr if line else 0.0
+                # TR + US combined unreserved (user rule); the split
+                # stays on the row for the TR / US columns.
+                a_tr = line.avail_tr if line else 0.0
+                a_us = line.avail_us if line else 0.0
+                avail = a_tr + a_us
+                need = float(targets.get(pid, 0) or 0)
                 # Bottom-up pool (own stock + assemblable from children);
                 # legacy own-stock value when the plan predates pools.
                 _pool = pool_map.get(pid, avail)
@@ -1583,13 +1695,20 @@ class MatiaProcurementPlan(models.Model):
                     'level': 0,
                     'stock_tr': line.stock_tr if line else 0.0,
                     'reserved_tr': line.reserved_tr if line else 0.0,
-                    'avail_tr': avail,
-                    'gross': line.gross_qty if line else targets.get(pid, 0),
-                    # Planned = net cascade value for tops: target minus
-                    # own avail (level-0 nodes have no parents, so this is
-                    # exact). Children show their own net via sub-BOM.
-                    'planned': max(
-                        0.0, float(targets.get(pid, 0)) - avail),
+                    'avail_tr': a_tr,
+                    'stock_us': line.stock_us if line else 0.0,
+                    'reserved_us': line.reserved_us if line else 0.0,
+                    'avail_us': a_us,
+                    'avail_total': avail,
+                    'gross': line.gross_qty if line else 0.0,
+                    # Needed = saved target for this top (editable on
+                    # the client, persisted via set_targets_and_rebuild).
+                    'need': need,
+                    # Planned = net cascade value for tops: need minus
+                    # combined avail (level-0 nodes have no parents,
+                    # so this is exact). Children show their own net
+                    # via sub-BOM.
+                    'planned': max(0.0, need - avail),
                     'producible': int(math.floor(_pool))
                     if _pool > 0 else 0,
                     'share_pct': _sh[0],
@@ -1636,6 +1755,10 @@ class MatiaProcurementPlan(models.Model):
                 'count': len(items),
                 'items': items,
             })
+        # Display order Base/Outdoor/Seat/Screws (user rule),
+        # independent of the kit search order.
+        _order = {'base': 0, 'outdoor': 1, 'seat': 2, 'screws': 3}
+        tree_groups.sort(key=lambda g: _order.get(g['key'], 99))
         summary['tree_groups'] = tree_groups
         summary['targets'] = {str(k): v for k, v in targets.items()}
         # Per-top contribution: which target needs how much of each part.
@@ -1767,7 +1890,7 @@ class MatiaProcurementPlan(models.Model):
 
     @api.model
     def get_sub_bom_cost(self, product_id, parent_qty=1.0, plan_id=False):
-        """Children of one product with TR avail + cost snapshot.
+        """Children of one product with TR+US avail + cost snapshot.
 
         Capacity-style lazy expansion for the procurement tree.
         @param product_id Parent product ID.
@@ -1794,17 +1917,14 @@ class MatiaProcurementPlan(models.Model):
         except (TypeError, ValueError):
             mult = 1.0
         child_ids = [bl.product_id.id for bl in bom.bom_line_ids]
-        tr_locs, _ncr = _mpp_tr_stock_locs(env_sudo)
-        onhand, reserv = {}, {}
-        if child_ids and tr_locs:
-            for sq in env_sudo['stock.quant'].read_group(
-                    [('product_id', 'in', child_ids),
-                     ('location_id', 'in', tr_locs)],
-                    ['product_id', 'quantity', 'reserved_quantity'],
-                    ['product_id']):
-                pid = sq['product_id'][0]
-                onhand[pid] = float(sq.get('quantity') or 0.0)
-                reserv[pid] = float(sq.get('reserved_quantity') or 0.0)
+        # TR + US combined unreserved (same rule as the explosion).
+        split = _mpp_stock_split(env_sudo, child_ids)
+        onhand, reserv, onhand_us, reserv_us = {}, {}, {}, {}
+        for _pid, (_oht, _rst, _ohu, _rsu) in split.items():
+            onhand[_pid] = max(0.0, _oht)
+            reserv[_pid] = max(0.0, _rst)
+            onhand_us[_pid] = max(0.0, _ohu)
+            reserv_us[_pid] = max(0.0, _rsu)
         # Snapshot: plan lines first, else last PO line lookup.
         snap = {}
         plan = env_sudo['matia.procurement.plan'].browse(
@@ -1840,7 +1960,9 @@ class MatiaProcurementPlan(models.Model):
             pid = cp.id
             oh = max(0.0, onhand.get(pid, 0.0))
             rs = max(0.0, reserv.get(pid, 0.0))
-            avail = max(0.0, oh - rs)
+            oh_u = max(0.0, onhand_us.get(pid, 0.0))
+            rs_u = max(0.0, reserv_us.get(pid, 0.0))
+            avail = max(0.0, oh - rs) + max(0.0, oh_u - rs_u)
             bqty = float(bl.product_qty or 1.0)
             line = snap.get(pid)
             if line:
@@ -1930,7 +2052,11 @@ class MatiaProcurementPlan(models.Model):
                 'has_bom': has_bom,
                 'stock_tr': oh,
                 'reserved_tr': rs,
-                'avail_tr': avail,
+                'avail_tr': max(0.0, oh - rs),
+                'stock_us': oh_u,
+                'reserved_us': rs_u,
+                'avail_us': max(0.0, oh_u - rs_u),
+                'avail_total': avail,
                 'producible': _branch,
                 'share_pct': _sh[0],
                 'share_n': _sh[1],
@@ -2389,7 +2515,7 @@ class MatiaProcurementPlan(models.Model):
 
 class MatiaProcurementPlanLine(models.Model):
     _name = 'matia.procurement.plan.line'
-    _description = 'Matia Preview Plan Line (TR)'
+    _description = 'Matia Preview Plan Line'
 
     plan_id = fields.Many2one('matia.procurement.plan', required=True,
                               ondelete='cascade')
@@ -2399,6 +2525,9 @@ class MatiaProcurementPlanLine(models.Model):
     stock_tr = fields.Float(digits=(16, 3))
     reserved_tr = fields.Float(digits=(16, 3))
     avail_tr = fields.Float(digits=(16, 3))
+    stock_us = fields.Float(digits=(16, 3))
+    reserved_us = fields.Float(digits=(16, 3))
+    avail_us = fields.Float(digits=(16, 3))
     incoming_info = fields.Float(
         digits=(16, 3),
         help='Info: confirmed incoming PO qty (NOT netted).')

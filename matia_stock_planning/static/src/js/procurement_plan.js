@@ -5,26 +5,27 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
     var core = require('web.core');
     var _t = core._t;
 
-    // Production Plan dashboard: 3 tabs in ONE client action (no navigation).
-    // Tab 1: flat quantity entry (TR+USA on-hand base, no expandable rows).
-    // Tab 2: capacity-identical tree (same msp- CSS classes, open/close BOMs).
-    // Tab 3: suppliers with estimated USD + production (RFQ/MO creation).
+    // Production Plan dashboard: 2 tabs in ONE client action (no navigation).
+    // Tab 1 (Plan): every BOM top lists directly with its TR/US unreserved
+    // stock, an editable Needed number and the netted tree below it
+    // (TR+US combined netting). Needed numbers persist on the plan record,
+    // so the last plan reloads on open. Tab 2: suppliers with estimated
+    // USD + production (RFQ/MO creation).
     var ProcurementPlanDashboard = AbstractAction.extend({
         template: 'MatiaProcurementPlan.Dashboard',
         events: {
             'click .mpp-btn-reload': '_onReload',
             'click .mpp-nav-tab': '_onNavTab',
-            'click .mpp-btn-fill': '_onFill',
-            'click .mpp-btn-entry-toggle': '_onEntryGroupToggle',
-            'click .mpp-btn-clear': '_onClear',
-            'click .mpp-btn-calc': '_onCalc',
+            'click .mpp-btn-recalc': '_onRecalc',
+            'click .mpp-btn-needfill': '_onNeedFill',
             'click .mpp-btn-to-suppliers': '_onToSuppliers',
             'click .mpp-btn-excel': '_onExportExcel',
             'click .mpp-btn-excel-tree': '_onExportTree',
             'click .mpp-btn-create-rfq': '_onCreateRfq',
             'click .mpp-btn-confirm-rfq': '_onConfirmRfq',
             'click .mpp-btn-create-mo': '_onCreateMo',
-            'input .mpp-qty': '_onQtyInput',
+            'input .mpp-need': '_onNeedInput',
+            'change .mpp-need': '_onNeedChange',
             'input .mpp-tree-search': '_onTreeSearch',
             'click .msp-btn-expand-all': '_onExpandAll',
             'click .msp-btn-collapse-all': '_onCollapseAll',
@@ -36,8 +37,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         init: function (parent, action) {
             this._super.apply(this, arguments);
-            this.items = [];
-            this.plan = null;
             this.summary = null;
             this.treeGroups = [];
             this.expanded = {};
@@ -50,9 +49,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.treeSearchDone = false;
             this.treeSearchLoading = false;
             this.treeSort = {key: 'planned', dir: -1};
-            // Per-group auto-fill targets (Tab 1 entry headers).
+            // Editable Needed numbers per top product (persisted on plan).
+            this.needMap = {};
+            // Per-group auto-fill targets (Plan group headers).
             this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
-            this.collapsedEntry = {};
             this.activeTab = 1;
             this.supSummary = null;
             this.pendingRfqSeller = null;
@@ -62,7 +62,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         willStart: function () {
             return Promise.all([
                 this._super.apply(this, arguments),
-                this._fetchEntry(),
+                this._fetchStartup(),
             ]);
         },
 
@@ -70,7 +70,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var self = this;
             return this._super.apply(this, arguments).then(function () {
                 self._showTab(1);
-                self._renderEntry();
+                self._renderTree();
             });
         },
 
@@ -83,7 +83,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         _planId: function () {
-            if (this.plan && this.plan.plan_id) return this.plan.plan_id;
             if (this.summary && this.summary.plan_id) {
                 return this.summary.plan_id;
             }
@@ -110,253 +109,164 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     this.classList.add('d-none');
                 }
             });
-            if (n === 2) this._renderTree();
-            if (n === 3) this._renderSup();
+            if (n === 1) this._renderTree();
+            if (n === 2) this._renderSup();
         },
 
         _onNavTab: function (ev) {
             ev.preventDefault();
             var n = parseInt(ev.currentTarget.dataset.tab, 10) || 1;
-            if (n === 2 && !this.summary) {
-                this.displayNotification({
-                    title: _t('Warning'),
-                    message: _t('Calculate the tree first (Tab 1 → Calculate tree + cost).'),
-                    type: 'warning',
-                });
-                return;
-            }
-            if (n === 3) {
-                if (!this.plan && !this.summary) {
+            if (n === 2) {
+                if (!this.summary) {
                     this.displayNotification({
                         title: _t('Warning'),
-                        message: _t('Calculate the tree first.'),
+                        message: _t('The plan is still loading.'),
                         type: 'warning',
                     });
                     return;
                 }
-                this._showTab(3);
+                this._showTab(2);
                 if (!this.supSummary) this._fetchSupSummary();
                 return;
             }
             this._showTab(n);
         },
 
-        // ---------------- tab 1: entry ----------------
-        _fetchEntry: function () {
+        // ---------------- tab 1: plan (startup + needed) ----------------
+        // Opens with the last saved plan (server get_startup_tree), so
+        // the user continues where they left off.
+
+        _fetchStartup: function () {
             var self = this;
-            return this._rpcPlan('get_entry_products').then(function (res) {
-                self.items = (res && res.items) || [];
+            return this._rpcPlan('get_startup_tree').then(function (res) {
+                self._applySummary(res);
+            });
+        },
+
+        // Shared summary intake (startup + recalculate + need-save):
+        // resets search/expand state, rebuilds the Needed map from the
+        // persisted targets.
+        _applySummary: function (summary) {
+            this.summary = summary;
+            this.treeGroups = (summary && summary.tree_groups) || [];
+            this.expanded = {};
+            this.subCache = {};
+            this.collapsedGroups = {};
+            this.supSummary = null;
+            this.pendingRfqSeller = null;
+            this.treeSearch = '';
+            this.treeSearchMatches = [];
+            this.treeSearchDone = false;
+            this.treeSearchLoading = false;
+            this.treeSearchToken++;
+            var $input = this.$('.mpp-tree-search');
+            if ($input.length) $input.val('');
+            this.needMap = {};
+            var targets = (summary && summary.targets) || {};
+            var self = this;
+            Object.keys(targets).forEach(function (k) {
+                self.needMap[parseInt(k, 10)] =
+                    Math.max(0, parseInt(targets[k], 10) || 0);
             });
         },
 
         _onReload: function () {
             var self = this;
-            this._fetchEntry().then(function () {
-                self._renderEntry();
-            });
-        },
-
-        _onQtyInput: function (ev) {
-            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
-            var val = parseInt(ev.currentTarget.value, 10) || 0;
-            for (var i = 0; i < this.items.length; i++) {
-                if (this.items[i].product_id === pid) {
-                    this.items[i].qty_input = Math.max(0, val);
-                }
-            }
-        },
-
-        _selectedItems: function () {
-            return this.items.filter(function (r) {
-                return (parseInt(r.qty_input, 10) || 0) > 0;
-            }).map(function (r) {
-                return {product_id: r.product_id, qty_input: r.qty_input};
-            });
-        },
-
-        // Entry groups in Capacity Plan order. Titles mirror the
-        // capacity KPI cards: Base / Outdoor Parts / Seat Parts /
-        // Common Screws. Icons reuse the tree-tab _groupIcon map.
-        _entryGroupOrder: function () {
-            return [
-                {key: 'base', title: _t('Base')},
-                {key: 'outdoor', title: _t('Outdoor Parts')},
-                {key: 'seat', title: _t('Seat Parts')},
-                {key: 'screws', title: _t('Common Screws')},
-            ];
-        },
-
-        _entryGroupTitle: function (key) {
-            var order = this._entryGroupOrder();
-            for (var i = 0; i < order.length; i++) {
-                if (order[i].key === key) return order[i].title;
-            }
-            return key;
-        },
-
-        _onEntryGroupToggle: function (ev) {
-            var key = ev.currentTarget.dataset.groupKey;
-            if (!key) return;
-            this.collapsedEntry[key] = !this.collapsedEntry[key];
-            this._renderEntry();
-        },
-
-        // Per-group auto-fill: qty = max(0, N - (TR on-hand + USA on-hand)).
-        // Only the clicked header's group is filled; each group remembers
-        // its own N. Reserves are deliberately ignored (user rule).
-        _onFill: function (ev) {
-            var key = ev && ev.currentTarget &&
-                ev.currentTarget.dataset.group;
-            if (!key) return;
-            var nInput = this.$('.mpp-fill-n[data-group="' + key + '"]').val();
-            var n = parseInt(nInput, 10);
-            if (isNaN(n) || n < 0) n = 50;
-            this.fillN[key] = n;
-            for (var i = 0; i < this.items.length; i++) {
-                if (this.items[i].kit_key !== key) continue;
-                var base = parseFloat(this.items[i].fill_base) || 0;
-                this.items[i].qty_input = Math.max(0, Math.ceil(n - base));
-            }
-            this._renderEntry();
-            this.displayNotification({
-                title: _t('Filled'),
-                message: this._entryGroupTitle(key) + ': ' + n + ' ' +
-                    _t('units filled (TR+USA on-hand, reserves ignored).'),
-                type: 'success',
-            });
-        },
-
-        _onClear: function () {
-            for (var i = 0; i < this.items.length; i++) {
-                this.items[i].qty_input = 0;
-            }
-            this._renderEntry();
-        },
-
-        // Group header row: identical look to the Capacity Plan /
-        // tree tab (tr.group-row + .group-title-badge + Show/Hide),
-        // plus this group's own auto-fill control on the right.
-        _entryGroupHtml: function (key, title, rows) {
-            var collapsed = !!this.collapsedEntry[key];
-            var n = this.fillN[key] !== undefined ?
-                this.fillN[key] : 50;
-            var html = '<tr class="group-row group-' + key +
-                '" data-group="' + key + '"><td colspan="4">' +
-                '<div class="group-title-badge">' +
-                '<i class="fa ' + this._groupIcon(key) + ' mr-1"></i>' +
-                '<span>' + title + '</span>' +
-                '<span class="group-count ml-2">(' + rows.length +
-                ' Parts)</span>' +
-                '<span class="mpp-autofill ml-auto" title="' +
-                _t('Sets Qty = target − (TR on-hand + USA on-hand) for every ' +
-                    'product in this group. Reserves are ignored.') + '">' +
-                '<i class="fa fa-magic"></i>' +
-                '<span>' + _t('Auto-fill') + ' ' + title + ' ' +
-                _t('to') + '</span>' +
-                '<input type="number" min="0" value="' + n + '" ' +
-                'class="form-control form-control-sm mpp-fill-n" ' +
-                'data-group="' + key + '" style="width:80px;"/>' +
-                '<button type="button" class="btn btn-secondary btn-sm mpp-btn-fill" ' +
-                'data-group="' + key + '">' + _t('Apply') + '</button>' +
-                '</span>' +
-                '<button type="button" class="btn btn-sm mpp-btn-entry-toggle ml-2 ' +
-                (collapsed ? 'msp-btn-group-show' : 'msp-btn-group-hide') +
-                '" data-group-key="' + key + '"' +
-                ' title="' + (collapsed ? _t('Show this group') :
-                    _t('Hide this group')) + '"' +
-                ' style="padding:1px 10px; font-size:0.75rem; font-weight:600;">' +
-                (collapsed ?
-                    '<i class="fa fa-eye mr-1"></i>' + _t('Show') :
-                    '<i class="fa fa-eye-slash mr-1"></i>' + _t('Hide')) +
-                '</button></div></td></tr>';
-            if (collapsed) return html;
-            for (var i = 0; i < rows.length; i++) {
-                var r = rows[i];
-                var entryName = r.product_name ||
-                    this._plainName(r.product_code, r.display_name);
-                html += '<tr class="item-row" data-group="' + key + '">' +
-                    '<td class="td-product">' +
-                    '<span class="msp-bom-spacer mr-1">' +
-                    '<i class="fa fa-circle msp-no-bom-dot"></i></span>' +
-                    (r.product_code ?
-                        '<span class="prod-code">[' + r.product_code +
-                        ']</span> ' : '') +
-                    '<span class="prod-name">' +
-                    (entryName || '') + '</span></td>' +
-                    '<td class="td-stock">' + (r.avail_tr || 0) + '</td>' +
-                    '<td class="td-stock">' + (r.stock_usa || 0) + '</td>' +
-                    '<td class="td-req"><input type="number" min="0" class="form-control form-control-sm mpp-qty" ' +
-                    'data-pid="' + r.product_id + '" value="' +
-                    (r.qty_input || 0) + '"/></td>' +
-                    '</tr>';
-            }
-            return html;
-        },
-
-        _renderEntry: function () {
-            var self = this;
-            var byKey = {};
-            for (var i = 0; i < this.items.length; i++) {
-                var k = this.items[i].kit_key || 'other';
-                (byKey[k] = byKey[k] || []).push(this.items[i]);
-            }
-            var html = '';
-            var order = this._entryGroupOrder();
-            var seen = {};
-            order.forEach(function (g) {
-                seen[g.key] = true;
-                html += self._entryGroupHtml(
-                    g.key, g.title, byKey[g.key] || []);
-            });
-            // Unknown kit_key values (if any) render as trailing groups
-            // instead of silently disappearing.
-            Object.keys(byKey).forEach(function (k) {
-                if (!seen[k]) {
-                    html += self._entryGroupHtml(
-                        k, self._entryGroupTitle(k), byKey[k]);
-                }
-            });
-            this.$('.mpp-entry-body').html(html);
-        },
-
-        // Calculate -> creates the plan, builds the tree, jumps to Tab 2.
-        _onCalc: function () {
-            var self = this;
-            var sel = this._selectedItems();
-            if (!sel.length) {
-                self.displayNotification({
-                    title: _t('Warning'),
-                    message: _t('Enter a quantity for at least one product (or use a group auto-fill).'),
-                    type: 'warning',
-                });
-                return;
-            }
-            this._rpcPlan('create_plan', [sel]).then(function (res) {
-                self.plan = res;
-                return self._rpcPlan('get_tree_with_cost', [res.plan_id]);
-            }).then(function (summary) {
-                self.summary = summary;
-                self.treeGroups = (summary && summary.tree_groups) || [];
-                self.expanded = {};
-                self.subCache = {};
-                self.collapsedGroups = {};
-                self.supSummary = null;
-                self.pendingRfqSeller = null;
-                self.treeSearch = '';
-                self.treeSearchMatches = [];
-                self.treeSearchDone = false;
-                self.treeSearchLoading = false;
-                self.treeSearchToken++;
-                self.$('.mpp-tree-search').val('');
-                self._showTab(2);
+            this._fetchStartup().then(function () {
+                self._renderTree();
             }, function (err) {
                 self._notifyErr(err);
             });
         },
 
+        _needOf: function (pid) {
+            return Math.max(0,
+                parseInt(this.needMap[pid], 10) || 0);
+        },
+
+        // Typing only updates the local map + the row's Planned cell
+        // (no re-render, so the input keeps focus). Persist happens on
+        // change (blur/enter) via _onNeedChange.
+        _onNeedInput: function (ev) {
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            if (!pid) return;
+            var val = Math.max(0,
+                parseInt(ev.currentTarget.value, 10) || 0);
+            this.needMap[pid] = val;
+            var $row = this.$(ev.currentTarget).closest('tr');
+            var avail = parseFloat(
+                ev.currentTarget.dataset.avail || '0') || 0;
+            var planned = Math.max(0, val - avail);
+            $row.find('.td-planned-num').text(
+                planned <= 0 ? 'OK' : planned);
+        },
+
+        // Persists ALL Needed numbers, then rebuilds the tree from the
+        // server (cascade nets change, so caches are dropped).
+        _onNeedChange: function () {
+            var self = this;
+            var pid = this._planId();
+            if (!pid) return Promise.resolve();
+            return this._rpcPlan('set_targets_and_rebuild',
+                [pid, this.needMap]).then(function (res) {
+                self._applySummary(res);
+                self._renderTree();
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        // Group header auto-fill: Needed = max(0, N - unreserved TR+US)
+        // for every top in the group, then persist + rebuild.
+        _onNeedFill: function (ev) {
+            var self = this;
+            var key = ev && ev.currentTarget &&
+                ev.currentTarget.dataset.group;
+            if (!key || !this._planId()) return;
+            var nInput = this.$('.mpp-fill-n[data-group="' + key + '"]').val();
+            var n = parseInt(nInput, 10);
+            if (isNaN(n) || n < 0) n = 50;
+            this.fillN[key] = n;
+            this.treeGroups.forEach(function (g) {
+                if (g.key !== key) return;
+                (g.items || []).forEach(function (r) {
+                    var avail = parseFloat(r.avail_total);
+                    if (isNaN(avail)) {
+                        avail = parseFloat(r.avail_tr) || 0;
+                    }
+                    self.needMap[r.product_id] =
+                        Math.max(0, Math.ceil(n - avail));
+                });
+            });
+            this._onNeedChange().then(function () {
+                self.displayNotification({
+                    title: _t('Filled'),
+                    message: n + ' ' +
+                        _t('units filled (TR+US unreserved).'),
+                    type: 'success',
+                });
+            });
+        },
+
+        // Recalculate: persist current Needed numbers and rebuild.
+        _onRecalc: function () {
+            var self = this;
+            if (!this.summary) return;
+            this._onNeedChange().then(function () {
+                self.displayNotification({
+                    title: _t('Recalculated'),
+                    message: _t('Tree rebuilt from the Needed numbers.'),
+                    type: 'success',
+                });
+            });
+        },
+
+        // Group header auto-fill lives in the Plan group headers
+        // (see _renderTree); the per-group N inputs above feed it.
+
         _onToSuppliers: function () {
             if (!this._planId()) return;
-            this._showTab(3);
+            this._showTab(2);
             if (!this.supSummary) this._fetchSupSummary();
         },
 
@@ -367,7 +277,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return this._rpcPlan('get_supplier_summary', [pid]).then(
                 function (res) {
                     self.supSummary = res;
-                    if (self.activeTab === 3) self._renderSup();
+                    if (self.activeTab === 2) self._renderSup();
                 }, function (err) {
                     self._notifyErr(err);
                 });
@@ -381,7 +291,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // ---------------- tab 2: tree (msp-identical) ----------------
+        // ---------------- tab 1: plan tree ----------------
         // Typing filters the TREE itself across the WHOLE forest
         // (collapsed subtrees included): a debounced server search
         // finds every match, ancestor paths auto-expand for exact
@@ -604,7 +514,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (!this.summary || !this.treeGroups.length) {
                 this.displayNotification({
                     title: _t('Warning'),
-                    message: _t('Calculate the tree first (Tab 1 → Calculate tree + cost).'),
+                    message: _t('The plan is still loading.'),
                     type: 'warning',
                 });
                 return;
@@ -770,7 +680,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _sortItems: function (rows) {
             var k = this.treeSort.key, d = this.treeSort.dir;
-            var num = {avail: 1, producible: 1, planned: 1, est: 1};
+            var num = {avail: 1, tr: 1, us: 1, need: 1,
+                producible: 1, planned: 1, est: 1};
             var self = this;
             rows.sort(function (a, b) {
                 var av = self._sortVal(a, k), bv = self._sortVal(b, k);
@@ -786,7 +697,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _sortVal: function (r, k) {
             if (k === 'code') return (r.code || '') + ' ' + (r.name || '');
-            if (k === 'avail') return parseFloat(r.avail_tr) || 0;
+            if (k === 'tr') return parseFloat(r.avail_tr) || 0;
+            if (k === 'us') return parseFloat(r.avail_us) || 0;
+            if (k === 'avail') return this._availTotal(r);
+            if (k === 'need') return parseFloat(r.need) || 0;
             if (k === 'producible') return this._producible(r);
             if (k === 'planned') return this._rowNet(r);
             if (k === 'est') return this._estUsd(r);
@@ -849,12 +763,20 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return n;
         },
 
+        // Combined TR+US unreserved (server sends avail_total; legacy
+        // rows fall back to avail_tr).
+        _availTotal: function (r) {
+            var t = parseFloat(r.avail_total);
+            if (!isNaN(t)) return t;
+            return parseFloat(r.avail_tr) || 0;
+        },
+
         _producible: function (r) {
             if (r.producible !== undefined && r.producible !== null &&
                     r.producible !== '') {
                 return parseFloat(r.producible) || 0;
             }
-            var avail = parseFloat(r.avail_tr) || 0;
+            var avail = this._availTotal(r);
             var bq = parseFloat(r.bom_qty) || 0;
             if (bq > 0) return Math.max(0, Math.floor(avail / bq));
             return Math.max(0, avail);
@@ -936,7 +858,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 toggle = '<span class="msp-bom-spacer mr-1">' +
                     '<i class="fa fa-circle msp-no-bom-dot"></i></span>';
             }
-            var avail = parseFloat(r.avail_tr) || 0;
+            var availTr = parseFloat(r.avail_tr) || 0;
+            var availUs = parseFloat(r.avail_us) || 0;
+            var avail = this._availTotal(r);
+            var need = (r.need !== undefined && r.need !== null &&
+                r.need !== '') ? parseFloat(r.need) || 0 :
+                this._needOf(r.product_id);
             var prod = this._producible(r);
             var shared = (parseInt(r.share_n) || 0) > 1;
             var breakdown = r.top_breakdown ?
@@ -978,18 +905,31 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td class="td-bom-qty">' + this._fmtNum(r.bom_qty, 2) +
                 ' <small class="text-muted">' + this._uomEn(r.uom) +
                 '</small></td>' +
-                '<td class="td-stock" title="Net usable stock ' +
-                '(reserved excluded)"><strong>' +
-                this._fmtNum(avail, 0) + '</strong></td>' +
+                '<td class="td-stock" title="TR unreserved: on-hand ' +
+                (r.stock_tr || 0) + ' − reserved ' +
+                (r.reserved_tr || 0) + ' (NCR excluded)"><strong>' +
+                this._fmtNum(availTr, 0) + '</strong></td>' +
+                '<td class="td-stock" title="US unreserved: on-hand ' +
+                (r.stock_us || 0) + ' − reserved ' +
+                (r.reserved_us || 0) + ' (NCR excluded)"><strong>' +
+                this._fmtNum(availUs, 0) + '</strong></td>' +
                 '<td class="td-max-dev">' + (prod <= 0 ?
                     '<span class="dev-badge dev-critical">0</span>' :
                     '<span class="dev-normal' +
                     (shared ? ' dev-shared' : '') + '">' +
                     this._fmtNum(prod, 0) + '</span>') +
                 this._sharedNote(r) + '</td>' +
+                '<td class="td-req">' + (level === 0 ?
+                    '<input type="number" min="0" ' +
+                    'class="form-control form-control-sm mpp-need" ' +
+                    'data-pid="' + r.product_id + '" ' +
+                    'data-avail="' + avail + '" ' +
+                    'title="Needed units (saved on the plan)" value="' +
+                    need + '"/>' :
+                    '<span class="text-muted">—</span>') + '</td>' +
                 '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
                     '<span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>' :
-                    '<span class="badge-req-need">' + this._fmtNum(net, 0) +
+                    '<span class="badge-req-need td-planned-num">' + this._fmtNum(net, 0) +
                     '</span>') +
                 (r.top_breakdown ?
                     '<div class="text-muted small" style="max-width:220px;">' +
@@ -1041,13 +981,18 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'Sort by name') +
                 th(null, 'Usage Qty', 'th-bom-qty',
                     'Quantity per parent assembly') +
-                th('avail', 'Unreserved', 'th-stock',
-                    'Net usable stock (on-hand minus reserved; ' +
-                    'reserved and NCR excluded from netting)') +
+                th('tr', 'TR', 'th-stock',
+                    'TR unreserved stock (on-hand minus reserved; ' +
+                    'NCR excluded from netting)') +
+                th('us', 'US', 'th-stock',
+                    'US unreserved stock (on-hand minus reserved; ' +
+                    'NCR excluded from netting)') +
                 th('producible', 'Producible', 'th-max-dev',
-                    'Producible units from net stock') +
+                    'Producible units from TR+US net stock') +
+                th('need', 'Needed', 'th-req',
+                    'Wanted units (editable, saved on the plan)') +
                 th('planned', 'Planned', 'th-req',
-                    'Net shortage after stock netting') +
+                    'Net shortage after TR+US stock netting') +
                 th(null, 'Seller', '', 'Last supplier') +
                 th(null, 'Source', '', 'Company of the last buy') +
                 th(null, 'Last Price', '', 'Last purchase price') +
@@ -1079,7 +1024,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var self = this;
             if (!this.summary) {
                 this.$('.mpp-tree-body').html(
-                    '<div class="alert alert-info">Calculate the tree first (Tab 1).</div>');
+                    '<div class="alert alert-info">Loading the plan…</div>');
                 return;
             }
             // Search filters the TREE itself (no separate results panel):
@@ -1095,14 +1040,28 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     return self._subtreeMatch(g.key + ':' + r.product_id, r);
                 });
                 items = self._sortItems(items.slice());
+                var n = self.fillN[g.key] !== undefined ?
+                    self.fillN[g.key] : 50;
                 html += '<tr class="group-row group-' + g.key +
-                    '" data-group="' + g.key + '"><td colspan="12">' +
+                    '" data-group="' + g.key + '"><td colspan="14">' +
                     '<div class="group-title-badge">' +
                     '<i class="fa ' + self._groupIcon(g.key) + ' mr-1"></i>' +
                     '<span>' + g.title + '</span>' +
                     '<span class="group-count ml-2">(' + items.length +
                     ' Parts)</span>' +
-                    '<span class="ml-auto text-muted" style="font-size: 0.75rem;">' +
+                    '<span class="mpp-autofill ml-auto" title="' +
+                    _t('Sets Needed = target − (TR + US unreserved) for ' +
+                        'every top product in this group.') + '">' +
+                    '<i class="fa fa-magic"></i>' +
+                    '<span>' + _t('Auto-fill') + ' ' + g.title + ' ' +
+                    _t('to') + '</span>' +
+                    '<input type="number" min="0" value="' + n + '" ' +
+                    'class="form-control form-control-sm mpp-fill-n" ' +
+                    'data-group="' + g.key + '" style="width:80px;"/>' +
+                    '<button type="button" class="btn btn-secondary btn-sm mpp-btn-needfill" ' +
+                    'data-group="' + g.key + '">' + _t('Apply') + '</button>' +
+                    '</span>' +
+                    '<span class="ml-2 text-muted" style="font-size: 0.75rem;">' +
                     'BOM: ' + (g.bom_name || '') + '</span>' +
                     '<button type="button" class="btn btn-sm msp-btn-toggle-group ml-2 ' +
                     (collapsed ? 'msp-btn-group-show' : 'msp-btn-group-hide') +
@@ -1121,7 +1080,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 }
             });
             if (searching && !visibleTotal && !this.treeSearchLoading) {
-                html += '<tr><td colspan="12">' +
+                html += '<tr><td colspan="14">' +
                     '<div class="alert alert-info">No parts match ' +
                     '&ldquo;' + this.treeSearch +
                     '&rdquo; in any BOM.</div></td></tr>';
@@ -1145,8 +1104,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     rows.push({
                         code: r.code, name: r.name, level: level,
                         bom_qty: r.bom_qty, uom: self._uomEn(r.uom),
-                        avail: parseFloat(r.avail_tr) || 0,
+                        tr: parseFloat(r.avail_tr) || 0,
+                        us: parseFloat(r.avail_us) || 0,
+                        avail: self._availTotal(r),
                         producible: self._producible(r),
+                        need: (r.need !== undefined && r.need !== null &&
+                            r.need !== '') ? parseFloat(r.need) || 0 :
+                            self._needOf(r.product_id),
                         planned: net,
                         seller: r.seller || '',
                         source: r.last_company || '',
@@ -1217,7 +1181,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // ---------------- tab 3: suppliers + production ----------------
+        // ---------------- tab 2: suppliers + production ----------------
         _renderSup: function () {
             var s = this.supSummary;
             if (!s) {

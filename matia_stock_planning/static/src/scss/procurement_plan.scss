@@ -105,18 +105,18 @@
         }
     }
 
-    .mpp-qty {
+    .mpp-qty,
+    .mpp-need {
         max-width: 110px;
         margin: 0 auto;
         text-align: center;
         font-weight: 600;
     }
 
-    // Tab 1 group headers reuse the capacity/tree group-row look
+    // Plan group headers reuse the capacity/tree group-row look
     // (tr.group-row + .group-title-badge come from stock_planning.scss
-    // via table.msp-table). The toggle below mirrors
-    // .msp-btn-toggle-group with its own hook class so tree-tab
-    // handlers never fire on entry headers.
+    // via table.msp-table). The auto-fill control below fills the
+    // Needed numbers of the group's tops from TR+US unreserved stock.
     .mpp-autofill {
         display: inline-flex;
         align-items: center;
