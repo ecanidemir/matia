@@ -14,3 +14,4 @@
 2026-10-06 | [auto] APIError [400]: Requests ending with a model turn are not supported. | kürate edilmedi -> /log-error ile işle
 2026-10-06 | [O15] production plan usage qty hep 1.0 | get_tree_with_cost level-0 satırlarda bom_qty 1.0 sabit yazılmış, bl.product_qty okunmamış -> matia_procurement_plan.py:1867 float(bl.product_qty or 1.0) yapıldı
 2026-10-06 | [O15] mpp auto-fill double-netting + lineless avail 0 | Auto-fill N-avail yazip cascade bir kez daha dusuyordu (cift-netting); satirsiz top avail 0 okunuyordu -> Needed=N brut yazilir, stok tek elde netlenir; satirsiz top canli split stok gosterir (branch, staging verify bekliyor)
+2026-10-06 | [auto] APIError [503]: The backend is temporarily overloaded. Please retry. | kürate edilmedi -> /log-error ile işle
