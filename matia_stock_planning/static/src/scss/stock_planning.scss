@@ -28,7 +28,13 @@
     }
 }
 
-.o_matia_stock_planning {
+/* Shared Capacity template root.
+ * The Production Plan reuses every msp- class below (tables, KPI cards,
+ * badges, pills, search bars, sub-BOM rows), so the scope covers both
+ * dashboard roots. Capacity-only blocks (.msp-header, .msp-controls-card,
+ * .msp-dynamic-chips-bar) simply match nothing under procurement. */
+.o_matia_stock_planning,
+.o_matia_procurement_plan {
     display: flex;
     flex-direction: column;
     /* Desktop: fill the action panel height and scroll internally */

@@ -2,48 +2,76 @@
 <templates xml:space="preserve">
     <t t-name="MatiaProcurementPlan.Dashboard">
         <div class="o_matia_procurement_plan">
+
+            <!-- 1. Header Bar (capacity template: icon + title area + icon actions) -->
             <div class="mpp-header">
-                <div>
-                    <h2>Production Plan (TR)</h2>
-                    <p>Admin only. RFQs/MOs are created as drafts; nothing is confirmed automatically.</p>
+                <div class="mpp-title-area">
+                    <i class="fa fa-industry"></i>
+                    <div>
+                        <h2>Production Plan (TR)</h2>
+                        <p>Admin only. RFQs/MOs are created as drafts; nothing is confirmed automatically.</p>
+                    </div>
                 </div>
-                <div>
-                    <button class="btn btn-outline-light btn-sm mpp-btn-reload">Refresh</button>
-                    <button class="btn btn-success btn-sm mpp-btn-excel">Excel (suppliers)</button>
-                    <button class="btn btn-success btn-sm mpp-btn-excel-tree">Excel (tree)</button>
+                <div class="mpp-actions">
+                    <button class="btn btn-outline-light btn-sm mpp-btn-reload" title="Refresh Data">
+                        <i class="fa fa-refresh mr-1"></i> Refresh
+                    </button>
+                    <button class="btn btn-success btn-sm mpp-btn-excel" title="Export suppliers to Excel">
+                        <i class="fa fa-file-excel-o mr-1"></i> Excel (suppliers)
+                    </button>
+                    <button class="btn btn-success btn-sm mpp-btn-excel-tree" title="Export tree to Excel">
+                        <i class="fa fa-file-excel-o mr-1"></i> Excel (tree)
+                    </button>
                 </div>
             </div>
 
-            <ul class="nav nav-tabs mpp-nav-tabs mt-2">
+            <!-- 2. Step navigation -->
+            <ul class="nav nav-tabs mpp-nav-tabs">
                 <li class="nav-item">
-                    <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">1. Enter Quantities</a>
+                    <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">
+                        <i class="fa fa-pencil mr-1"></i>1. Enter Quantities
+                    </a>
                 </li>
                 <li class="nav-item">
-                    <a href="#" class="nav-link mpp-nav-tab" data-tab="2">2. Tree + Cost</a>
+                    <a href="#" class="nav-link mpp-nav-tab" data-tab="2">
+                        <i class="fa fa-sitemap mr-1"></i>2. Tree + Cost
+                    </a>
                 </li>
                 <li class="nav-item">
-                    <a href="#" class="nav-link mpp-nav-tab" data-tab="3">3. Suppliers &amp; Production</a>
+                    <a href="#" class="nav-link mpp-nav-tab" data-tab="3">
+                        <i class="fa fa-truck mr-1"></i>3. Suppliers &amp; Production
+                    </a>
                 </li>
             </ul>
 
             <!-- TAB 1: grouped entry (same group look as Capacity Plan) -->
             <div class="mpp-pane" data-pane="1">
-                <h4 class="mt-2">Enter quantities by group (TR+USA on-hand shown)</h4>
-                <div class="mpp-entry-toolbar mb-2">
-                    <span class="text-muted small">
-                        <i class="fa fa-magic mr-1"></i>
-                        Each group has its own auto-fill in its header
-                        (target − on-hand per group).</span>
-                    <button class="btn btn-outline-secondary btn-sm mpp-btn-clear ml-2">Clear</button>
-                    <button class="btn btn-primary btn-sm mpp-btn-calc">Calculate tree + cost</button>
-                </div>
                 <div class="msp-table-card mt-2">
+                    <div class="msp-table-search">
+                        <div class="table-legend">
+                            <span class="text-muted" style="font-size:0.75rem;">
+                                <i class="fa fa-magic mr-1"></i>
+                                Each group has its own auto-fill in its header
+                                (target − on-hand per group).
+                            </span>
+                        </div>
+                        <div class="msp-tool-buttons">
+                            <button class="btn btn-outline-secondary btn-sm mpp-btn-clear" title="Clear all quantities">
+                                <i class="fa fa-eraser mr-1"></i> Clear
+                            </button>
+                            <button class="btn btn-primary btn-sm mpp-btn-calc" title="Build tree + cost from entered quantities">
+                                <i class="fa fa-calculator mr-1"></i> Calculate tree + cost
+                            </button>
+                        </div>
+                    </div>
                     <div class="table-responsive">
                         <table class="msp-table">
                             <thead>
                                 <tr>
-                                    <th>Code</th><th>Product</th>
-                                    <th>TR Avail.</th><th>USA Stock</th><th>Qty</th>
+                                    <th class="th-product">Part Name &amp; Code</th>
+                                    <th class="th-stock" title="Net usable stock in TR (on-hand minus reserved)">TR Avail.</th>
+                                    <th class="th-stock">USA Stock</th>
+                                    <th class="th-req-20">Qty</th>
                                 </tr>
                             </thead>
                             <tbody class="mpp-entry-body"/>
@@ -63,25 +91,52 @@
                         <div class="table-legend">
                             <span><span class="dot-ok"></span> OK = covered by stock</span>
                             <span><span class="dot-need"></span> Red = net shortage after stock netting</span>
+                            <span class="legend-note" style="color: #0369a1; background: #f0f9ff; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd; font-size: 0.72rem; font-weight: 500;">
+                                <i class="fa fa-info-circle mr-1"></i> Reserved &amp; NCR quantities are excluded from netting
+                            </span>
                             <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
+                            <span class="text-muted" style="font-size:0.7rem;"><span class="msp-level-badge msp-lvl-2">L2</span> Deeper BOM levels have their own colors</span>
                         </div>
                         <div class="msp-tool-buttons">
-                            <button class="btn btn-outline-primary btn-sm msp-btn-expand-all">Expand All BOMs</button>
-                            <button class="btn btn-outline-secondary btn-sm msp-btn-collapse-all">Collapse All BOMs</button>
+                            <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs">
+                                <i class="fa fa-plus-square-o mr-1"></i> Expand All BOMs
+                            </button>
+                            <button class="btn btn-outline-secondary btn-sm msp-btn-collapse-all" title="Collapse all sub-assembly BOMs">
+                                <i class="fa fa-minus-square-o mr-1"></i> Collapse All BOMs
+                            </button>
                         </div>
                     </div>
                     <div class="table-responsive mpp-tree-body"/>
                 </div>
-                <button class="btn btn-primary mt-2 mpp-btn-to-suppliers">Continue to Suppliers &amp; Production →</button>
+                <button class="btn btn-primary mt-2 mpp-btn-to-suppliers">
+                    Continue to Suppliers &amp; Production <i class="fa fa-arrow-right ml-1"></i>
+                </button>
             </div>
 
             <!-- TAB 3: suppliers + production -->
             <div class="mpp-pane d-none" data-pane="3">
                 <div class="msp-kpi-grid mpp-sup-cards mt-2"/>
-                <h4 class="mt-2">Suppliers (estimated USD)</h4>
-                <div class="mpp-sup-body"/>
-                <h4 class="mt-3">Production — Make &amp; Subcontract</h4>
-                <div class="mpp-prod-body"/>
+                <div class="msp-table-card mt-2">
+                    <div class="msp-table-search">
+                        <div class="table-legend">
+                            <span style="font-weight:700; color:#0f172a;">
+                                <i class="fa fa-truck mr-1"></i> Suppliers (estimated USD)
+                            </span>
+                            <span class="text-muted" style="font-size:0.7rem;">Grouped by company — one draft RFQ per supplier</span>
+                        </div>
+                    </div>
+                    <div class="mpp-sup-body"/>
+                </div>
+                <div class="msp-table-card mt-2">
+                    <div class="msp-table-search">
+                        <div class="table-legend">
+                            <span style="font-weight:700; color:#0f172a;">
+                                <i class="fa fa-cogs mr-1"></i> Production — Make &amp; Subcontract
+                            </span>
+                        </div>
+                    </div>
+                    <div class="mpp-prod-body"/>
+                </div>
             </div>
         </div>
     </t>

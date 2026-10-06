@@ -235,7 +235,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var n = this.fillN[key] !== undefined ?
                 this.fillN[key] : 50;
             var html = '<tr class="group-row group-' + key +
-                '" data-group="' + key + '"><td colspan="5">' +
+                '" data-group="' + key + '"><td colspan="4">' +
                 '<div class="group-title-badge">' +
                 '<i class="fa ' + this._groupIcon(key) + ' mr-1"></i>' +
                 '<span>' + title + '</span>' +
@@ -267,11 +267,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             for (var i = 0; i < rows.length; i++) {
                 var r = rows[i];
                 html += '<tr class="item-row" data-group="' + key + '">' +
-                    '<td>' + (r.product_code || '') + '</td>' +
-                    '<td>' + (r.display_name || '') + '</td>' +
-                    '<td class="text-center">' + (r.avail_tr || 0) + '</td>' +
-                    '<td class="text-center">' + (r.stock_usa || 0) + '</td>' +
-                    '<td><input type="number" min="0" class="form-control form-control-sm mpp-qty" ' +
+                    '<td class="td-product">' +
+                    '<span class="msp-bom-spacer mr-1">' +
+                    '<i class="fa fa-circle msp-no-bom-dot"></i></span>' +
+                    (r.product_code ?
+                        '<span class="prod-code">[' + r.product_code +
+                        ']</span> ' : '') +
+                    '<span class="prod-name">' +
+                    (r.display_name || '') + '</span></td>' +
+                    '<td class="td-stock">' + (r.avail_tr || 0) + '</td>' +
+                    '<td class="td-stock">' + (r.stock_usa || 0) + '</td>' +
+                    '<td class="td-req"><input type="number" min="0" class="form-control form-control-sm mpp-qty" ' +
                     'data-pid="' + r.product_id + '" value="' +
                     (r.qty_input || 0) + '"/></td>' +
                     '</tr>';
@@ -706,35 +712,57 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return '<span class="badge ' + cls + '">' + c + '</span>';
         },
 
+        // Header mirrors the Capacity Plan thead: dark sticky bar,
+        // left-aligned product column, sortable columns with icons,
+        // "On Hand (incl. reserved)" note. Only the column SET differs
+        // (cost columns instead of device targets).
         _theadHtml: function () {
             var self = this;
-            var cols = [
-                ['code', 'Part Name &amp; Code', 'th-product', 1],
-                [null, 'Usage Qty', 'th-bom-qty', 0],
-                ['onhand', 'On Hand', 'th-stock', 1],
-                ['reserved', 'Reserved', 'th-reserved', 1],
-                ['avail', 'Unreserved', 'th-stock', 1],
-                ['producible', 'Producible', 'th-max-dev', 1],
-                ['planned', 'Planned', 'th-req', 1],
-                [null, 'Net / Order', 'th-req', 0],
-                [null, 'Seller', '', 0],
-                [null, 'Source', '', 0],
-                [null, 'Last Price', '', 0],
-                [null, 'USD', '', 0],
-                [null, 'Last Buy', '', 0],
-                [null, 'Rolled USD', '', 0],
-                ['est', 'Est. USD', '', 1],
-            ];
-            var html = '<thead><tr>';
-            cols.forEach(function (c) {
-                var cls = c[2] + (c[3] ? ' msp-th-sortable' : '');
-                html += '<th class="' + cls + '"' +
-                    (c[3] ? ' data-sort-col="' + c[0] + '"' : '') + '>' +
-                    c[1] + (c[3] ?
-                        ' <i class="fa ml-1 ' + self._sortIcon(c[0]) +
-                        ' msp-sort-icon"></i>' : '') + '</th>';
-            });
-            return html + '</tr></thead>';
+            var th = function (key, label, cls, title) {
+                var sortable = !!key;
+                var html = '<th class="' + cls +
+                    (sortable ? ' msp-th-sortable' : '') + '"' +
+                    (sortable ? ' data-sort-col="' + key + '"' : '') +
+                    (title ? ' title="' + title + '"' : '') + '>' +
+                    label;
+                if (sortable) {
+                    html += ' <i class="fa ml-1 ' +
+                        self._sortIcon(key) + ' msp-sort-icon"></i>';
+                }
+                return html + '</th>';
+            };
+            var html = '<thead><tr>' +
+                th('code', 'Part Name &amp; Code', 'th-product',
+                    'Sort by name') +
+                th(null, 'Usage Qty', 'th-bom-qty',
+                    'Quantity per parent assembly') +
+                th('onhand',
+                    'On Hand <small style="font-size:0.65rem; ' +
+                    'font-weight:400; opacity:0.85;">(incl. reserved)</small>',
+                    'th-stock',
+                    'Total on-hand stock (includes reserved). Reserved ' +
+                    'and NCR quantities are excluded from netting.') +
+                th('reserved', 'Reserved', 'th-reserved',
+                    'Reserved stock (excluded from netting)') +
+                th('avail', 'Unreserved', 'th-stock',
+                    'Net usable stock (on-hand minus reserved)') +
+                th('producible', 'Producible', 'th-max-dev',
+                    'Producible units from net stock') +
+                th('planned', 'Planned', 'th-req',
+                    'Net shortage after stock netting') +
+                th(null, 'Net / Order', 'th-req',
+                    'Net shortage / order quantity') +
+                th(null, 'Seller', '', 'Last supplier') +
+                th(null, 'Source', '', 'Company of the last buy') +
+                th(null, 'Last Price', '', 'Last purchase price') +
+                th(null, 'USD', '', 'Last price converted to USD') +
+                th(null, 'Last Buy', '', 'Date of the last buy') +
+                th(null, 'Rolled USD', '',
+                    'Rolled-up unit cost in USD (children included)') +
+                th('est', 'Est. USD', '',
+                    'Estimated cost (rolled USD x quantity)') +
+                '</tr></thead>';
+            return html;
         },
 
         _walkRows: function (items, level, groupKey, parentUid, out) {
@@ -758,7 +786,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<div class="alert alert-info">Calculate the tree first (Tab 1).</div>');
                 return;
             }
-            var html = '<div class="table-responsive"><table class="msp-table">';
+            var html = '<table class="msp-table">';
             html += this._theadHtml() + '<tbody>';
             this.treeGroups.forEach(function (g) {
                 var collapsed = !!self.collapsedGroups[g.key];
@@ -790,7 +818,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     html += out.join('');
                 }
             });
-            this.$('.mpp-tree-body').html(html + '</tbody></table></div>');
+            this.$('.mpp-tree-body').html(html + '</tbody></table>');
         },
 
         _collectExportRows: function () {
@@ -891,28 +919,32 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 this.$('.mpp-prod-body').html('');
                 return;
             }
-            var cards = '<div class="msp-kpi-card"><div class="kpi-info">' +
+            var cards = '<div class="msp-kpi-card kpi-base"><div class="kpi-info">' +
                 '<div class="kpi-title">Suppliers</div>' +
                 '<div class="kpi-value" style="color:#2563eb;">' +
-                s.supplier_count + '</div></div>' +
+                s.supplier_count + '</div>' +
+                '<div class="kpi-sub">Vendors with net demand</div></div>' +
                 '<div class="kpi-icon" style="color:#2563eb;">' +
                 '<i class="fa fa-truck"></i></div></div>' +
-                '<div class="msp-kpi-card"><div class="kpi-info">' +
+                '<div class="msp-kpi-card kpi-outdoor"><div class="kpi-info">' +
                 '<div class="kpi-title">Est. Total USD</div>' +
                 '<div class="kpi-value" style="color:#059669;">' +
-                this._fmtNum(s.grand_total_usd, 2) + '</div></div>' +
+                this._fmtNum(s.grand_total_usd, 2) + '</div>' +
+                '<div class="kpi-sub">Rolled-up estimate</div></div>' +
                 '<div class="kpi-icon" style="color:#059669;">' +
                 '<i class="fa fa-dollar"></i></div></div>' +
-                '<div class="msp-kpi-card"><div class="kpi-info">' +
+                '<div class="msp-kpi-card kpi-seat"><div class="kpi-info">' +
                 '<div class="kpi-title">Draft RFQs</div>' +
                 '<div class="kpi-value" style="color:#7c3aed;">' +
-                s.rfq_count + '</div></div>' +
+                s.rfq_count + '</div>' +
+                '<div class="kpi-sub">Created drafts</div></div>' +
                 '<div class="kpi-icon" style="color:#7c3aed;">' +
                 '<i class="fa fa-file-text-o"></i></div></div>' +
-                '<div class="msp-kpi-card"><div class="kpi-info">' +
+                '<div class="msp-kpi-card kpi-screws"><div class="kpi-info">' +
                 '<div class="kpi-title">Draft MOs</div>' +
                 '<div class="kpi-value" style="color:#64748b;">' +
-                s.mo_count + '</div></div>' +
+                s.mo_count + '</div>' +
+                '<div class="kpi-sub">Created drafts</div></div>' +
                 '<div class="kpi-icon" style="color:#64748b;">' +
                 '<i class="fa fa-cogs"></i></div></div>';
             this.$('.mpp-sup-cards').html(cards);
@@ -943,28 +975,41 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 if (oa !== ob) return oa - ob;
                 return (a || '').localeCompare(b || '');
             });
-            var html = '';
+            var html = '<div class="table-responsive"><table class="msp-table">' +
+                '<thead><tr>' +
+                '<th class="th-product">Supplier</th>' +
+                '<th>Lines</th>' +
+                '<th>Routes</th>' +
+                '<th class="th-stock" title="Estimated total in USD">Est. Total USD</th>' +
+                '<th>RFQs</th>' +
+                '<th></th>' +
+                '</tr></thead><tbody>';
             names.forEach(function (c) {
                 var rows = secs[c];
                 var tot = 0;
                 rows.forEach(function (sp) {
                     tot += parseFloat(sp.total_usd) || 0;
                 });
-                html += '<h5 class="mt-2"><span class="badge ' +
-                    (c === 'USA' ? 'badge-warning' : 'badge-primary') +
-                    '" style="font-size:0.9rem;">' + (c || '—') +
-                    '</span> <span class="text-muted small">' +
-                    rows.length + ' suppliers · Est. ' +
-                    self._fmtNum(tot, 2) + ' USD</span></h5>' +
-                    '<table class="table table-sm table-striped">' +
-                    '<thead><tr><th>Supplier</th><th class="text-center">Lines</th>' +
-                    '<th>Routes</th><th class="text-right">Est. Total USD</th>' +
-                    '<th>RFQs</th><th></th></tr></thead><tbody>';
+                // Company section header reuses the capacity group-row look.
+                var grpCls = c === 'USA' ? 'group-outdoor' :
+                    (c === 'TR' ? 'group-base' : 'group-screws');
+                var badgeCls = c === 'USA' ? 'badge-warning' :
+                    (c === 'TR' ? 'badge-primary' : 'badge-secondary');
+                html += '<tr class="group-row ' + grpCls + '">' +
+                    '<td colspan="6"><div class="group-title-badge">' +
+                    '<i class="fa fa-truck mr-1"></i>' +
+                    '<span class="badge ' + badgeCls + '">' +
+                    (c || 'No company') + '</span>' +
+                    '<span class="group-count ml-2">(' + rows.length +
+                    ' Suppliers)</span>' +
+                    '<span class="ml-auto text-muted" style="font-size: 0.75rem;">' +
+                    'Est. ' + self._fmtNum(tot, 2) + ' USD</span>' +
+                    '</div></td></tr>';
                 rows.forEach(function (sp) {
                     html += self._supplierRowHtml(sp);
                 });
-                html += '</tbody></table>';
             });
+            html += '</tbody></table></div>';
             this.$('.mpp-sup-body').html(html);
         },
 
@@ -982,18 +1027,26 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
             var key = this._rfqKey(sp.seller_id, sp.company_id);
             var label = sp.rfq_label || 'Create RFQ';
-            return '<tr><td><strong>' + sp.seller_name + '</strong>' +
-                '<div class="text-muted small">' +
-                (sp.currencies || []).join(', ') + '</div></td>' +
-                '<td class="text-center">' + sp.line_count + '</td>' +
+            return '<tr class="item-row">' +
+                '<td class="td-product">' +
+                '<span class="msp-bom-spacer mr-1">' +
+                '<i class="fa fa-circle msp-no-bom-dot"></i></span>' +
+                '<span class="prod-name"><strong>' + sp.seller_name +
+                '</strong></span>' +
+                ((sp.currencies || []).length ?
+                    '<small class="text-muted d-block" style="font-weight:400;">' +
+                    (sp.currencies || []).join(', ') + '</small>' : '') +
+                '</td>' +
+                '<td class="td-stock">' + sp.line_count + '</td>' +
                 '<td>' + (sp.routes || []).join(', ') + '</td>' +
-                '<td class="text-right"><strong>' +
+                '<td class="td-stock"><strong>' +
                 self._fmtNum(sp.total_usd, 2) + '</strong></td>' +
                 '<td>' + (rfqs || '<span class="text-muted">—</span>') +
                 '</td><td class="text-right">' +
                 '<button type="button" class="btn btn-success btn-sm mpp-btn-create-rfq" ' +
                 'data-seller="' + sp.seller_id + '" data-company="' +
-                (sp.company_id || '') + '">' + label + '</button>' +
+                (sp.company_id || '') + '">' +
+                '<i class="fa fa-file-text-o mr-1"></i>' + label + '</button>' +
                 (self.pendingRfqSeller === key ?
                     '<div class="alert alert-warning mt-1 mb-0" style="font-size:0.8rem;">' +
                     'Draft RFQ(s) already exist for this supplier + company. ' +
@@ -1011,10 +1064,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<div class="alert alert-info">No make/subcontract lines with quantity.</div>');
                 return;
             }
-            var html = '<table class="table table-sm table-striped">' +
-                '<thead><tr><th>Code</th><th>Product</th><th>Route</th>' +
-                '<th class="text-center">Order</th><th>Seller</th>' +
-                '<th>Document</th><th></th></tr></thead><tbody>';
+            var html = '<div class="table-responsive"><table class="msp-table">' +
+                '<thead><tr>' +
+                '<th class="th-product">Code</th>' +
+                '<th class="th-product">Product</th>' +
+                '<th>Route</th>' +
+                '<th class="th-stock">Order</th>' +
+                '<th>Seller</th>' +
+                '<th>Document</th>' +
+                '<th></th>' +
+                '</tr></thead><tbody>';
             rows.forEach(function (r) {
                 var doc = '<span class="text-muted">—</span>';
                 var act = '';
@@ -1023,10 +1082,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         doc = '<strong>' + r.mo.name + '</strong> (' +
                             r.mo.state + ')';
                     } else if (!r.mo_creatable) {
-                        doc = '<span class="text-warning">No normal BOM</span>';
+                        doc = '<span class="badge-req-need">No normal BOM</span>';
                     } else {
                         act = '<button type="button" class="btn btn-primary btn-sm mpp-btn-create-mo" ' +
-                            'data-line="' + r.line_id + '">Create MO</button>';
+                            'data-line="' + r.line_id + '">' +
+                            '<i class="fa fa-cogs mr-1"></i>Create MO</button>';
                     }
                 } else {
                     if (r.po) {
@@ -1036,11 +1096,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         doc = '<span class="text-muted">via supplier RFQ</span>';
                     }
                 }
-                html += '<tr><td>' + (r.code || '') + '</td>' +
-                    '<td>' + (r.name || '') + '</td>' +
+                html += '<tr class="item-row">' +
+                    '<td class="td-product"><span class="prod-code">' +
+                    (r.code || '') + '</span></td>' +
+                    '<td class="td-product"><span class="prod-name">' +
+                    (r.name || '') + '</span></td>' +
                     '<td><span class="badge badge-info">' + (r.route || '') +
                     '</span></td>' +
-                    '<td class="text-center">' + r.order_qty + ' ' +
+                    '<td class="td-stock">' + r.order_qty + ' ' +
                     (r.uom || '') + '</td>' +
                     '<td>' + (r.seller || '') + '</td>' +
                     '<td>' + doc + '</td><td class="text-right">' + act +
@@ -1051,7 +1114,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 mos += '<div><strong>' + m.name + '</strong> (' + m.state +
                     ') — ' + (m.product || '') + '</div>';
             });
-            this.$('.mpp-prod-body').html(html + '</tbody></table>' +
+            this.$('.mpp-prod-body').html(html + '</tbody></table></div>' +
                 (mos ? '<h5>Manufacturing Orders</h5>' + mos : ''));
         },
 

@@ -217,3 +217,9 @@
 - Cozum: metoda `parent_req_20` + `parent_dynamic_needs` {hedef: net} eklendi; cocuk ihtiyac `parent_need*sub_qty_per_parent - max(0,avail)` (bagimli talep), `None` gelirse legacy brut formulu. JS parent netini `data-req-20`/`data-dyn-needs` (`widget._dynNeedsKey`, `t:v;t:v` format) ile RPC'ye tasir; cache key 4 parcali (urun|qty|req20|dyn), export recursion ayni key ile arar. `max_devices` degismedi (brut kapasite gostergesi).
 - Kural: parent OK (0) + cocukta asiri rezerve (avail<0) birlesiminde avail 0'a kirpilir, yoksa sahte NEED cikar. Deploy: Python+JS+XML degisikligi Git Deploy/restart gerektirir (mesai disi + backup); sonrasi tam sayfa reload sart (stale DOM'da attr yok).
 
+## Production Plan Capacity Template (2026-10-06)
+
+- Sorun: procurement JS `msp-*` siniflari uretiyordu ama stiller `stock_planning.scss`'te yalniz `.o_matia_stock_planning` altina scoped idi; procurement koku `.o_matia_procurement_plan` oldugu icin stiller dusuyordu (ham bootstrap gorunum).
+- Cozum: kok selector `.o_matia_stock_planning, .o_matia_procurement_plan` oldu; capacity XML deseni (ikonlu header, table-card+search+legend, KPI accent) procurement XML/JS'e tasindi (Tab 1 4 sutun, Tab 2 thead 15 sutun korundu, Tab 3 sirket grup satirli `msp-table`). Detay: `plans/production_plan_capacity_template.md`.
+- Kural: shared `msp-*` sinifi ureten her yeni ekran kokunu bu scope'a ekle; scoped SCSS'ta sinif yeniden kullanmadan once kok eslesmesini kontrol et. Static-only degisiklik Upgrade ile yeter, restart gerekmez.
+
