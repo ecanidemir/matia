@@ -934,10 +934,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
                     '<span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>' :
                     '<span class="badge-req-need td-planned-num">' + this._fmtNum(net, 0) +
-                    '</span>') +
-                (r.top_breakdown ?
-                    '<div class="text-muted small" style="max-width:220px;">' +
-                    r.top_breakdown + '</div>' : '') + '</td>' +
+                    '</span>') + '</td>' +
                 '<td>' + (r.seller || '') + '</td>' +
                 '<td class="text-center">' + this._srcBadge(r) + '</td>' +
                 '<td class="text-right">' + this._fmtLast(r) + '</td>' +
