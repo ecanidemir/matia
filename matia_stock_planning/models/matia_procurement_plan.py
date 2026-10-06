@@ -194,6 +194,173 @@ def _mpp_stock_split(env_sudo, pids):
     return {pid: tuple(v) for pid, v in res.items()}
 
 
+def _mpp_allocate_score(items, counts):
+    """Score one count vector against the ideal millimetres.
+
+    @param items: [(pid, size_mm, ideal_mm)] ID-sorted, size > 0.
+    @param counts: [units] parallel to items.
+    @return: (used_mm, penalty, over_cap): used_mm int, penalty the
+        relative squared deviation sum, over_cap the pids whose count
+        exceeds ceil(ideal / size) (slack use, never silent).
+    """
+    used = 0
+    penalty = 0.0
+    over = []
+    for (_pid, _size, _ideal), _n in zip(items, counts):
+        _mm = _n * _size
+        used += _mm
+        if _ideal > 0.0:
+            _d = (_mm - _ideal) / _ideal
+            penalty += _d * _d
+        elif _mm > 0:
+            penalty += float(_mm) * float(_mm)
+        if _n > int(math.ceil(_ideal / _size - 1e-9)):
+            over.append(_pid)
+    return used, penalty, over
+
+
+def _mpp_allocate_fallback(total, items, caps):
+    """Largest-remainder handout (pre-exact policy), same result shape.
+
+    Base floor(ideal / size) branches, then +1 units in
+    largest-fractional-quota order while the size fits and the cap
+    holds. Runs when the exact search space exceeds its ops budget.
+
+    @param total: pool mm (int, >= 0).
+    @param items: [(pid, size_mm, ideal_mm)] ID-sorted, size > 0.
+    @param caps: [max units] parallel to items.
+    @return: same dict shape as _mpp_allocate_exact.
+    """
+    quotas = [_ideal / _size for (_pid, _size, _ideal) in items]
+    counts = []
+    for (_q, _cap, (_pid, _size, _ideal)) in zip(quotas, caps, items):
+        _n = int(math.floor(_q)) if _q > 0 else 0
+        counts.append(min(max(0, _n), _cap, total // _size))
+    if total - sum(n * s for n, (_p, s, _i) in zip(counts, items)) > 0:
+        order = sorted(
+            range(len(items)),
+            key=lambda i: (-(quotas[i] - math.floor(quotas[i])),
+                           -items[i][2]))
+        for _i in order:
+            while counts[_i] < caps[_i] and \
+                    total - sum(n * s for n, (_p, s, _ii)
+                                in zip(counts, items)) >= items[_i][1]:
+                counts[_i] += 1
+    used, penalty, over = _mpp_allocate_score(items, counts)
+    return {'allocation': {pid: n for (pid, _s, _i), n in
+                           zip(items, counts)},
+            'used_mm': used, 'waste_mm': total - used,
+            'penalty': penalty, 'over_cap': over}
+
+
+def _mpp_allocate_exact(total_stock, parents, waste_band=0, slack=1,
+                        ops_budget=2000000):
+    """Split one shared pool by exact bounded enumeration (display only).
+
+    Replaces the largest-remainder handout: every feasible count vector
+    inside the per-parent caps is scored and the best one wins. Typical
+    pools have a handful of parents with tiny caps, so full enumeration
+    is cheap; huge inputs fall back to _mpp_allocate_fallback (same
+    result shape, old policy).
+
+    Objective: the least waste wins (a capacity screen must not strand
+    stock to look fairer); ties are broken by the smallest relative
+    squared deviation from the ideal millimetres, then by enumeration
+    order (ascending counts over ID-sorted parents), so output is
+    deterministic. @waste_band optionally widens the tie zone: vectors
+    whose waste fits inside the band are compared by deviation first
+    (larger bands trade leftover for proportionality); the default 0
+    means waste is always minimized first.
+
+    @param total_stock: shared pool in mm (float ok, rounded to int,
+        negatives guarded to 0).
+    @param parents: [{'id': pid, 'size': usage_mm,
+        'ideal_mm': fair mm}]. Size <= 0 parents are skipped (get no
+        branch entry, same as the floor pass).
+    @param waste_band: tie-zone width in mm (default 0: waste is
+        always minimized first; larger values trade leftover for
+        proportionality).
+    @param slack: extra units above ceil(ideal / size) a parent may take
+        to close waste (reported in over_cap, never silent).
+    @param ops_budget: max combos * parents for the exact search.
+    @return: {'allocation': {pid: int}, 'used_mm': int,
+        'waste_mm': int, 'penalty': float, 'over_cap': [pid]}.
+    """
+    try:
+        total = max(0, int(round(float(total_stock or 0.0))))
+    except (TypeError, ValueError):
+        total = 0
+    try:
+        band = max(0, int(waste_band))
+    except (TypeError, ValueError):
+        band = 200
+    try:
+        slack = max(0, int(slack or 0))
+    except (TypeError, ValueError):
+        slack = 0
+    items = []
+    for _p in parents or []:
+        try:
+            _pid = _p.get('id')
+            _size = int(round(float(_p.get('size') or 0.0)))
+            _ideal = float(_p.get('ideal_mm') or 0.0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if _pid is None or _size <= 0:
+            continue
+        items.append((_pid, _size, max(0.0, _ideal)))
+    try:
+        items.sort(key=lambda r: r[0])
+    except TypeError:
+        items.sort(key=lambda r: str(r[0]))
+    empty = {pid: 0 for (pid, _s, _i) in items}
+    if not items or total <= 0:
+        return {'allocation': empty, 'used_mm': 0, 'waste_mm': total,
+                'penalty': 0.0, 'over_cap': []}
+    caps = []
+    for (_pid, _size, _ideal) in items:
+        _cap = int(math.ceil(_ideal / _size - 1e-9)) + slack
+        caps.append(min(max(0, _cap), total // _size))
+    combos = 1
+    for _c in caps:
+        combos *= (_c + 1)
+        if combos * len(items) > ops_budget:
+            return _mpp_allocate_fallback(total, items, caps)
+    sizes = [_s for (_p, _s, _i) in items]
+    counts = [0] * len(items)
+    best_in = None   # (penalty, counts): waste fits the band
+    best_out = None  # (waste, penalty, counts): nothing fits the band
+
+    def _walk(_i, _used):
+        """Depth-first count enumeration with over-use pruning."""
+        nonlocal best_in, best_out
+        if _i >= len(items):
+            _used_l, _pen_l, _over_l = _mpp_allocate_score(items, counts)
+            _waste = total - _used_l
+            if _waste <= band:
+                if best_in is None or _pen_l < best_in[0]:
+                    best_in = (_pen_l, list(counts))
+            elif best_out is None or (_waste, _pen_l) < (
+                    best_out[0], best_out[1]):
+                best_out = (_waste, _pen_l, list(counts))
+            return
+        for _n in range(caps[_i] + 1):
+            _nu = _used + _n * sizes[_i]
+            if _nu > total:
+                break
+            counts[_i] = _n
+            _walk(_i + 1, _nu)
+        counts[_i] = 0
+
+    _walk(0, 0)
+    _final = best_in[1] if best_in is not None else best_out[2]
+    used, penalty, over = _mpp_allocate_score(items, _final)
+    return {'allocation': {pid: n for (pid, _s, _i), n in
+                           zip(items, _final)},
+            'used_mm': used, 'waste_mm': total - used,
+            'penalty': penalty, 'over_cap': over}
+
+
 def _mpp_load_pools(pool_json):
     """Parse a stored bottom-up producible snapshot.
 
@@ -632,17 +799,18 @@ class MatiaProcurementPlan(models.Model):
                 _mins.append(_b)
             pool_map[_x] = _own + min(_mins) if _mins else _own
 
-        # Largest-remainder redistribution of stranded pool leftovers
+        # Exact-enumeration redistribution of stranded pool leftovers
         # (display only, purchase math untouched): independent floor()
         # per branch can leave a divisible remainder unused (live
         # E1CBRN06: pool 5000mm, floor branches used 4100, 900 left,
         # while 500x2 + 810x2 + 590x2 + 400x3 = 5000 exactly). For
-        # each child, hand out +1 units from its leftover in
-        # largest-fractional-quota order while the usage fits and the
-        # branch stays within ceil(quota) (quota property: no branch
-        # exceeds its fair proportional share). Children are settled
-        # bottom-up (reverse topo, each child once), then each
-        # parent's pool is refreshed from the final branches.
+        # each child, _mpp_allocate_exact() scores every feasible count
+        # vector inside ceil(ideal) + slack caps and keeps the least
+        # waste one (ties by relative deviation, then enumeration
+        # order). Slack use is reported in over_cap,
+        # never silent. Children are settled bottom-up (reverse topo,
+        # each child once), then each parent's pool is refreshed from
+        # the final branches.
         _by_child = {}
         for _pp, _ch in edges.items():
             for _cc, _q in _ch.items():
@@ -663,33 +831,36 @@ class MatiaProcurementPlan(models.Model):
                 _inflow = demand.get(_cc, 0.0)
                 _plist = _by_child.get(_cc, [])
                 if _cpool > 0 and _inflow > 0 and _plist:
-                    _qs = []
+                    _pin = []
                     for (_pp, _u) in _plist:
-                        _qq = _cpool * contrib.get(
-                            (_pp, _cc), 0.0) / _inflow / _u
-                        _qs.append([_pp, _u, _qq,
-                                    _qq - math.floor(_qq),
-                                    contrib.get((_pp, _cc), 0.0)])
-                    _left = _cpool - sum(
-                        branch_map.get((_pp, _cc), 0) * _u
-                        for (_pp, _u) in _plist)
-                    if _left > 0:
-                        _qs.sort(key=lambda r: (-r[3], -r[4]))
-                        for _r in _qs:
-                            _pp, _u, _qq = _r[0], _r[1], _r[2]
-                            _cur = branch_map.get((_pp, _cc), 0)
-                            _cap = int(math.ceil(_qq - 1e-9))
-                            while _cur < _cap and _left >= _u:
-                                _cur += 1
-                                _left -= _u
-                            branch_map[(_pp, _cc)] = _cur
+                        _pin.append({
+                            'id': _pp,
+                            'size': _u,
+                            'ideal_mm': _cpool * contrib.get(
+                                (_pp, _cc), 0.0) / _inflow,
+                        })
+                    _res = _mpp_allocate_exact(max(0.0, _cpool), _pin)
+                    _parts = []
+                    for _pp, _cnt in _res['allocation'].items():
+                        try:
+                            _cnt = int(_cnt)
+                        except (TypeError, ValueError):
+                            _cnt = 0
+                        branch_map[(_pp, _cc)] = _cnt
+                        if _cnt > 0:
+                            _us = next(
+                                (_pp2.get('size') for _pp2 in _pin
+                                 if _pp2.get('id') == _pp), 0)
+                            try:
+                                _ui = int(round(float(_us or 0.0)))
+                            except (TypeError, ValueError):
+                                _ui = 0
+                            _parts.append((_pp, _cnt, _ui))
                     _alloc[_cc] = {
                         'pool': _cpool,
-                        'used': sum(branch_map.get((_pp, _cc), 0) * _u
-                                    for (_pp, _u) in _plist),
-                        'parts': [(_pp, branch_map.get((_pp, _cc), 0),
-                                   _u) for (_pp, _u) in _plist
-                                  if branch_map.get((_pp, _cc), 0) > 0],
+                        'used': float(_res.get('used_mm') or 0.0),
+                        'parts': _parts,
+                        'over_cap': list(_res.get('over_cap') or []),
                     }
             _own2 = 0.0 if btype.get(_x) == 'phantom' else \
                 avail_map.get(_x, 0.0)
@@ -795,6 +966,14 @@ class MatiaProcurementPlan(models.Model):
                 ' + '.join(_segs) if _segs else 'no allocation',
                 _fmtq(_used), _fmtq(max(
                     0.0, _ad.get('pool', 0.0) - _used)), _uom)
+            _over = _ad.get('over_cap') or []
+            if _over:
+                try:
+                    _over_sorted = sorted(_over)
+                except TypeError:
+                    _over_sorted = sorted(_over, key=str)
+                _note += '; %s over fair share to close waste' % (
+                    ','.join(_pcode(_pp) for _pp in _over_sorted))
             # Tooltip lands in an HTML title attribute: no double quotes.
             _alloc_note[str(_cc)] = _note.replace('"', "'")
 

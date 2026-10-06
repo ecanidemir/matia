@@ -291,3 +291,10 @@
 - Needed kalici: `set_targets_and_rebuild` target_json'a yazar; acilis `get_startup_tree()` son plani yukler (yoksa bos draft). Grup basligi N fill: `need=max(0,ceil(N-avail_toplam))`. Alt satirlarda Needed = bagimli brut ihtiyac (salt-okunur). `_MPP_KIT_BOMS` sira base/outdoor/seat/screws (Screws en altta).
 - Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Recalculate edilmeden yeni gorunumu gostermez.
 
+## Exact-Enumeration Havuz Dagitimi (2026-10-06, production Producible)
+
+- Largest-remainder'in yerini `_mpp_allocate_exact` aldi (`models/matia_procurement_plan.py`, `_mpp_load_pools` oncesi 3 helper: score/fallback/exact). Cap `ceil(ideal)+slack` icindeki TUM sayim vektorleri numaralandirilir; once en az kalan (waste) kazanir, beraberlikte gorece kare sapma (penalty), sonra ID-sirali ilk numaralama (deterministik). `waste_band=0` default: kalan her zaman once minimize edilir (band=200 canli E1CBRN06'da (1,3,2,2)+90 waste verip kullanici el hesabiyla celistigi icin 0'a cekildi).
+- Cap'ler fiziksel max ile kirpilir (`total//size`); kombinasyon x ebeveyn > 2M ise `_mpp_allocate_fallback` (eski largest-remainder, ayni sonuc sekli). Slack kullanimi `over_cap` listesinde raporlenir, tooltip'e `; X over fair share to close waste` eklenir (Ingilizce + ASCII). Cagri blogu `_alloc[_cc]={'pool','used','parts','over_cap'}` sozlesmesini + ebeveyn havuz tazeleme satirlarini korur.
+- Canli E1CBRN06: (2,2,2,3) = 5000, kalan 0, over_cap bos. Test: `scratch/test_remainder.py` shipped fonksiyonlari kaynak dilimleyip exec eder (drift yok, Odoo importsuz), 15/15 PASS (canli kablo, slack over-cap, tie determinizm + sira-kararlilik, negatif/bos/sifir-size guard, out-of-band min-waste, fallback parity, sonuc-sekli sozlesmesi).
+- Kural: dagitim politikasi degisince once `waste_band` default'unu canli ornekle caprazla; band genisletmek kalan birakir. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Recalculate edilmeden yeni dali gostermez. Once staging'de dogrula.
+
