@@ -1129,10 +1129,14 @@ class MatiaProcurementPlan(models.Model):
         POLine = env_sudo['purchase.order.line']
         Supplier = env_sudo['product.supplierinfo']
         # Price snapshot for every purchased line (buy + subcontract).
-        # Seller assignment for buy AND subcontract lines with an order
-        # qty: buy lines are ordered directly, subcontract lines are
-        # ordered from the subcontractor via a PO (confirming that PO
-        # triggers Odoo's standard subcontract receipt + MO chain).
+        # Seller assignment for every buy/subcontract line in need,
+        # including zero-order lines (stock already covers demand): the
+        # supplier is still shown in the tree, while RFQ grouping and
+        # the supplier breakdown only pick up lines with order_qty > 0,
+        # so no phantom RFQ is created. Buy lines are ordered directly,
+        # subcontract lines are ordered from the subcontractor via a PO
+        # (confirming that PO triggers Odoo's standard subcontract
+        # receipt + MO chain).
         cost_lines = plan.line_ids.filtered(
             lambda l: l.route_type in ('buy', 'subcontract')
             and (l.gross_qty or 0) > 0)
@@ -1186,9 +1190,12 @@ class MatiaProcurementPlan(models.Model):
             lb = last_buy.get(pid, {})
             vals = self._last_buy_vals(
                 env_sudo, plan, usd, lb, order_dates)
-            if line.route_type not in ('buy', 'subcontract') or not (
-                    line.order_qty or 0) > 0:
-                # Price snapshot only (no seller / no order).
+            if line.route_type not in ('buy', 'subcontract'):
+                # Price snapshot only (route is make/other, no seller).
+                # Zero-order buy/subcontract lines fall through to the
+                # seller logic below: the supplier is informational (no
+                # RFQ is created for them, see _rfq_groups), so the tree
+                # shows the supplier even when stock covers the need.
                 self._mpp_write_if_changed(line, vals)
                 continue
             seller_pid = False
@@ -1228,6 +1235,7 @@ class MatiaProcurementPlan(models.Model):
                     line.product_id.display_name)
                 cand = [s for s in sellers if s['name'][0] == lp[0]]
                 if cand and cand[0].get('min_qty') \
+                        and (line.order_qty or 0) > 0 \
                         and line.order_qty < cand[0]['min_qty']:
                     warn = _('Min. order %s') % cand[0]['min_qty']
             elif sellers:
@@ -1244,6 +1252,7 @@ class MatiaProcurementPlan(models.Model):
                         if price else 0.0
                     # Note: price is per seller UoM; qty is product UoM.
                 if seller.get('min_qty') \
+                        and (line.order_qty or 0) > 0 \
                         and line.order_qty < seller['min_qty']:
                     warn = _('Min. order %s') % seller['min_qty']
                 seller_cur = seller.get('currency_id')

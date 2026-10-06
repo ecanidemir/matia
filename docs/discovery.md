@@ -341,3 +341,10 @@
 - Client: `_supKey` (seller:company), `_onSupToggle` (caret + isim tiklamasi), `_supplierLinesHtml` (acik satir altinda mavi alt-satirlar: kod/ad, order+UoM, route rozeti, rolled x qty = total + last-price notu); durum `expandedSup` map'inde, plan degisince sifirlanir. TR-karakter 0 (yeni kod), py_compile + node --check OK.
 - Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); sonrasi Ctrl+F5.
 
+## Production Sifir-Siparis Seller Boslugu (2026-10-06, M1WHRN02)
+
+- Sikayet: M1WHRN02 (Back Wheel - Indoor, product 1331) son alimi Rolko North America'dan 27.95 USD (PO/24-00324, staging PO 334, 210 adet) olmasina ragmen agacta tedarikci bos, fiyat gorunuyordu.
+- Kok neden: `action_assign_suppliers` (`matia_procurement_plan.py`) `order_qty==0` olan buy/subcontract satirlarinda sadece fiyat snapshot yazip seller atamadan `continue` ediyordu. MPP-0004'te M1WHRN02 gross 11, stok karsiliyor -> net 0, order 0, seller False, last_price 27.95 USD. Agac + sub-BOM seller'i `line.seller_id`'den okudugu icin fiyat gorunup tedarikci bos kaliyordu. Urun route'u Buy, 2 supplierinfo (ROLKO KOHLGRUBER 9.5 EUR sirket-bagimsiz + ROLKO North America 27.95 USD US), kendi sirket partner filtreleri temizdi.
+- Fix: sifir-siparisli buy/subcontract satirlari da seller mantigindan gecer (`seller_id` + `unit_price` yazilir, bilgi amacli); min-qty uyarisi `order_qty>0` sarti aldi (siparis yoksa uyari yok); subtotal zaten `price x 0 = 0`. Guvenli: RFQ gruplama (`order_qty>0 and seller_id`) + supplier ozeti (`buy and order_qty>0`) filtreli oldugu icin hayalet RFQ uremez.
+- Kural: agacta gorunen seller her zaman `line.seller_id`'dir; bilgi-amacli seller yazmak RFQ uretmez cunku RFQ yolu order filtresinden gecer. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Calculate/supplier-preview tekrar calismadan seller'i gostermez.
+
