@@ -69,17 +69,19 @@ def _mpp_load_pools(pool_json):
     """Parse a stored bottom-up producible snapshot.
 
     @param pool_json: content of matia.procurement.plan.producible_json.
-    @return: (pool, branch, share, driver) where pool maps product id ->
+    @return: (pool, branch, share, driver, notes) where pool maps product id ->
         bottom-up units (float), branch maps (parent id, child id) ->
         allocated units (int), share maps (parent id, child id) ->
-        (pct of child pool, parent count), and driver maps parent id ->
-        its min-branch child id. Unparseable input yields empty dicts so
+        (pct of child pool, parent count), driver maps parent id ->
+        its min-branch child id, and notes maps child id -> the
+        prebuilt distribution tooltip string ('' when the plan
+        predates notes). Unparseable input yields empty dicts so
         callers fall back to the legacy own-stock formula.
     """
     try:
         data = json.loads(pool_json or '{}')
     except ValueError:
-        return {}, {}, {}, {}
+        return {}, {}, {}, {}, {}
     pool = {}
     try:
         for _k, _v in (data.get('pool') or {}).items():
@@ -107,7 +109,13 @@ def _mpp_load_pools(pool_json):
             driver[int(_k)] = int(_v)
         except (TypeError, ValueError):
             continue
-    return pool, branch, share, driver
+    notes = {}
+    for _k, _v in (data.get('alloc_note') or {}).items():
+        try:
+            notes[int(_k)] = str(_v)
+        except (TypeError, ValueError):
+            continue
+    return pool, branch, share, driver, notes
 
 
 def _mpp_find_kit_boms(env_sudo):
@@ -516,6 +524,71 @@ class MatiaProcurementPlan(models.Model):
                 _mins.append(_b)
             pool_map[_x] = _own + min(_mins) if _mins else _own
 
+        # Largest-remainder redistribution of stranded pool leftovers
+        # (display only, purchase math untouched): independent floor()
+        # per branch can leave a divisible remainder unused (live
+        # E1CBRN06: pool 5000mm, floor branches used 4100, 900 left,
+        # while 500x2 + 810x2 + 590x2 + 400x3 = 5000 exactly). For
+        # each child, hand out +1 units from its leftover in
+        # largest-fractional-quota order while the usage fits and the
+        # branch stays within ceil(quota) (quota property: no branch
+        # exceeds its fair proportional share). Children are settled
+        # bottom-up (reverse topo, each child once), then each
+        # parent's pool is refreshed from the final branches.
+        _by_child = {}
+        for _pp, _ch in edges.items():
+            for _cc, _q in _ch.items():
+                try:
+                    _u = float(_q or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if _u > 0:
+                    _by_child.setdefault(_cc, []).append((_pp, _u))
+        _alloc = {}  # child id -> distribution detail for the tooltip
+        _done_kids = set()
+        for _x in reversed(topo):
+            for _cc in (edges.get(_x, {}) or {}):
+                if _cc in _done_kids:
+                    continue
+                _done_kids.add(_cc)
+                _cpool = pool_map.get(_cc, 0.0)
+                _inflow = demand.get(_cc, 0.0)
+                _plist = _by_child.get(_cc, [])
+                if _cpool > 0 and _inflow > 0 and _plist:
+                    _qs = []
+                    for (_pp, _u) in _plist:
+                        _qq = _cpool * contrib.get(
+                            (_pp, _cc), 0.0) / _inflow / _u
+                        _qs.append([_pp, _u, _qq,
+                                    _qq - math.floor(_qq),
+                                    contrib.get((_pp, _cc), 0.0)])
+                    _left = _cpool - sum(
+                        branch_map.get((_pp, _cc), 0) * _u
+                        for (_pp, _u) in _plist)
+                    if _left > 0:
+                        _qs.sort(key=lambda r: (-r[3], -r[4]))
+                        for _r in _qs:
+                            _pp, _u, _qq = _r[0], _r[1], _r[2]
+                            _cur = branch_map.get((_pp, _cc), 0)
+                            _cap = int(math.ceil(_qq - 1e-9))
+                            while _cur < _cap and _left >= _u:
+                                _cur += 1
+                                _left -= _u
+                            branch_map[(_pp, _cc)] = _cur
+                    _alloc[_cc] = {
+                        'pool': _cpool,
+                        'used': sum(branch_map.get((_pp, _cc), 0) * _u
+                                    for (_pp, _u) in _plist),
+                        'parts': [(_pp, branch_map.get((_pp, _cc), 0),
+                                   _u) for (_pp, _u) in _plist
+                                  if branch_map.get((_pp, _cc), 0) > 0],
+                    }
+            _own2 = 0.0 if btype.get(_x) == 'phantom' else \
+                avail_map.get(_x, 0.0)
+            _kids2 = edges.get(_x, {}) or {}
+            _mins2 = [branch_map.get((_x, _c2), 0) for _c2 in _kids2]
+            pool_map[_x] = _own2 + min(_mins2) if _mins2 else _own2
+
         # Share info for the display note (which branches split a
         # child's pool): pct of the child's pool this parent received
         # + how many parents share it. Driver = min-branch child.
@@ -584,6 +657,39 @@ class MatiaProcurementPlan(models.Model):
                     list(all_route_ids)).read(['name']):
                 route_names[r['id']] = r['name']
 
+        # Distribution notes for the shared-pool tooltip (which
+        # parent got how much of a split child's pool, total used and
+        # leftover). English + ASCII only (UI language rule).
+        def _fmtq(_v):
+            try:
+                _f = float(_v)
+            except (TypeError, ValueError):
+                return '0'
+            return str(int(_f)) if _f == int(_f) else str(round(_f, 2))
+
+        def _pcode(_pid):
+            _c = (prod_info.get(_pid, {}) or {}).get('default_code')
+            return _c or ('id%s' % _pid)
+
+        _alloc_note = {}
+        for _cc, _ad in _alloc.items():
+            _cinfo = prod_info.get(_cc, {}) or {}
+            _ccode = _cinfo.get('default_code') or ('id%s' % _cc)
+            _ciu = _cinfo.get('uom_id')
+            _uom = _ciu[1] if isinstance(_ciu, (list, tuple)) else ''
+            _segs = ['%s %sx%s' % (_pcode(_pp), _fmtq(_uu), _qq)
+                     for (_pp, _qq, _uu) in sorted(
+                         _ad.get('parts', []),
+                         key=lambda r: _pcode(r[0]))]
+            _used = _ad.get('used', 0.0)
+            _note = '%s pool %s%s: %s = %s, leftover %s%s' % (
+                _ccode, _fmtq(_ad.get('pool', 0.0)), _uom,
+                ' + '.join(_segs) if _segs else 'no allocation',
+                _fmtq(_used), _fmtq(max(
+                    0.0, _ad.get('pool', 0.0) - _used)), _uom)
+            # Tooltip lands in an HTML title attribute: no double quotes.
+            _alloc_note[str(_cc)] = _note.replace('"', "'")
+
         # Clear old lines, rewrite (preview is repeatable)
         plan.line_ids.unlink()
         lines = []
@@ -634,6 +740,7 @@ class MatiaProcurementPlan(models.Model):
             'share': {'%s>%s' % (p, c): [pct, n]
                       for (p, c), (pct, n) in share_map.items()},
             'driver': {str(p): c for p, c in driver_map.items()},
+            'alloc_note': _alloc_note,
         })
         plan.state = 'calculated'
         plan.built_target_json = plan.target_json
@@ -1332,7 +1439,7 @@ class MatiaProcurementPlan(models.Model):
                     [('product_tmpl_id', 'in', list(missing_tmpls))]):
                 extra_bom_tmpls.add(b.product_tmpl_id.id)
         tree_groups = []
-        pool_map, _pool_branch, share_map, driver_map = \
+        pool_map, _pool_branch, share_map, driver_map, pool_notes = \
             _mpp_load_pools(plan.producible_json)
         for kit in kit_cfgs:
             key = kit['key']
@@ -1380,6 +1487,8 @@ class MatiaProcurementPlan(models.Model):
                     if _pool > 0 else 0,
                     'share_pct': _sh[0],
                     'share_n': _sh[1],
+                    'share_note': pool_notes.get(_drv, '')
+                    if _drv is not None else '',
                     'net': line.net_qty if line else 0.0,
                     'order_qty': line.order_qty if line else 0.0,
                     'seller': line.seller_id.display_name
@@ -1590,7 +1699,7 @@ class MatiaProcurementPlan(models.Model):
         snap = {}
         plan = env_sudo['matia.procurement.plan'].browse(
             int(plan_id)) if plan_id else False
-        _pool_map, branch_map, share_map, _pool_driver = \
+        _pool_map, branch_map, share_map, _pool_driver, pool_notes = \
             _mpp_load_pools(plan.producible_json if plan else '')
         if plan and plan.exists():
             for line in plan.line_ids.filtered(
@@ -1696,6 +1805,7 @@ class MatiaProcurementPlan(models.Model):
                 'producible': _branch,
                 'share_pct': _sh[0],
                 'share_n': _sh[1],
+                'share_note': pool_notes.get(pid, ''),
                 'seller': seller,
                 'last_company': lcompany,
                 'last_price': lp,

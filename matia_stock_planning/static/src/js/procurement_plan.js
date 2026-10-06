@@ -833,14 +833,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         // Shared-pool note: when a child's stock pool was split among
         // several parents, show the received share under the number.
+        // The full per-parent distribution (server-built) is the tooltip.
         _sharedNote: function (r) {
             var n = parseInt(r.share_n) || 0;
             if (n <= 1) return '';
             var pct = parseFloat(r.share_pct);
             var pctTxt = isNaN(pct) ? '' : pct + '% of pool';
-            var title = 'Shared stock: this branch received ' +
+            var title = r.share_note ||
+                ('Shared stock: this branch received ' +
                 (isNaN(pct) ? 'part' : pct + '%') +
-                ' of the available pool, split among ' + n + ' parents';
+                ' of the available pool, split among ' + n + ' parents');
             return '<div class="msp-shared-note" title="' + title + '">' +
                 '<i class="fa fa-share-alt mr-1"></i>' + pctTxt +
                 ' &middot; ' + n + ' parents</div>';

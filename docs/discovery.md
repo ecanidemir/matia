@@ -257,3 +257,11 @@
 - Production `_onExpandAll` ayni desene cevrilidi: tur-basi `expandOneLevel(pass)` (`.msp-btn-sub-bom:visible` tara, acilmamis + olu-degil + level<10 olanlari topla, cache'tekini RPC'siz ac, Promise.all ile atesle, sayiyi don), `runPass` aclan yoksa bitirir (sonraki turlar da bos olurdu), basarisiz dal `dead[]`'e alinir (sonraki turlarda tekrar denenmez), baslangicta arama filtresi temizlenir + gruplar acilir + bir kez render edilir (1. tur gercek DOM'u tarar).
 - Kural: agac-acma islerinde kaynagi DOM taramasi yap, uid kuyrugu elle tutma. Deploy: static-only -> Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
 
+## Largest-Remainder Havuz Dagitimi + Tooltip (2026-10-06, production Producible)
+
+- Kullanici bulgusu: E1CBRN06 4 BOM'da, havuz 5000mm; dagitim 500x1 + 810x2 + 590x2 + 400x2 = 4100, 900mm sahipsiz kaldi. Kullanici el hesabi: 500x2 + 810x2 + 590x2 + 400x3 = 5000 (sifir kalan).
+- Dogrulama (staging MPP-0003, salt-okunur `scratch/verify_cable_pool.py`): paylar 830/1365/1990/810 -> kotalar 1.66/2.31/2.45/2.02 -> floor dallari (1,2,2,2). Aritmetik hata YOK; sorun politika: her dal bagimsiz asagi yuvarlaniyor, kalan kimseye verilmiyordu.
+- Cozum: largest-remainder dagitimi (display-only, satinalma aynen). Her cocuk icin taban floor dallarindan sonra kalan, en yuksek kesirli kota + sigan kullanim sirasina +1 dagitilir; dal ceil(kota)'yi gecemez (kimse adil payindan fazlasini almaz). Cocuklar ters-topo sirada birer kez islenir, sonra ebeveyn havuzlari tazelenir. Sonuc E1CBRN06: (2,2,2,3) = 5000, kalan 0 (kullanici hesabi birebir; `scratch/test_remainder.py` 6/6 PASS).
+- Tooltip: `producible_json` artik `alloc_note` tutar ("E1CBRN06 pool 5000 mm: E2CBAN02 500x2 + ... = 5000, leftover 0 mm"); satirlara `share_note` olarak tasinir, JS `_sharedNote` title yapar (eski metin fallback). Ingilizce + ASCII zorunlu, cift tirnak sanitize.
+- Kural: paylasimli havuz dagitiminde bagimsiz floor birakma; largest-remainder + ceil cap kullan. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Calculate ile yeniden kurulmadan yeni dal/not gorunmez. Once staging'de dogrula.
+
