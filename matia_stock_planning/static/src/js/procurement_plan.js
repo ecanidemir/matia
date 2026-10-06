@@ -744,7 +744,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 'Birim': 'Units', 'birim': 'Units',
                 'Kg': 'kg', 'Metre': 'm', 'metre': 'm',
                 'Paket': 'Pack', 'paket': 'Pack',
-                'Set': 'Set', 'Takim': 'Set', 'takim': 'Set',
+                'Set': 'Set', 'Takım': 'Set', 'takım': 'Set',
+                'Takim': 'Set', 'takim': 'Set',
             };
             if (!name) return '';
             return map[name] || name;
@@ -911,11 +912,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td class="td-stock" title="TR unreserved: on-hand ' +
                 (r.stock_tr || 0) + ' − reserved ' +
                 (r.reserved_tr || 0) + ' (NCR excluded)"><strong>' +
-                this._fmtNum(availTr, 0) + '</strong></td>' +
+                this._fmtNum(availTr) + '</strong></td>' +
                 '<td class="td-stock" title="US unreserved: on-hand ' +
                 (r.stock_us || 0) + ' − reserved ' +
                 (r.reserved_us || 0) + ' (NCR excluded)"><strong>' +
-                this._fmtNum(availUs, 0) + '</strong></td>' +
+                this._fmtNum(availUs) + '</strong></td>' +
                 '<td class="td-max-dev">' + (prod <= 0 ?
                     '<span class="dev-badge dev-critical">0</span>' :
                     '<span class="dev-normal' +
@@ -980,8 +981,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var html = '<thead><tr>' +
                 th('code', 'Part Name &amp; Code', 'th-product',
                     'Sort by name') +
-                th(null, 'Usage Qty', 'th-bom-qty',
-                    'Quantity per parent assembly') +
+                th(null, 'Per-Parent Qty', 'th-bom-qty',
+                    'Quantity per parent assembly (unscaled BOM line qty; ' +
+                    'Capacity shows the scaled effective qty)') +
                 th('tr', 'TR', 'th-stock',
                     'TR unreserved stock (on-hand minus reserved; ' +
                     'NCR excluded from netting)') +
@@ -989,7 +991,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'US unreserved stock (on-hand minus reserved; ' +
                     'NCR excluded from netting)') +
                 th('producible', 'Producible', 'th-max-dev',
-                    'Producible units from TR+US net stock') +
+                    'Producible units: own TR+US net stock plus ' +
+                    'assemblable pool from children (differs from ' +
+                    'Capacity self-stock figure)') +
                 th('need', 'Needed', 'th-req',
                     'Wanted units (editable, saved on the plan)') +
                 th('planned', 'Planned', 'th-req',
@@ -1097,6 +1101,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _collectExportRows: function () {
             var self = this;
             var rows = [];
+            // Same rule as _renderTree: a search forces everything open.
+            var searching = !!(self.treeSearch && self.treeSearch.length);
             var walk = function (items, level, groupKey, parentUid) {
                 items.forEach(function (r) {
                     var uid = self._canonUid(parentUid, r.product_id);
@@ -1109,9 +1115,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         us: parseFloat(r.avail_us) || 0,
                         avail: self._availTotal(r),
                         producible: self._producible(r),
-                        need: (r.need !== undefined && r.need !== null &&
+                        // Screen shows "—" for sub-rows: never fall back
+                        // to an unrelated top need in the export.
+                        need: level === 0 ? (
+                            (r.need !== undefined && r.need !== null &&
                             r.need !== '') ? parseFloat(r.need) || 0 :
-                            self._needOf(r.product_id),
+                            self._needOf(r.product_id)) : '',
                         planned: net,
                         seller: r.seller || '',
                         source: r.last_company || '',
@@ -1129,6 +1138,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
             };
             this.treeGroups.forEach(function (g) {
+                // Same visibility rule as the screen: collapsed groups
+                // are excluded unless a search forces everything open.
+                if (!searching && self.collapsedGroups[g.key]) return;
                 rows.push({code: '[' + g.title + '] ' + (g.bom_name || ''),
                     level: 0, is_header: true});
                 var items = self._sortItems((g.items || []).slice());

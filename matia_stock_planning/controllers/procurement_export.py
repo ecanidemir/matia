@@ -135,7 +135,7 @@ class MatiaProcurementPlanController(http.Controller):
         order/net.
         """
         rows = data.get('tree_rows', [])
-        headers = ['Part', 'Usage', 'TR', 'US',
+        headers = ['Part Code', 'Part Name', 'Usage', 'TR', 'US',
                    'Producible', 'Needed', 'Planned', 'Seller',
                    'Source', 'Last Price', 'USD', 'Last Buy', 'Rolled USD',
                    'Est. USD', 'Per-top']
@@ -148,19 +148,18 @@ class MatiaProcurementPlanController(http.Controller):
                     lines.append('--- %s ---' % r.get('code', ''))
                     continue
                 pad = '  ' * int(r.get('level') or 0)
-                lines.append(
-                    '%s%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s'
-                    % (
-                        pad, r.get('code', ''), r.get('name', ''),
-                        '%s %s' % (r.get('bom_qty', ''),
-                                   r.get('uom', '')),
-                        r.get('tr', ''), r.get('us', ''),
-                        r.get('producible', ''), r.get('need', ''),
-                        r.get('planned', ''), r.get('seller', ''),
-                        r.get('source', ''),
-                        r.get('last', ''), r.get('usd', ''),
-                        r.get('date', ''), r.get('rolled_usd', ''),
-                        r.get('est_usd', ''), r.get('breakdown', '')))
+                lines.append(';'.join([
+                    pad + str(r.get('code', '')),
+                    str(r.get('name', '')),
+                    '%s %s' % (r.get('bom_qty', ''),
+                               r.get('uom', '')),
+                    str(r.get('tr', '')), str(r.get('us', '')),
+                    str(r.get('producible', '')), str(r.get('need', '')),
+                    str(r.get('planned', '')), str(r.get('seller', '')),
+                    str(r.get('source', '')), str(r.get('last', '')),
+                    str(r.get('usd', '')), str(r.get('date', '')),
+                    str(r.get('rolled_usd', '')), str(r.get('est_usd', '')),
+                    str(r.get('breakdown', ''))]))
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Tree_%s.csv' % datetime.now().strftime('%Y%m%d_%H%M')
             return request.make_response(

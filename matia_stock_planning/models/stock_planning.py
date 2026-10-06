@@ -29,6 +29,38 @@ _MSP_US_COMPANY_ID = 2
 # leaving genuine fractions untouched.
 _MSP_FLOAT_EPS = 1e-9
 
+
+def _msp_company_stock(env_sudo, product_ids, loc_ids):
+    """Single read_group for one company's stock locations.
+
+    @return: (stock, reserved) dicts keyed by product id.
+    """
+    stock, reserved = {}, {}
+    if product_ids and loc_ids:
+        for sq in env_sudo['stock.quant'].read_group(
+            [
+                ('product_id', 'in', list(product_ids)),
+                ('location_id', 'in', list(loc_ids))
+            ],
+            ['product_id', 'quantity', 'reserved_quantity'],
+            ['product_id']
+        ):
+            pid = sq['product_id'][0]
+            stock[pid] = float(sq.get('quantity') or 0.0)
+            reserved[pid] = float(sq.get('reserved_quantity') or 0.0)
+    return stock, reserved
+
+
+def _msp_clamped_avail(tr_stock, tr_res, us_stock, us_res):
+    """Combined unreserved avail with per-company clamp.
+
+    Same policy as the Production page (_mpp_stock_split consumers):
+    a negative avail in one company never eats the other company's
+    stock (known 3745 negative quants must not inflate needs).
+    """
+    return (max(0.0, float(tr_stock or 0.0) - float(tr_res or 0.0))
+            + max(0.0, float(us_stock or 0.0) - float(us_res or 0.0)))
+
 class MatiaStockPlanning(models.AbstractModel):
     _name = 'matia.stock.planning'
     _description = 'Matia TekRMD Device Capacity and Stock Planning'
@@ -79,14 +111,11 @@ class MatiaStockPlanning(models.AbstractModel):
                 elif cname.startswith('WHUS/Stock'):
                     usa_stock_locs.append(loc.id)
 
-        selected_loc_ids = []
         selected_ncr_ids = []
 
         if include_tr:
-            selected_loc_ids.extend(tr_stock_locs)
             selected_ncr_ids.extend(tr_ncr_locs)
         if include_usa:
-            selected_loc_ids.extend(usa_stock_locs)
             selected_ncr_ids.extend(usa_ncr_locs)
 
         # 2. Define BOM configurations
@@ -196,38 +225,35 @@ class MatiaStockPlanning(models.AbstractModel):
                 'items': lines_list,
             })
 
-        # 3. Read stock and NCR quantities across all companies
+        # 3. Read stock and NCR quantities per company, then clamp each
+        # company separately (same policy as the Production page).
+        sel_tr = tr_stock_locs if include_tr else []
+        sel_us = usa_stock_locs if include_usa else []
         product_stock = {pid: 0.0 for pid in all_product_ids}
         product_reserved = {pid: 0.0 for pid in all_product_ids}
+        tr_stock, tr_reserved = _msp_company_stock(
+            env_sudo, all_product_ids, sel_tr)
+        us_stock, us_reserved = _msp_company_stock(
+            env_sudo, all_product_ids, sel_us)
+        for _pid in all_product_ids:
+            product_stock[_pid] = (tr_stock.get(_pid, 0.0)
+                                   + us_stock.get(_pid, 0.0))
+            product_reserved[_pid] = (tr_reserved.get(_pid, 0.0)
+                                      + us_reserved.get(_pid, 0.0))
         product_ncr = {pid: 0.0 for pid in all_product_ids}
 
-        if all_product_ids:
-            if selected_loc_ids:
-                stock_quants = env_sudo['stock.quant'].read_group(
-                    [
-                        ('product_id', 'in', list(all_product_ids)),
-                        ('location_id', 'in', selected_loc_ids)
-                    ],
-                    ['product_id', 'quantity', 'reserved_quantity'],
-                    ['product_id']
-                )
-                for sq in stock_quants:
-                    pid = sq['product_id'][0]
-                    product_stock[pid] = float(sq.get('quantity') or 0.0)
-                    product_reserved[pid] = float(sq.get('reserved_quantity') or 0.0)
-
-            if selected_ncr_ids:
-                ncr_quants = env_sudo['stock.quant'].read_group(
-                    [
-                        ('product_id', 'in', list(all_product_ids)),
-                        ('location_id', 'in', selected_ncr_ids)
-                    ],
-                    ['product_id', 'quantity'],
-                    ['product_id']
-                )
-                for nq in ncr_quants:
-                    pid = nq['product_id'][0]
-                    product_ncr[pid] = float(nq.get('quantity') or 0.0)
+        if selected_ncr_ids:
+            ncr_quants = env_sudo['stock.quant'].read_group(
+                [
+                    ('product_id', 'in', list(all_product_ids)),
+                    ('location_id', 'in', selected_ncr_ids)
+                ],
+                ['product_id', 'quantity'],
+                ['product_id']
+            )
+            for nq in ncr_quants:
+                pid = nq['product_id'][0]
+                product_ncr[pid] = float(nq.get('quantity') or 0.0)
 
         # 4. Compute items and KPIs
         overall_min_devices = 999999
@@ -244,8 +270,12 @@ class MatiaStockPlanning(models.AbstractModel):
                 r_qty = product_reserved.get(pid, 0.0)
                 n_qty = product_ncr.get(pid, 0.0)
 
-                # Available stock with reserved quantity deducted
-                avail_qty = s_qty - r_qty
+                # Available stock, clamped per company (Production-page
+                # policy): a negative avail in one company never eats the
+                # other company's stock or inflates the need.
+                avail_qty = _msp_clamped_avail(
+                    tr_stock.get(pid, 0.0), tr_reserved.get(pid, 0.0),
+                    us_stock.get(pid, 0.0), us_reserved.get(pid, 0.0))
 
                 # Maximum devices producible (based on available stock)
                 if b_qty > 0:
@@ -380,14 +410,19 @@ class MatiaStockPlanning(models.AbstractModel):
                 except (TypeError, ValueError):
                     continue
 
-        # Find BOM for this product
+        # Find BOM for this product: variant-specific first, then the
+        # generic template BOM (same deterministic order as the
+        # Production page). A single OR-search leaves the winner
+        # undefined when both exist.
         bom = env_sudo['mrp.bom'].search([
-            '|',
             ('product_id', '=', product.id),
-            '&',
-            ('product_id', '=', False),
-            ('product_tmpl_id', '=', product.product_tmpl_id.id)
         ], limit=1)
+
+        if not bom:
+            bom = env_sudo['mrp.bom'].search([
+                ('product_id', '=', False),
+                ('product_tmpl_id', '=', product.product_tmpl_id.id)
+            ], limit=1)
 
         if not bom:
             # Fallback search by template
@@ -404,8 +439,9 @@ class MatiaStockPlanning(models.AbstractModel):
 
         # 1. Identify locations across all companies
         all_locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
-        selected_loc_ids = []
         selected_ncr_ids = []
+        sel_tr_ids = []
+        sel_us_ids = []
 
         for loc in all_locs:
             cname = loc.complete_name or ''
@@ -416,12 +452,12 @@ class MatiaStockPlanning(models.AbstractModel):
                 if is_ncr and include_tr:
                     selected_ncr_ids.append(loc.id)
                 elif cname.startswith('WHTR/Stock') and include_tr:
-                    selected_loc_ids.append(loc.id)
+                    sel_tr_ids.append(loc.id)
             elif 'WHUS' in cname or cid == _MSP_US_COMPANY_ID:
                 if is_ncr and include_usa:
                     selected_ncr_ids.append(loc.id)
                 elif cname.startswith('WHUS/Stock') and include_usa:
-                    selected_loc_ids.append(loc.id)
+                    sel_us_ids.append(loc.id)
 
         # 2. Extract lines (has_bom batched: one query, not one per line)
         lines_list = []
@@ -458,25 +494,21 @@ class MatiaStockPlanning(models.AbstractModel):
                 'has_bom': p.product_tmpl_id.id in tmpl_with_bom,
             })
 
-        # 3. Read stock across all companies
+        # 3. Read stock per company, then clamp each company separately
+        # (same policy as the top-level tree and the Production page).
         product_stock = {pid: 0.0 for pid in sub_product_ids}
         product_reserved = {pid: 0.0 for pid in sub_product_ids}
         product_ncr = {pid: 0.0 for pid in sub_product_ids}
 
-        if sub_product_ids:
-            if selected_loc_ids:
-                stock_quants = env_sudo['stock.quant'].read_group(
-                    [
-                        ('product_id', 'in', list(sub_product_ids)),
-                        ('location_id', 'in', selected_loc_ids)
-                    ],
-                    ['product_id', 'quantity', 'reserved_quantity'],
-                    ['product_id']
-                )
-                for sq in stock_quants:
-                    pid = sq['product_id'][0]
-                    product_stock[pid] = float(sq.get('quantity') or 0.0)
-                    product_reserved[pid] = float(sq.get('reserved_quantity') or 0.0)
+        sub_tr_stock, sub_tr_res = _msp_company_stock(
+            env_sudo, sub_product_ids, sel_tr_ids)
+        sub_us_stock, sub_us_res = _msp_company_stock(
+            env_sudo, sub_product_ids, sel_us_ids)
+        for _pid in sub_product_ids:
+            product_stock[_pid] = (sub_tr_stock.get(_pid, 0.0)
+                                   + sub_us_stock.get(_pid, 0.0))
+            product_reserved[_pid] = (sub_tr_res.get(_pid, 0.0)
+                                      + sub_us_res.get(_pid, 0.0))
 
             if selected_ncr_ids:
                 ncr_quants = env_sudo['stock.quant'].read_group(
@@ -503,7 +535,9 @@ class MatiaStockPlanning(models.AbstractModel):
             r_qty = product_reserved.get(pid, 0.0)
             n_qty = product_ncr.get(pid, 0.0)
 
-            avail_qty = s_qty - r_qty
+            avail_qty = _msp_clamped_avail(
+                sub_tr_stock.get(pid, 0.0), sub_tr_res.get(pid, 0.0),
+                sub_us_stock.get(pid, 0.0), sub_us_res.get(pid, 0.0))
 
             if b_qty > 0:
                 max_dev = math.floor(max(0.0, avail_qty) / b_qty)

@@ -174,7 +174,7 @@
                 <div class="msp-table-search">
                     <div class="search-input-box">
                         <i class="fa fa-search"></i>
-                        <input type="text" class="msp-input-search" placeholder="Search part code or name..."/>
+                        <input type="text" class="msp-input-search" placeholder="Search part code or name..." title="Search covers loaded rows only — expand sub-BOMs first to include their parts"/>
                     </div>
                     <div class="table-legend">
                         <span><span class="dot-ok"></span> OK = Stock Sufficient</span>

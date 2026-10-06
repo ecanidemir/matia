@@ -54,6 +54,8 @@ _MPP_UOM_NAME_MAP = {
     'Paket': 'Pack',
     'paket': 'Pack',
     'Set': 'Set',
+    'Takım': 'Set',
+    'takım': 'Set',
     'Takim': 'Set',
     'takim': 'Set',
 }
@@ -361,18 +363,72 @@ def _mpp_allocate_exact(total_stock, parents, waste_band=0, slack=1,
             'penalty': penalty, 'over_cap': over}
 
 
+def _mpp_par_notes(par_count, contrib, edges, codes):
+    """Build short 'used elsewhere' tooltips for shared children.
+
+    A row shows the note only when its OWN product is used by more
+    than one parent inside this plan's trees (never the bottleneck
+    child's sharing). The tooltip lists where (parent code) and how
+    many per parent (BOM usage qty); no pool/distribution amounts.
+
+    @param par_count: {child id: distinct net-contributing parents}.
+    @param contrib: {(parent id, child id): net units pushed}.
+    @param edges: {parent id: {child id: usage qty}}.
+    @param codes: {product id: short ASCII code for display}.
+    @return: {child id: 'Also used in: CODE xQTY, ...'} for children
+        with more than one parent. English + ASCII only.
+    """
+    notes = {}
+    for _cc, _n in (par_count or {}).items():
+        try:
+            _ok = int(_n) > 1
+        except (TypeError, ValueError):
+            continue
+        if not _ok:
+            continue
+        _rows = []
+        for (_pp, _c2), _ct in (contrib or {}).items():
+            if _c2 != _cc:
+                continue
+            try:
+                _pushed = float(_ct or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if _pushed <= 0:
+                continue
+            try:
+                _q = float((edges.get(_pp, {}) or {}).get(_cc, 0.0))
+            except (TypeError, ValueError):
+                _q = 0.0
+            _qi = int(_q)
+            _qs = str(_qi) if _q == _qi else str(round(_q, 2))
+            _code = codes.get(_pp) or ('id%s' % _pp)
+            _rows.append((_code, '%s x%s' % (_code, _qs)))
+        if not _rows:
+            continue
+        _rows.sort(key=lambda r: r[0])
+        _segs = [r[1] for r in _rows[:10]]
+        if len(_rows) > 10:
+            _segs.append('+%s more' % (len(_rows) - 10))
+        # Tooltip lands in an HTML title attribute: no double quotes.
+        notes[_cc] = ('Also used in: ' + ', '.join(
+            _segs)).replace('"', "'")
+    return notes
+
+
 def _mpp_load_pools(pool_json):
     """Parse a stored bottom-up producible snapshot.
 
     @param pool_json: content of matia.procurement.plan.producible_json.
-    @return: (pool, branch, share, driver, notes) where pool maps product id ->
-        bottom-up units (float), branch maps (parent id, child id) ->
-        allocated units (int), share maps (parent id, child id) ->
-        (pct of child pool, parent count), driver maps parent id ->
-        its min-branch child id, and notes maps child id -> the
-        prebuilt distribution tooltip string ('' when the plan
-        predates notes). Unparseable input yields empty dicts so
-        callers fall back to the legacy own-stock formula.
+    @return: (pool, branch, share, driver, notes, par_n) where pool maps
+        product id -> bottom-up units (float), branch maps
+        (parent id, child id) -> allocated units (int), share maps
+        (parent id, child id) -> (pct of child pool, parent count),
+        driver maps parent id -> its min-branch child id, notes maps
+        child id -> the short 'Also used in: CODE xQTY, ...' tooltip
+        ('' when the plan predates notes), and par_n maps child id ->
+        its distinct parent count. Unparseable input yields empty
+        dicts so callers fall back to the legacy own-stock formula.
     """
     try:
         data = json.loads(pool_json or '{}')
@@ -406,12 +462,18 @@ def _mpp_load_pools(pool_json):
         except (TypeError, ValueError):
             continue
     notes = {}
-    for _k, _v in (data.get('alloc_note') or {}).items():
+    for _k, _v in (data.get('par_note') or {}).items():
         try:
             notes[int(_k)] = str(_v)
         except (TypeError, ValueError):
             continue
-    return pool, branch, share, driver, notes
+    par_n = {}
+    for _k, _v in (data.get('par_n') or {}).items():
+        try:
+            par_n[int(_k)] = int(_v)
+        except (TypeError, ValueError):
+            continue
+    return pool, branch, share, driver, notes, par_n
 
 
 def _mpp_find_kit_boms(env_sudo):
@@ -469,8 +531,11 @@ class MatiaProcurementPlan(models.Model):
              'still matches (cached view: no unlink/recreate).')
     producible_json = fields.Text(
         help='JSON: {"pool": {product_id: bottom-up units}, '
-             '"branch": {"parent>child": allocated units}} - display-only '
-             'producible snapshot written by action_explode_and_net.')
+              '"branch": {"parent>child": allocated units}, '
+              '"par_n": {child_id: parent count}, '
+              '"par_note": {child_id: "Also used in: ..." tooltip}} - '
+              'display-only producible snapshot written by '
+              'action_explode_and_net.')
     currency_id = fields.Many2one(
         'res.currency', help='Total cost currency (default company).')
     total_cost = fields.Float(compute='_compute_total_cost', store=True)
@@ -927,6 +992,19 @@ class MatiaProcurementPlan(models.Model):
                 'route_ids', 'purchase_ok', 'detailed_type',
                 'product_tmpl_id']):
             prod_info[pr['id']] = pr
+        # Phantom parents hold no stock (not in need) so they miss
+        # prod_info; their codes are needed for the 'used elsewhere'
+        # tooltip (one extra read, parents only).
+        _missing_codes = [pid for pid in edges if pid not in prod_info]
+        if _missing_codes:
+            for pr in Product.browse(_missing_codes).read(
+                    ['default_code']):
+                prod_info[pr['id']] = pr
+        _codes = {}
+        for _pid in edges:
+            _codes[_pid] = (prod_info.get(_pid, {}) or {}).get(
+                'default_code') or ('id%s' % _pid)
+        _par_notes = _mpp_par_notes(_par_count, contrib, edges, _codes)
         route_names = {}
         all_route_ids = set()
         for pr in prod_info.values():
@@ -935,47 +1013,6 @@ class MatiaProcurementPlan(models.Model):
             for r in env_sudo['stock.location.route'].browse(
                     list(all_route_ids)).read(['name']):
                 route_names[r['id']] = r['name']
-
-        # Distribution notes for the shared-pool tooltip (which
-        # parent got how much of a split child's pool, total used and
-        # leftover). English + ASCII only (UI language rule).
-        def _fmtq(_v):
-            try:
-                _f = float(_v)
-            except (TypeError, ValueError):
-                return '0'
-            return str(int(_f)) if _f == int(_f) else str(round(_f, 2))
-
-        def _pcode(_pid):
-            _c = (prod_info.get(_pid, {}) or {}).get('default_code')
-            return _c or ('id%s' % _pid)
-
-        _alloc_note = {}
-        for _cc, _ad in _alloc.items():
-            _cinfo = prod_info.get(_cc, {}) or {}
-            _ccode = _cinfo.get('default_code') or ('id%s' % _cc)
-            _ciu = _cinfo.get('uom_id')
-            _uom = _ciu[1] if isinstance(_ciu, (list, tuple)) else ''
-            _segs = ['%s %sx%s' % (_pcode(_pp), _fmtq(_uu), _qq)
-                     for (_pp, _qq, _uu) in sorted(
-                         _ad.get('parts', []),
-                         key=lambda r: _pcode(r[0]))]
-            _used = _ad.get('used', 0.0)
-            _note = '%s pool %s%s: %s = %s, leftover %s%s' % (
-                _ccode, _fmtq(_ad.get('pool', 0.0)), _uom,
-                ' + '.join(_segs) if _segs else 'no allocation',
-                _fmtq(_used), _fmtq(max(
-                    0.0, _ad.get('pool', 0.0) - _used)), _uom)
-            _over = _ad.get('over_cap') or []
-            if _over:
-                try:
-                    _over_sorted = sorted(_over)
-                except TypeError:
-                    _over_sorted = sorted(_over, key=str)
-                _note += '; %s over fair share to close waste' % (
-                    ','.join(_pcode(_pp) for _pp in _over_sorted))
-            # Tooltip lands in an HTML title attribute: no double quotes.
-            _alloc_note[str(_cc)] = _note.replace('"', "'")
 
         # Clear old lines, rewrite (preview is repeatable)
         plan.line_ids.unlink()
@@ -1032,7 +1069,9 @@ class MatiaProcurementPlan(models.Model):
             'share': {'%s>%s' % (p, c): [pct, n]
                       for (p, c), (pct, n) in share_map.items()},
             'driver': {str(p): c for p, c in driver_map.items()},
-            'alloc_note': _alloc_note,
+            'par_n': {str(k): v for k, v in _par_count.items()
+                      if v > 1},
+            'par_note': {str(k): v for k, v in _par_notes.items()},
         })
         plan.state = 'calculated'
         plan.built_target_json = plan.target_json
@@ -1833,7 +1872,7 @@ class MatiaProcurementPlan(models.Model):
                     [('product_tmpl_id', 'in', list(missing_tmpls))]):
                 extra_bom_tmpls.add(b.product_tmpl_id.id)
         tree_groups = []
-        pool_map, _pool_branch, share_map, driver_map, pool_notes = \
+        pool_map, _pool_branch, _share_map, _driver_map, use_notes, par_n = \
             _mpp_load_pools(plan.producible_json)
         for kit in kit_cfgs:
             key = kit['key']
@@ -1854,22 +1893,26 @@ class MatiaProcurementPlan(models.Model):
                 need = float(targets.get(pid, 0) or 0)
                 # Bottom-up pool (own stock + assemblable from children);
                 # legacy own-stock value when the plan predates pools.
+                # The share note reflects this row's OWN product: it is
+                # shown only when the product itself is used by more
+                # than one parent inside this plan's trees (never the
+                # bottleneck child's sharing).
                 _pool = pool_map.get(pid, avail)
-                _drv = driver_map.get(pid)
-                _sh = share_map.get((pid, _drv), (100.0, 1)) \
-                    if _drv is not None else (100.0, 1)
+                _pn = par_n.get(pid, 1)
                 items.append({
                     'product_id': pid,
                     'code': bl.product_id.default_code or '',
                     'name': bl.product_id.name or '',
                     'display': pr.get('display_name')
                     or bl.product_id.display_name,
-                    'bom_qty': 1.0,
+                    'bom_qty': float(bl.product_qty or 1.0),
+                    # Line UoM first (same source as Capacity and the
+                    # sub-BOM rows); product card only as fallback.
                     'uom': _mpp_uom_en(
-                        pr.get('uom_id', [0, ''])[1]
-                        if pr.get('uom_id') else (
-                            bl.product_uom_id.name
-                            if bl.product_uom_id else '')),
+                        bl.product_uom_id.name
+                        if bl.product_uom_id else (
+                            pr.get('uom_id', [0, ''])[1]
+                            if pr.get('uom_id') else '')),
                     'has_bom': bool(has_bom),
                     'level': 0,
                     'stock_tr': line.stock_tr if line else 0.0,
@@ -1890,10 +1933,9 @@ class MatiaProcurementPlan(models.Model):
                     'planned': max(0.0, need - avail),
                     'producible': int(math.floor(_pool))
                     if _pool > 0 else 0,
-                    'share_pct': _sh[0],
-                    'share_n': _sh[1],
-                    'share_note': pool_notes.get(_drv, '')
-                    if _drv is not None else '',
+                    'share_pct': 100.0,
+                    'share_n': _pn,
+                    'share_note': use_notes.get(pid, ''),
                     'net': line.net_qty if line else 0.0,
                     'order_qty': line.order_qty if line else 0.0,
                     'seller': line.seller_id.display_name
@@ -2108,7 +2150,7 @@ class MatiaProcurementPlan(models.Model):
         snap = {}
         plan = env_sudo['matia.procurement.plan'].browse(
             int(plan_id)) if plan_id else False
-        _pool_map, branch_map, share_map, _pool_driver, pool_notes = \
+        _pool_map, branch_map, share_map, _pool_driver, use_notes, _par_n = \
             _mpp_load_pools(plan.producible_json if plan else '')
         if plan and plan.exists():
             for line in plan.line_ids.filtered(
@@ -2239,7 +2281,7 @@ class MatiaProcurementPlan(models.Model):
                 'producible': _branch,
                 'share_pct': _sh[0],
                 'share_n': _sh[1],
-                'share_note': pool_notes.get(pid, ''),
+                'share_note': use_notes.get(pid, ''),
                 'seller': seller,
                 'last_company': lcompany,
                 'last_price': lp,

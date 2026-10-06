@@ -672,6 +672,11 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             // Re-entry guard: a second click while expanding would stack
             // duplicate RPC chains for the same rows.
             if (self._expanding) return;
+            // Same rule as the Production page: a filtered view would
+            // expand only visible rows, so clear the search first and
+            // always expand the full tree.
+            self.$('.msp-input-search').val('');
+            self._applySearchFilter('');
             self._expanding = true;
             self._expandFails = 0;
             var $expandBtn = self.$('.msp-btn-expand-all');
@@ -922,11 +927,23 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             return cells;
         },
 
+        // Export-side name match over code + name (same fields the
+        // screen search filters on via data-product-name).
+        _exportNameMatch: function (item, query) {
+            var hay = ((item.display_name || '') + ' ' +
+                (item.product_name || '') + ' ' +
+                (item.product_code || '')).toLowerCase();
+            return hay.indexOf(query) !== -1;
+        },
+
         // Recursively append open sub-BOM rows (any depth) to the export.
         // No name/code prefix: rows carry is_sub/level flags only.
         // parentReq20/parentDynKey identify the cache entry created with the
         // parent's own net needs (dependent demand).
-        _appendSubRowsToExport: function (grpItems, nodeId, prodId, bomQty, level, parentReq20, parentDynKey) {
+        // query mirrors the screen search: non-matching rows are skipped
+        // but recursion continues (a matching child shows even when its
+        // parent is filtered out, exactly like _applySearchFilter).
+        _appendSubRowsToExport: function (grpItems, nodeId, prodId, bomQty, level, parentReq20, parentDynKey, query) {
             if (!this.expanded_boms[nodeId]) {
                 return;
             }
@@ -936,11 +953,13 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             }
             for (var s = 0; s < subData.items.length; s++) {
                 var subItem = subData.items[s];
-                grpItems.push({
-                    cells: this._buildExportCells(subItem),
-                    is_sub: true,
-                    level: level,
-                });
+                if (!query || this._exportNameMatch(subItem, query)) {
+                    grpItems.push({
+                        cells: this._buildExportCells(subItem),
+                        is_sub: true,
+                        level: level,
+                    });
+                }
                 var childReq20 = (subItem.req_20_status === 'OK') ? 0 : (subItem.req_20_val || 0);
                 this._appendSubRowsToExport(
                     grpItems,
@@ -949,7 +968,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     subItem.bom_qty,
                     level + 1,
                     childReq20,
-                    this._dynNeedsKey(subItem)
+                    this._dynNeedsKey(subItem),
+                    query
                 );
             }
         },
@@ -978,6 +998,11 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             var exportGroups = [];
             var self = this;
 
+            // Export mirrors the screen: the search box filters loaded
+            // rows only (closed sub-BOM content is not searchable —
+            // see the search input hint).
+            var query = (this.$('.msp-input-search').val() || '').toLowerCase().trim();
+
             for (var g = 0; g < this.groups.length; g++) {
                 var grp = this.groups[g];
 
@@ -990,12 +1015,14 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
                 for (var itmIdx = 0; itmIdx < grp.items.length; itmIdx++) {
                     var item = grp.items[itmIdx];
-                    grpItems.push({ cells: self._buildExportCells(item), is_sub: false, level: 0 });
+                    if (!query || self._exportNameMatch(item, query)) {
+                        grpItems.push({ cells: self._buildExportCells(item), is_sub: false, level: 0 });
+                    }
 
                     // Sub-BOM rows (recursive, all open levels)
                     var topNode = 'g-' + grp.key + '-' + item.product_id;
                     var topReq20 = (item.req_20_status === 'OK') ? 0 : (item.req_20_val || 0);
-                    self._appendSubRowsToExport(grpItems, topNode, item.product_id, item.bom_qty, 1, topReq20, self._dynNeedsKey(item));
+                    self._appendSubRowsToExport(grpItems, topNode, item.product_id, item.bom_qty, 1, topReq20, self._dynNeedsKey(item), query);
                 }
                 exportGroups.push({
                     key: grp.key,

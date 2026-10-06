@@ -304,3 +304,25 @@
 - Producible paylasim notu kisa: `35.9% of pool · 4 parents` yerine sadece `4 parents` (dagitim detayi tooltip'te). Planned hucresindeki `top_breakdown` alti-notu onceki turda kaldirilmisti.
 - Tab 1 kompakt (sadece procurement SCSS, Capacity'ye dokunulmaz): th/td yatay padding `0.85->0.5rem`, Needed input `110->84px`, Seller `max-width:150px` + ellipsis (+title tooltip), Usage `282.00->282` (fmt decimalsiz), UoM notu `/m` inline (satir tek satir). Deploy: static-only -> Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
 
+## Production "N parents" Notu Okuma (2026-10-06, staging MPP-0004 ornegi)
+
+- Level-0 satirdaki `N parents` o urunun KENDI kullanim yeri sayisi DEGIL; onu sinirlayan darbogaz cocugun (driver) plan-ici net talepli ust sayisidir (`share_map[(pid, driver)]`, kod `matia_procurement_plan.py:1859`).
+- Ornek: E2MBAN03 satirindaki `4 parents` = driver N1TRRN02 Plastic Cable Tie - Short'un (havuz 0!) 4 ustu: E2ONAN02 (%38.5), E2MBAN03 (%35.9), E2UCAN02 (%12.8), E2SWAN02 (%12.8). N2TLAN01 edge'i var ama net katkisi %0 oldugu icin sayilmaz.
+- Kuresel kullanim ayridir: E2MBAN03 `mrp.bom.line`'da 3 BOM'da gecer (TEKRMD04/BOM 1718, Common Parts/BOM 1735 phantom, Common Parts v2/BOM 1766); plan notu ile kiyaslanamaz.
+
+## Production "N parents" Kurali v2 (2026-10-06, kullanici karari)
+
+- Not artik satirin KENDI urununun plan-ici paylasimini gosterir (dar-bogaz cocugun paylasimi ust satira yansimaz). E2MBAN03 gibi kimseye paylasilmayan urunde not + tooltip YOK.
+- Tooltip kisa: `Also used in: KOD xADET, ...` (ust kodu + BOM kullanim miktari, dagitim/havuz rakami yok, max 10 + `+N more`). Ureten: `_mpp_par_notes` (`matia_procurement_plan.py`), JSON'da `par_n` + `par_note` (`alloc_note` kaldirildi).
+- Test: `scratch/test_par_notes.py` 6/6 PASS (E2MBAN03 sessizligi, kablo-ornegi, kod fallback, tirnak sanitize, cap, ASCII).
+- Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Recalculate edilmeden yeni not gorunmez. JS degismedi.
+
+## Capacity vs Production Birlestirme (2026-10-06)
+
+- Clamp politikasi tek: `_msp_clamped_avail` (stock_planning.py) sirket-bazinda `max(0,·)` kirpar, MPP `_mpp_stock_split` tuketicileriyle ayni. Negatif quant'li sirket digerini yemez, need sismez. Capacity artik TR/US ayri read_group yapar (2+2 sorgu).
+- Sub-BOM aramada variant-oncelikli deterministik sira (variant -> generic template -> template fallback); tek OR-sorgu birakildi.
+- Level-0 UoM kaynagi BOM satiri (`bl.product_uom_id`), urun karti degil. UoM map'lerde `Takim` ASCII + `Takım` TR anahtarlari ikisi de var (py + JS fallback).
+- Prod tree export: 16 baslik (Part Code/Name ayri) = 16 sutun; CSV dali `';'.join` listesiyle yazildi (eski `%`-formati 18 placeholder/17 degerle patliyordu).
+- Kural kararlari: Usage Prod'da ham satir miktari, baslik `Per-Parent Qty` (Capacity olceklenmis efektif gosterir); expand-all iki sayfada da filtreyi temizleyip tam acar; export ekrani yansitir (gizli grup haric + arama filtresi; Cap'te `_exportNameMatch`, Prod'da `_subtreeMatch` + collapsed skip); Cap arama sadece yuklu satirlarda (placeholder title'da yazar); Prod TR/US kesirli stok gosterir (dec yok).
+- Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); static-only degisiklik Upgrade yeterli, sonrasi Ctrl+F5.
+
