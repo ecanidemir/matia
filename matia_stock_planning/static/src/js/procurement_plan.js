@@ -201,12 +201,27 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var val = Math.max(0,
                 parseInt(ev.currentTarget.value, 10) || 0);
             this.needMap[pid] = val;
-            var $row = this.$(ev.currentTarget).closest('tr');
+            var $input = this.$(ev.currentTarget);
             var avail = parseFloat(
                 ev.currentTarget.dataset.avail || '0') || 0;
+            var pool = parseFloat(
+                ev.currentTarget.dataset.prod || '0') || 0;
             var planned = Math.max(0, val - avail);
-            $row.find('.td-planned-num').text(
-                planned <= 0 ? 'OK' : planned);
+            var open = Math.max(0, val - pool);
+            // Rebuild the Planned cell live so OK<->number transitions
+            // work without waiting for the persist rebuild: the OK state
+            // has no .td-planned-num span to update in place. Attributes
+            // (e.g. the per-top breakdown title) live on the <td> itself,
+            // only innerHTML is replaced.
+            var $planTd = $input.closest('td').next('td');
+            if (planned <= 0) {
+                $planTd.html('<span class="badge-req-ok">' +
+                    '<i class="fa fa-check mr-1"></i> OK</span>');
+            } else {
+                $planTd.html('<span class="badge-req-need ' +
+                    'td-planned-num">' + this._fmtNum(planned, 0) +
+                    '</span>' + this._openBadge(planned, open));
+            }
         },
 
         // Persists ALL Needed numbers, then rebuilds the tree from the
@@ -765,6 +780,64 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return parseFloat(r.gross) || 0;
         },
 
+        // Net-purchase ("open") qty: gross want minus the pooled stock
+        // (level 0: Needed minus producible = own net stock +
+        // assemblable-from-children; sub-rows: gross minus branch pool).
+        // The Planned cell keeps the gross-build figure (it feeds both
+        // the assembly MO and the purchase netting); the badge next to
+        // it shows the smaller net-purchase figure. No operation/MO
+        // cost is included anywhere in the tree costs.
+        _openQty: function (r, level) {
+            var gross = level === 0 ?
+                ((r.need !== undefined && r.need !== null &&
+                    r.need !== '') ? parseFloat(r.need) || 0 :
+                    this._needOf(r.product_id)) :
+                (parseFloat(r.gross) || 0);
+            var pool = this._producible(r);
+            return {gross: gross, pool: pool,
+                open: Math.max(0, gross - pool)};
+        },
+
+        // "build 54 / buy 51" badge under the Planned number. Shown only
+        // when the net-purchase figure is strictly smaller than Planned
+        // (i.e. pooled stock covers part of the want); empty otherwise.
+        // Title text stays generic (no numbers) so live typing updates
+        // via _onNeedInput never leave a stale breakdown behind.
+        _openBadge: function (net, open) {
+            if (!(net > 0) || !(open < net)) return '';
+            return '<div class="msp-open-note" title="Planned feeds ' +
+                'both the assembly MO and the purchase netting, so it ' +
+                'stays at the gross-build figure. Only the smaller ' +
+                'buy figure is net-new purchase after pooled stock; ' +
+                'no operation/MO cost is included.">' +
+                '<small class="text-muted">build <strong>' +
+                this._fmtNum(net, 0) + '</strong> / buy <strong>' +
+                this._fmtNum(open, 0) + '</strong></small></div>';
+        },
+
+        // Level-0 Est. breakdown tooltip: full-want value vs
+        // stock-covered value vs the net shown figure. Displayed only
+        // when pooled stock covers part of the want; plain cell
+        // otherwise. The three figures are informational (no claim that
+        // shown = full - covered: the MO qty also nets own stock only).
+        _estTitle: function (r, level, openQ) {
+            if (level !== 0 || !openQ || !(openQ.pool > 0)) return '';
+            var unit = parseFloat(r.rolled_usd) || 0;
+            if (!(unit > 0)) return '';
+            var own = this._availTotal(r);
+            var asm = Math.max(0, openQ.pool - own);
+            var t = 'Full want: ' + this._fmtNum(openQ.gross, 0) +
+                ' x ' + this._fmtNum(unit, 2) + ' = ' +
+                this._fmtNum(openQ.gross * unit, 2) +
+                '; covered by ' + this._fmtNum(openQ.pool, 0) +
+                ' pooled stock (' + this._fmtNum(own, 0) +
+                ' on-hand + ' + this._fmtNum(asm, 0) +
+                ' assemblable) = ' +
+                this._fmtNum(openQ.pool * unit, 2) +
+                '. Shown: net qty x unit (no operation/MO cost).';
+            return ' title="' + t + '"';
+        },
+
         _estUsd: function (r) {
             var qty = (r.order_qty !== undefined && r.order_qty !== null &&
                 r.order_qty !== '') ? parseFloat(r.order_qty) || 0 :
@@ -819,6 +892,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 r.need !== '') ? parseFloat(r.need) || 0 :
                 this._needOf(r.product_id);
             var prod = this._producible(r);
+            var openQ = this._openQty(r, level);
             var shared = (parseInt(r.share_n) || 0) > 1;
             var breakdown = r.top_breakdown ?
                 ' title="Per-top: ' + r.top_breakdown + '"' : '';
@@ -878,13 +952,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'class="form-control form-control-sm mpp-need" ' +
                     'data-pid="' + r.product_id + '" ' +
                     'data-avail="' + avail + '" ' +
+                    'data-prod="' + prod + '" ' +
                     'title="Wanted units, gross (stock and shared use net into Planned)" value="' +
                     need + '"/>' :
                     '<span class="text-muted">—</span>') + '</td>' +
                 '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
                     '<span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>' :
                     '<span class="badge-req-need td-planned-num">' + this._fmtNum(net, 0) +
-                    '</span>') + '</td>' +
+                    '</span>' + this._openBadge(net, openQ.open)) + '</td>' +
                 '<td class="td-seller" title="' + (r.seller || '') + '">' +
                 (r.seller || '') + '</td>' +
                 '<td class="text-center">' + this._srcBadge(r) + '</td>' +
@@ -894,7 +969,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td class="text-center">' + (r.last_date || '') + '</td>' +
                 '<td class="text-right">' + this._fmtNum(r.rolled_usd, 2) +
                 '</td>' +
-                '<td class="text-right"><strong>' +
+                '<td class="text-right"' +
+                this._estTitle(r, level, openQ) + '><strong>' +
                 this._fmtNum(this._estUsd(r), 2) + '</strong></td>' +
                 '</tr>';
             return html;
@@ -945,20 +1021,33 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'assemblable pool from children (differs from ' +
                     'Capacity self-stock figure)') +
                 th('need', 'Needed', 'th-req',
-                    'Wanted units, gross (editable, saved on the plan; ' +
-                    'TR+US stock and shared use are netted into Planned)') +
+                    'Your wanted qty, typed here (gross want; ' +
+                    'editable, saved on the plan). TR+US stock and ' +
+                    'shared use are netted into Planned.') +
                 th('planned', 'Planned', 'th-req',
-                    'Pooled net shortage after TR+US stock netting ' +
-                    '(includes this part being used inside other parents)') +
+                    'Planned = net units to actually build/procure: ' +
+                    'gross minus pooled TR+US net stock (on-hand ' +
+                    'minus reserved, NCR excluded) minus the ' +
+                    'assemblable pool. The same Planned value feeds ' +
+                    'both the assembly MO and the purchase netting, ' +
+                    'so keep it at the gross-build figure. Example: ' +
+                    '60 Needed, pool 9 (6 stock + 3 assemblable) = ' +
+                    '51 net purchase, Planned stays 54 for the MO ' +
+                    '(badge shows "build 54 / buy 51"). Rolled USD ' +
+                    'carries no operation/MO cost.') +
                 th(null, 'Seller', '', 'Last supplier') +
                 th(null, 'Source', '', 'Company of the last buy') +
                 th(null, 'Last Price', '', 'Last purchase price') +
                 th(null, 'USD', '', 'Last price converted to USD') +
                 th(null, 'Last Buy', '', 'Date of the last buy') +
                 th(null, 'Rolled USD', '',
-                    'Rolled-up unit cost in USD (children included)') +
+                    'Rolled-up UNIT cost in USD (children included, ' +
+                    'per unit; NO operation/MO cost). Tree Est. = ' +
+                    'unit x gross-build qty.') +
                 th('est', 'Est. USD', '',
-                    'Estimated cost (rolled USD x quantity)') +
+                    'Estimated cost: rolled unit USD x order qty ' +
+                    '(tops) / net qty (subs). Operation/MO cost ' +
+                    'not included.') +
                 '</tr></thead>';
             return html;
         },
@@ -1076,6 +1165,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             r.need !== '') ? parseFloat(r.need) || 0 :
                             self._needOf(r.product_id)) : '',
                         planned: net,
+                        // Net-purchase figure for the badge; server
+                        // _export_tree has fixed columns, so a real
+                        // Excel column needs a server change (Faz-2).
+                        open_qty: self._openQty(r, level).open,
                         seller: r.seller || '',
                         source: r.last_company || '',
                         last: self._fmtLast(r),
