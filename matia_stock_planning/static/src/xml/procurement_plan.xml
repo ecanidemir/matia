@@ -63,7 +63,7 @@
                             <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs">
                                 <i class="fa fa-plus-square-o mr-1"></i> Expand All BOMs
                             </button>
-                            <button class="btn btn-outline-secondary btn-sm msp-btn-collapse-all" title="Collapse all sub-assembly BOMs">
+                            <button class="btn btn-secondary btn-sm msp-btn-collapse-all" title="Collapse all sub-assembly BOMs">
                                 <i class="fa fa-minus-square-o mr-1"></i> Collapse All BOMs
                             </button>
                         </div>
