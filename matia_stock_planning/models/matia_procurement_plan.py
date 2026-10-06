@@ -1015,10 +1015,18 @@ class MatiaProcurementPlan(models.Model):
         price = float(lb.get('price_unit') or 0.0)
         cur = lb.get('currency_id')
         cur_id = cur[0] if cur else False
-        buy_dt = None
-        if lb.get('order_id') and lb['order_id'][0] in order_dates:
-            buy_dt = order_dates[lb['order_id'][0]]
-        elif lb.get('date_planned'):
+        # lb comes from _mpp_last_buys (order_id is int, date is buy_dt);
+        # accept raw search_read shape too (order_id [id, name]).
+        buy_dt = lb.get('buy_dt') or None
+        if not buy_dt:
+            _oid_raw = lb.get('order_id')
+            if isinstance(_oid_raw, (list, tuple)):
+                _oid = _oid_raw[0] if _oid_raw else False
+            else:
+                _oid = _oid_raw or False
+            if _oid and _oid in (order_dates or {}):
+                buy_dt = order_dates[_oid]
+        if not buy_dt and lb.get('date_planned'):
             dp = lb['date_planned']
             buy_dt = fields.Datetime.from_string(dp) if isinstance(
                 dp, str) else dp
