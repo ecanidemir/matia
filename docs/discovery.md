@@ -407,3 +407,9 @@
 - Kit = aktif phantom BOM'lu urun (_mpp_kit_tmpl_ids); Prices'ta route 'kit'/'Kit' (rozet badge-info, filtre secenegi), corrected-price make gibi yasak (JS input disabled + save_price_override guard). 4 kit'in kendisi de satir olarak eklendi (once BFS'e girmiyordu). Paylasilan classifier'a dokunulmadi (Tab1/2 etkilenmez). Manifest 15.0.2.2.0.
 - TEMP-DEBUG: get_price_overview sonunda _logger.info('MPP-TEMP ...') (uid/plan/histogram/route tablosu/E2CBAN03-M2H1WN05-N2PGAN02-M2WHAN04 izi). Filtre sorunu cozulunce silinecek.
 - Arka plan: tarayici Network'te route=unknown + sifir make/subcontract, ayni metoda MCP make donuyor; staging restart cozum olmadi.
+
+## Route Cevirisi Kok Nedeni (2026-10-06, cozuldu, 15.0.2.4.0)
+
+- stock.location.route name'ir.translation ile cevrilir: TR kullanicida 'Uretim'/'Siparis Uzerine Fason Firmaya Tedarik', MCP'de (en) 'Manufacture'/'Resupply Subcontractor...'. _mpp_classify_route Ingilizce substring baktigi icin TR oturumda make/sub hep unknown'a dustu (buy purchase_ok fallback ile kurtuldu).
+- Cozum: route name okunan 3 nokta (line build, get_price_overview, _mpp_product_routes) lang='en_US' ile okur. Beklenen dagilim: buy ~571, subcontract ~305, make ~88, kit 5, unknown ~0.
+- Kural: cevrilebilir display name uzerinden anahtar eslestirme YASAK; ya kaynak dilde oku ya ID/xmlid karsilastir. TEMP MPP-TEMP log + response debug blogu kaldirildi.
