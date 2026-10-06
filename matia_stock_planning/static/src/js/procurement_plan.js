@@ -1225,9 +1225,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<i class="fa fa-truck"></i></div></div>' +
                 '<div class="msp-kpi-card kpi-outdoor"><div class="kpi-info">' +
                 '<div class="kpi-title">Est. Total USD</div>' +
-                '<div class="kpi-value" style="color:#059669;">' +
+                '<div class="kpi-value" style="color:#059669;" title="Rolled goods value (own + children): ' +
+                this._fmtNum(s.grand_rolled_usd || 0, 2) + ' USD">' +
                 this._fmtNum(s.grand_total_usd, 2) + '</div>' +
-                '<div class="kpi-sub">Rolled-up estimate</div></div>' +
+                '<div class="kpi-sub">PO-value estimate' +
+                ((s.unsourced_count || s.unpriced_count) ?
+                    ' (' + (s.unsourced_count || 0) + ' no supplier, ' +
+                    (s.unpriced_count || 0) + ' no price)' : '') +
+                '</div></div>' +
                 '<div class="kpi-icon" style="color:#059669;">' +
                 '<i class="fa fa-dollar"></i></div></div>' +
                 '<div class="msp-kpi-card kpi-seat"><div class="kpi-info">' +
@@ -1272,12 +1277,24 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 if (oa !== ob) return oa - ob;
                 return (a || '').localeCompare(b || '');
             });
-            var html = '<div class="table-responsive"><table class="msp-table">' +
+            var html = '';
+            if (s.unsourced_count || s.unpriced_count) {
+                html += '<div class="alert alert-warning" style="font-size:0.8rem;">' +
+                    '<i class="fa fa-exclamation-triangle mr-1"></i>' +
+                    '<strong>' + (s.unsourced_count || 0) +
+                    '</strong> ordered line(s) have no supplier' +
+                    (s.unsourced_count ? ' (see No supplier group below)' : '') +
+                    ' and <strong>' + (s.unpriced_count || 0) +
+                    '</strong> have no price (counted as 0 USD). ' +
+                    'Fix sellers/prices before ordering.' +
+                    '</div>';
+            }
+            html += '<div class="table-responsive"><table class="msp-table">' +
                 '<thead><tr>' +
                 '<th class="th-product">Supplier</th>' +
                 '<th>Lines</th>' +
                 '<th>Routes</th>' +
-                '<th class="th-stock" title="Estimated total in USD">Est. Total USD</th>' +
+                '<th class="th-stock" title="PO-value estimate: own last-buy USD x order">Est. Total USD</th>' +
                 '<th>RFQs</th>' +
                 '<th></th>' +
                 '</tr></thead><tbody>';
@@ -1345,6 +1362,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             var html = '';
             lines.forEach(function (ln) {
+                var badges = '';
+                if (ln.no_seller) {
+                    badges += ' <span class="badge badge-warning">No supplier</span>';
+                }
+                if (ln.route === 'unknown') {
+                    badges += ' <span class="badge badge-warning" title="Set Buy, Make or Subcontract route on the product">Unknown route</span>';
+                }
+                if (ln.no_price) {
+                    badges += ' <span class="badge badge-warning" title="No last-buy or pricelist price; counted as 0 USD">No price</span>';
+                }
                 html += '<tr class="mpp-sup-sub-row">' +
                     '<td class="td-product">' +
                     '<i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>' +
@@ -1352,23 +1379,28 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         ln.code + ']</span> ' : '') +
                     '<span class="prod-name">' +
                     (self._plainName(ln.code, ln.name) || '') + '</span>' +
-                    '</td>' +
+                    badges + '</td>' +
                     '<td class="td-stock">' +
                     self._fmtNum(ln.order_qty, 0) + ' ' +
                     '<small class="text-muted">' +
                     (ln.uom || '') + '</small></td>' +
                     '<td><span class="badge badge-info">' +
                     (ln.route || '') + '</span></td>' +
-                    '<td class="td-stock">Rolled ' +
-                    self._fmtNum(ln.rolled_usd, 2) + ' USD x ' +
-                    self._fmtNum(ln.order_qty, 0) + ' = <strong>' +
+                    '<td class="td-stock">PO est <strong>' +
                     self._fmtNum(ln.total_usd, 2) + ' USD</strong>' +
+                    '<small class="text-muted d-block" style="font-weight:400;">Rolled ' +
+                    self._fmtNum(ln.rolled_usd, 2) + ' USD x ' +
+                    self._fmtNum(ln.order_qty, 0) + ' = ' +
+                    self._fmtNum(ln.rolled_total_usd, 2) +
+                    ' (goods value)</small>' +
                     (ln.last_price ?
                         '<small class="text-muted d-block" style="font-weight:400;">Last: ' +
                         self._fmtNum(ln.last_price, 2) + ' ' +
                         (ln.last_currency || '') +
                         (ln.last_date ? ' (' + ln.last_date + ')' : '') +
-                        '</small>' : '') +
+                        '</small>' :
+                        '<small class="text-muted d-block" style="font-weight:400;">' +
+                        (ln.note || 'No purchase history') + '</small>') +
                     '</td>' +
                     '<td colspan="2"></td></tr>';
             });
@@ -1388,6 +1420,21 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var supKey = this._supKey(sp);
             var isOpen = !!this.expandedSup[supKey];
             var lineCount = (sp.lines || []).length || sp.line_count;
+            var rfqBtn = sp.seller_id ?
+                '<button type="button" class="btn btn-success btn-sm mpp-btn-create-rfq" ' +
+                'data-seller="' + sp.seller_id + '" data-company="' +
+                (sp.company_id || '') + '">' +
+                '<i class="fa fa-file-text-o mr-1"></i>' + label + '</button>' +
+                (self.pendingRfqSeller === key ?
+                    '<div class="alert alert-warning mt-1 mb-0" style="font-size:0.8rem;">' +
+                    'Draft RFQ(s) already exist for this supplier + company. ' +
+                    '<button type="button" class="btn btn-warning btn-sm mpp-btn-confirm-rfq" ' +
+                    'data-seller="' + sp.seller_id + '" data-company="' +
+                    (sp.company_id || '') + '">Create Again</button></div>' : '') :
+                '<span class="text-muted" style="font-size:0.75rem;">Assign a seller first</span>';
+            var unpricedNote = (sp.unpriced_count || 0) > 0 ?
+                ' <span class="badge badge-warning" title="Lines without price are counted as 0 USD">' +
+                sp.unpriced_count + ' no price</span>' : '';
             return '<tr class="item-row">' +
                 '<td class="td-product">' +
                 '<button type="button" class="btn btn-sm btn-link mpp-btn-sup-toggle p-0 mr-1 text-primary"' +
@@ -1403,22 +1450,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<small class="text-muted d-block" style="font-weight:400;">' +
                     (sp.currencies || []).join(', ') + '</small>' : '') +
                 '</td>' +
-                '<td class="td-stock">' + sp.line_count + '</td>' +
+                '<td class="td-stock">' + sp.line_count + unpricedNote + '</td>' +
                 '<td>' + (sp.routes || []).join(', ') + '</td>' +
                 '<td class="td-stock"><strong>' +
                 self._fmtNum(sp.total_usd, 2) + '</strong></td>' +
                 '<td>' + (rfqs || '<span class="text-muted">—</span>') +
-                '</td><td class="text-right">' +
-                '<button type="button" class="btn btn-success btn-sm mpp-btn-create-rfq" ' +
-                'data-seller="' + sp.seller_id + '" data-company="' +
-                (sp.company_id || '') + '">' +
-                '<i class="fa fa-file-text-o mr-1"></i>' + label + '</button>' +
-                (self.pendingRfqSeller === key ?
-                    '<div class="alert alert-warning mt-1 mb-0" style="font-size:0.8rem;">' +
-                    'Draft RFQ(s) already exist for this supplier + company. ' +
-                    '<button type="button" class="btn btn-warning btn-sm mpp-btn-confirm-rfq" ' +
-                    'data-seller="' + sp.seller_id + '" data-company="' +
-                    (sp.company_id || '') + '">Create Again</button></div>' : '') +
+                '</td><td class="text-right">' + rfqBtn +
                 '</td></tr>';
         },
 

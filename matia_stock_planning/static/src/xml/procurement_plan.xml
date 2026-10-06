@@ -84,7 +84,7 @@
                             <span style="font-weight:700; color:#0f172a;">
                                 <i class="fa fa-truck mr-1"></i> Suppliers (estimated USD)
                             </span>
-                            <span class="text-muted" style="font-size:0.7rem;">Grouped by company — one draft RFQ per supplier</span>
+                            <span class="text-muted" style="font-size:0.7rem;">Grouped by company - one draft RFQ per supplier. Totals are PO-value estimates (own last-buy USD x order); rolled goods value is shown per line</span>
                         </div>
                     </div>
                     <div class="mpp-sup-body"/>

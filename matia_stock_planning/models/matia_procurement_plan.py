@@ -2501,46 +2501,76 @@ class MatiaProcurementPlan(models.Model):
     # ------------------------------------------------------------------
     @api.model
     def get_supplier_summary(self, plan_id):
-        """Tab 3 data: suppliers with estimated USD + production lines.
+        """Tab 2 data: suppliers with PO-value estimate + production lines.
 
         Supplier rows are split per (seller, source company): a seller
         whose lines were last bought from the USA gets its own USA row
         (TR RFQ / US RFQ buttons), because the draft RFQ is created in
-        that company. Totals: total_usd = SUM(rolled_usd(unit, children
-        included) x order_qty). Each supplier carries its parts in
-        'lines' (code/name/order_qty/uom/route/prices) so the client can
-        expand the supplier row and show which parts are bought there.
+        that company.
+
+        Scope: EVERY line with order_qty > 0 and route buy/subcontract/
+        unknown is listed, with or without a seller. Sellerless lines
+        fall into a "No supplier" group (no RFQ button) so an order can
+        never silently vanish from the total. Make lines stay in
+        production scope (their cost lives in their components).
+
+        Totals are PO-value estimates: own last-buy USD (line-UoM
+        normalized) x order_qty -- the same basis the draft RFQs use
+        (see _rfq_groups subtotal). Rolled goods value (own + children)
+        is shown per line for information only: summing rolled over all
+        lines would double count assemblies together with their parts
+        (e.g. a buy assembly and its components would both contribute
+        the components' cost).
         @param plan_id Plan ID.
-        @return Dict with suppliers, supplier_count, grand_total_usd,
-            production rows (make/subcontract with linked docs),
-            rfq/mo counts and lists.
+        @return Dict with suppliers, supplier_count, grand_total_usd
+            (PO value), grand_rolled_usd (info), unsourced/unpriced
+            counters, production rows (make/subcontract with linked
+            docs), rfq/mo counts and lists.
         """
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
         suppliers = {}
+        unsourced = 0
+        unpriced = 0
         for line in plan.line_ids.filtered(
-                lambda l: l.route_type in ('buy', 'subcontract')
-                and (l.order_qty or 0) > 0 and l.seller_id):
-            sid = line.seller_id.id
+                lambda l: (l.order_qty or 0) > 0
+                and (l.route_type or 'unknown') in (
+                    'buy', 'subcontract', 'unknown')):
+            sid = line.seller_id.id if line.seller_id else 0
             cid = line.last_company_id.id if line.last_company_id \
                 else plan.company_id.id
             key = (sid, cid)
             s = suppliers.setdefault(key, {
                 'seller_id': sid,
-                'seller_name': line.seller_id.display_name,
+                'seller_name': line.seller_id.display_name
+                if line.seller_id else _('No supplier'),
                 'company_id': cid,
                 'company': self._mpp_company_code(env_sudo, cid),
                 'line_count': 0, 'total_usd': 0.0,
+                'rolled_total_usd': 0.0, 'unpriced_count': 0,
                 'route_types': set(), 'currency_names': set(),
                 'lines': [],
             })
             s['line_count'] += 1
             _qty = float(line.order_qty or 0.0)
+            # PO-value basis (same as the draft RFQ subtotal): own
+            # last-buy USD per line UoM x order. Rolled (own +
+            # children) is info only, never summed into the total.
+            _own = float(line.last_price_usd or 0.0) * \
+                _mpp_line_uom_factor(line)
+            _ptotal = round(_own * _qty, 2)
             _rolled = float(line.rolled_usd or 0.0)
-            s['total_usd'] += _rolled * _qty
-            s['route_types'].add(line.route_type or '')
+            s['total_usd'] += _ptotal
+            s['rolled_total_usd'] += round(_rolled * _qty, 2)
+            _no_price = _own <= 0
+            if _no_price:
+                s['unpriced_count'] += 1
+                unpriced += 1
+            if not sid:
+                unsourced += 1
+            s['route_types'].add(line.route_type or 'unknown')
             if line.last_currency_id:
                 s['currency_names'].add(line.last_currency_id.name)
             s['lines'].append({
@@ -2551,7 +2581,7 @@ class MatiaProcurementPlan(models.Model):
                 'order_qty': line.order_qty,
                 'uom': _mpp_uom_en(
                     line.uom_id.name if line.uom_id else ''),
-                'route': line.route_type,
+                'route': line.route_type or 'unknown',
                 'seller': line.seller_id.display_name
                 if line.seller_id else '',
                 'last_price': line.last_price,
@@ -2560,7 +2590,11 @@ class MatiaProcurementPlan(models.Model):
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
                 'rolled_usd': line.rolled_usd,
-                'total_usd': round(_rolled * _qty, 2),
+                'rolled_total_usd': round(_rolled * _qty, 2),
+                'total_usd': _ptotal,
+                'no_seller': not bool(sid),
+                'no_price': _no_price,
+                'note': line.note or '',
             })
         po_by_seller = {}
         for po in plan.purchase_order_ids:
@@ -2575,18 +2609,23 @@ class MatiaProcurementPlan(models.Model):
         for (sid, cid), s in sorted(
                 suppliers.items(),
                 key=lambda kv: ((kv[1]['seller_name'] or '').lower(),
-                               kv[1]['company'] or '')):
+                                kv[1]['company'] or '')):
             rfqs = po_by_seller.get((sid, cid), [])
             sup_list.append({
                 'seller_id': sid,
                 'seller_name': s['seller_name'],
                 'company_id': cid,
                 'company': s['company'],
-                # Button label: TR RFQ / US RFQ.
+                # Button label: TR RFQ / US RFQ. No button at all
+                # for the "No supplier" group (seller_id 0): an RFQ
+                # needs a vendor, so the client hides the button and
+                # shows an "assign a seller first" hint instead.
                 'rfq_label': '%s RFQ' % (
-                    'TR' if s['company'] == 'TR' else 'US'),
+                    'TR' if s['company'] == 'TR' else 'US') if sid else '',
                 'line_count': s['line_count'],
                 'total_usd': round(s['total_usd'], 2),
+                'rolled_total_usd': round(s['rolled_total_usd'], 2),
+                'unpriced_count': s['unpriced_count'],
                 'routes': sorted(s['route_types']),
                 'currencies': sorted(s['currency_names']),
                 'lines': sorted(
@@ -2648,14 +2687,18 @@ class MatiaProcurementPlan(models.Model):
                                        r['code'] or '',
                                        r['name'] or ''))
         grand = sum(s['total_usd'] for s in sup_list)
+        grand_rolled = sum(s['rolled_total_usd'] for s in sup_list)
         return {
             'plan_id': plan.id,
             'plan_name': plan.name,
             'state': plan.state,
             'suppliers': sup_list,
             'supplier_count': len({s['seller_id']
-                                   for s in sup_list}),
+                                   for s in sup_list if s['seller_id']}),
             'grand_total_usd': round(grand, 2),
+            'grand_rolled_usd': round(grand_rolled, 2),
+            'unsourced_count': unsourced,
+            'unpriced_count': unpriced,
             'production': production,
             'rfq_count': len(plan.purchase_order_ids),
             'mo_count': len(plan.mo_ids),

@@ -356,3 +356,15 @@
 - Yukaridaki "Tek Sayfa" girdisindeki `need=max(0,ceil(N-avail))` formulunu GECERSIZ kilar (tarihsel kayit olarak durur).
 - Test: `py_compile` + `node --check` OK; simulasyon 5/5 NEW-dogru. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); JS icin sonrasi Ctrl+F5. Plan: `plans/production_autofill_gross_fill.md`.
 
+## Production Tab 2 Toplam Duzeltmesi (2026-10-06, sellerless + cift-sayim)
+
+- Sikayet: 2. Suppliers & Production sayfasindaki toplam rolled USD dogru mu; tedarikci grubuna giremedigi icin hesaba katilmayan ama siparis edilecek parca var mi; fiyati/tedarikcisi belli olmayanlar gosterilmeli.
+- Staging MPP id 24 canli dogrulama (salt-okunur): 4 ayri bosluk kanitlandi:
+  1. `get_supplier_summary` filtresi `buy/subcontract + order>0 + seller` idi: sellerless buy (ornek 2418 Brake Cable, order 60, rolled 0) NE supplier NE production listesindeydi -> toplamda yok, ekranda yok.
+  2. `unknown` route'lu satirlar (route atanmamis urunler) iki listede de yoktu: ornek 1271 Wheel Nut Tool (order 31, rolled 35.23 -> ~1092 USD kayip), 1190 Front Cover Set (order 50, rolled 19226 -> tek basina ~961k USD kayip).
+  3. Fiyati sifir ama seller'li satirlar (ornek T1CBRN01 kablo order 13000, rolled 0; N1LBRN15 etiket order 34, rolled 0) 0 USD ile toplama giriyor, "ucretsiz"den ayirt edilemiyordu.
+  4. Cift-sayim: toplam `rolled_usd x order` toplaniyordu ama rolled = own + cocuklar. BOM'lu buy ebeveyn + cocuklari AYNI ANDA order>0 olunca (ornek P3CPPG22 boya order 50 rolled 374 + cocugu P3CPIN22 unpaint order 50 rolled 372, BOM 1666 1:1; ornek 1159 strap own 1.57 vs rolled 14.57) toplam ~9-500x sisiyordu. 5 satirlik ornekte eski baz 19309.72, PO-degeri 126.72 (`scratch/test_supplier_totals.py` 7/7 PASS).
+- Cozum (`matia_procurement_plan.py::get_supplier_summary` + JS/XML Tab 2): kapsam buy/subcontract/unknown + order>0 (seller sarti YOK) -> sellerless "No supplier" grubu (RFQ butonu gizli, "Assign a seller first"); satir toplami PO-degeri (`last_price_usd x UoM factor x order`, RFQ `_rfq_groups` ile ayni baz); rolled satirda bilgi olarak durur, toplama girmez; `grand_total_usd` (PO) + `grand_rolled_usd` (bilgi) + `unsourced/unpriced_count`; uyar banner + satir rozetleri (No supplier / Unknown route / No price). Make satirlari production'da aynen (maliyet komponentlerde).
+- Kural: supplier toplaminda rolled ASLA toplanmaz (ebeveyn+cocuk cift sayar); satin alma tahmini = own x order, rolled = mal degeri bilgisidir. RFQ tutarlariyla caprazla (ayni baz olmali).
+- Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Recalculate/supplier-preview tekrar calismadan yeni toplami gostermez; sonrasi Ctrl+F5. Commit/push YOK (kullanici onayi bekleniyor).
+
