@@ -705,16 +705,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
         },
 
-        // Recursive expand: opens the WHOLE forest down to the last
-        // level, not just level 1. Parallel pump (up to CONC fetches
-        // in flight): the old sequential pump paid one full RPC
-        // roundtrip per node, so a few hundred nodes took minutes.
-        // Every continuation runs in a .then, so deep trees cannot
-        // overflow the stack; the button shows live "Expanding x/y"
-        // progress, and the tree re-renders every 50 nodes so the
-        // page never looks dead (full renders on a growing table
-        // cost O(n^2), hence not every node). One failed branch
-        // warns but the rest still opens and renders.
+        // Recursive expand, capacity-page pattern (stock_planning.js
+        // _onExpandAllBoms): one pass per level. Each pass fires ALL
+        // currently visible unopened sub-BOM buttons at once
+        // (Promise.all), re-renders, and the next pass picks up the
+        // newly visible buttons. No manual queue: the DOM plus the
+        // expanded/subCache maps are the state, so no node can stall
+        // or get lost. Failed branches are parked in dead[] and not
+        // retried on later passes.
         _onExpandAll: function () {
             var self = this;
             if (this._expanding) return;
@@ -731,27 +729,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._expanding = true;
             btn.prop('disabled', true);
             var pid = this._planId();
-            var queue = [];
-            var seen = {};
+            var maxDepth = 10;
             var fails = 0;
             var fetched = 0;
-            var opened = 0;
-            var total = 0;
-            this.treeGroups.forEach(function (g) {
-                (g.items || []).forEach(function (it) {
-                    if (!it.has_bom || it._is_cycle) return;
-                    var uid = g.key + ':' + it.product_id;
-                    if (seen[uid]) return;
-                    seen[uid] = true;
-                    total++;
-                    self.expanded[uid] = true;
-                    queue.push({uid: uid, pid: it.product_id,
-                                net: self._rowNet(it), level: 1,
-                                group: g.key});
-                });
-            });
-            // Hidden groups would swallow the opened rows.
-            this.collapsedGroups = {};
+            var dead = {};
+            var openedAny = false;
             var finish = function () {
                 self._expanding = false;
                 btn.prop('disabled', false);
@@ -771,93 +753,102 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     });
                 }
             };
-            if (!total) {
-                finish();
-                this.displayNotification({
-                    title: _t('Nothing to expand'),
-                    message: _t('No expandable sub-BOM rows in this plan.'),
-                    type: 'warning',
-                });
-                return;
-            }
-            var progress = function () {
+            // Capacity-style level passes: collect every visible
+            // unopened button, fire at once, render, repeat. A pass
+            // that opens nothing ends the run (later passes would
+            // find nothing new either).
+            var expandOneLevel = function (pass) {
                 btn.html('<i class="fa fa-spinner fa-spin mr-1"></i>' +
-                    _t('Expanding') + ' ' + opened + '/' + total);
-            };
-            progress();
-            // Parallel pump: up to CONC sub-BOM fetches in flight.
-            // Cached nodes are folded in synchronously (no RPC).
-            // finish() runs once no fetch is active AND (the queue
-            // is empty OR the 2000-load cap stopped new launches).
-            var CONC = 6;
-            var active = 0;
-            var handleItems = function (t, items) {
-                (items || []).forEach(function (c) {
-                    if (!c.has_bom || c._is_cycle) return;
-                    var cuid = t.uid + '/' + c.product_id;
-                    if (seen[cuid]) return;
-                    seen[cuid] = true;
-                    total++;
-                    self.expanded[cuid] = true;
-                    queue.push({uid: cuid, pid: c.product_id,
-                                net: self._rowNet(c),
-                                level: t.level + 1,
-                                group: t.group});
-                });
-                opened++;
-                progress();
-                if (opened % 50 === 0 && self._expanding) {
-                    self._renderTree();
-                }
-            };
-            var maybeFinish = function () {
-                if (active <= 0 && self._expanding &&
-                    (!queue.length || fetched >= 2000)) {
-                    finish();
-                }
-            };
-            var launch = function () {
-                if (!self._expanding) return;
-                while (active < CONC && queue.length &&
-                    fetched < 2000) {
-                    var t = queue.shift();
-                    if (t.level > 10) {
-                        opened++;
-                        progress();
-                        continue;
-                    }
-                    if (self.subCache[t.uid]) {
-                        self.expanded[t.uid] = true;
-                        handleItems(t, self.subCache[t.uid].items);
-                        continue;
-                    }
-                    active++;
-                    fetched++;
-                    self._rpcPlan('get_sub_bom_cost',
-                        [t.pid, t.net, pid || false]).then(
-                        (function (task) {
-                            return function (res) {
-                                var items =
-                                    (res && res.items) || [];
-                                self._markCycles(task.uid, items);
-                                self.subCache[task.uid] = {
-                                    items: items, level: task.level,
-                                    groupKey: task.group,
-                                };
-                                self.expanded[task.uid] = true;
-                                handleItems(task, items);
-                            };
-                        })(t), function () {
-                            fails++;
-                        }).then(function () {
-                            active--;
-                            launch();
-                            maybeFinish();
+                    _t('Expanding') + ' (' + pass + '/' +
+                    maxDepth + ')');
+                var pending = [];
+                var queued = {};
+                var openedCached = 0;
+                self.$('.msp-btn-sub-bom:visible').each(function () {
+                    var uid = this.dataset.uid;
+                    var prodId = parseInt(this.dataset.pid, 10);
+                    var level = parseInt(this.dataset.level, 10) || 0;
+                    if (!uid || !prodId || level >= maxDepth) return;
+                    if (self.expanded[uid] || dead[uid] ||
+                        queued[uid]) return;
+                    if (self.subCache[uid]) {
+                        self.expanded[uid] = true;
+                        openedCached++;
+                    } else if (fetched + pending.length < 2000) {
+                        queued[uid] = true;
+                        pending.push({
+                            uid: uid, pid: prodId,
+                            net: parseFloat(
+                                this.dataset.net || '0') || 0,
+                            level: level,
+                            group: this.dataset.group,
                         });
+                    }
+                });
+                if (!pending.length) {
+                    return Promise.resolve(openedCached);
                 }
-                maybeFinish();
+                var promises = pending.map(function (j) {
+                    fetched++;
+                    return self._rpcPlan('get_sub_bom_cost',
+                        [j.pid, j.net, pid || false]).then(
+                        function (res) {
+                            var items =
+                                (res && res.items) || [];
+                            self._markCycles(j.uid, items);
+                            self.subCache[j.uid] = {
+                                items: items, level: j.level + 1,
+                                groupKey: j.group,
+                            };
+                            self.expanded[j.uid] = true;
+                        }, function () {
+                            fails++;
+                            dead[j.uid] = true;
+                        });
+                });
+                return Promise.all(promises).then(function () {
+                    return pending.length + openedCached;
+                });
             };
-            launch();
+            // Expand All works on the full tree, not on a search
+            // filter: drop any in-flight search first.
+            clearTimeout(this.treeSearchTimer);
+            this.treeSearchToken++;
+            this.treeSearch = '';
+            this.treeSearchMatches = [];
+            this.treeSearchDone = false;
+            this.treeSearchLoading = false;
+            var $input = this.$('.mpp-tree-search');
+            if ($input.length) $input.val('');
+            // Hidden groups render no rows, so unhide first and
+            // render once: pass 1 scans the real DOM.
+            this.collapsedGroups = {};
+            this._renderTree();
+            var runPass = function (pass) {
+                if (!self._expanding || pass > maxDepth) {
+                    finish();
+                    return;
+                }
+                expandOneLevel(pass).then(function (opened) {
+                    if (opened) {
+                        openedAny = true;
+                        self._renderTree();
+                        runPass(pass + 1);
+                    } else {
+                        finish();
+                        if (!openedAny && !fails) {
+                            self.displayNotification({
+                                title: _t('Nothing to expand'),
+                                message: _t('No expandable sub-BOM rows in this plan.'),
+                                type: 'warning',
+                            });
+                        }
+                    }
+                }, function () {
+                    finish();
+                });
+            };
+            runPass(1);
         },
 
         _onCollapseAll: function () {

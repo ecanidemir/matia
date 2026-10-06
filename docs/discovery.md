@@ -251,3 +251,9 @@
 - Cozum (static-only): en fazla 6 paralel fetch (CONC havuzu), cached dugumler senkron katlanir, ara full-render her 10 yerine her 50 dugumde (buyuyen tabloda render O(n^2) yapiyordu; buton etiketi her dugumde guncellenir). `finish()` tek-seferlik (`_expanding` guard + cap-bitince kuyruk birakma ele alindi). `_expandPath` (arama filtresi) derinlik<=10 oldugu icin sira sira birakildi.
 - Kural: toplu agac acma islerinde RPC'yi sira sira zincirleme; CONC=6 havuz + seyrek ara render kullan. Deploy: static-only -> Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
 
+## Expand All Capacity Desenine Gecis (2026-10-06, production plan Tab 2)
+
+- Kullanici geri bildirimi: paralel pump da iyi calismadi, capacity sayfasindaki expand iyi calisiyor. Kok fark: capacity `_onExpandAllBoms` seviyede-seviye gecer - her turda DOM'daki tum gorunur kapali butonlar AYNI ANDA ateslenir (Promise.all), render edilir, sonraki tur yeni gorunen butonlari toplar; durum DOM + expanded bayraginda, elle kuyruk/uid muhasebesi YOK.
+- Production `_onExpandAll` ayni desene cevrilidi: tur-basi `expandOneLevel(pass)` (`.msp-btn-sub-bom:visible` tara, acilmamis + olu-degil + level<10 olanlari topla, cache'tekini RPC'siz ac, Promise.all ile atesle, sayiyi don), `runPass` aclan yoksa bitirir (sonraki turlar da bos olurdu), basarisiz dal `dead[]`'e alinir (sonraki turlarda tekrar denenmez), baslangicta arama filtresi temizlenir + gruplar acilir + bir kez render edilir (1. tur gercek DOM'u tarar).
+- Kural: agac-acma islerinde kaynagi DOM taramasi yap, uid kuyrugu elle tutma. Deploy: static-only -> Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
+
