@@ -806,6 +806,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 (l.last_currency ? ' ' + l.last_currency : '');
         },
 
+        // Tiny per-UoM note under the USD price (e.g. "per m",
+        // "per kg"): tells which unit the snapshot price belongs to.
+        _perUomNote: function (r) {
+            var u = this._uomEn(r.last_uom || r.uom);
+            if (!u) return '';
+            return '<div class="text-muted" style="font-size:0.65rem;">per ' +
+                u + '</div>';
+        },
+
         // UoM names come from the DB in Turkish (e.g. 'Adet'); the UI is
         // English-only (user rule). Server already maps, this is the
         // client fallback for cached/legacy rows. Mirrors _MPP_UOM_NAME_MAP.
@@ -969,7 +978,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td class="text-center">' + this._srcBadge(r) + '</td>' +
                 '<td class="text-right">' + this._fmtLast(r) + '</td>' +
                 '<td class="text-right">' + this._fmtNum(r.last_usd, 4) +
-                '</td>' +
+                this._perUomNote(r) + '</td>' +
                 '<td class="text-center">' + (r.last_date || '') + '</td>' +
                 '<td class="text-right">' + this._fmtNum(r.rolled_usd, 2) +
                 '</td>' +

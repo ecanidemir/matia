@@ -11,3 +11,4 @@
 2026-09-25 | [O15] company_id=False phantom BOM copy "Uyumsuz sirket kayitlari" | kok neden: satirlar check_company=True alanlara sahipken copy _check_company_auto validasyonuna takiliyor -> cozum: copy(id, {'default': {'company_id': 1}}) ile sirketli kopya olustur
 2026-10-05 | [O15] upgrade ParseError: View inheritance may not use attribute 'string' as selector | inherit secici olarak page `string` attribute kullanmisti, Odoo 15 bunu yasakliyor -> xpath expr //page[field[@name='line_ids']] secici + yeni page name=draft_rfqs
 2026-10-06 | [O15] tree+cost TypeError int object is not subscriptable (_last_buy_vals order_id) | _mpp_last_buys order_id'yi int donerken _last_buy_vals [id,name] varsayip [0] okudu -> buy_dt oncelikli + order_id normalize (list/tuple->[0], int aynen) ile order_dates okuma
+2026-10-06 | [auto] APIError [400]: Requests ending with a model turn are not supported. | kürate edilmedi -> /log-error ile işle

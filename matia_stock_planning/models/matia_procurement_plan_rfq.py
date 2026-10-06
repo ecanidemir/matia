@@ -22,7 +22,7 @@ from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 import logging
 
-from .matia_procurement_plan import _mpp_env_sudo
+from .matia_procurement_plan import _mpp_env_sudo, _mpp_line_uom_factor
 
 _logger = logging.getLogger(__name__)
 
@@ -99,8 +99,11 @@ class MatiaProcurementPlanRfq(models.Model):
                 'subtotal': 0.0,
             })
             bucket['lines'].append(line)
+            # RFQ PO lines use the plan line UoM, so the PO-UoM snapshot
+            # must be converted first (e.g. per-m price -> per-mm price).
             bucket['subtotal'] += (
-                (line.order_qty or 0.0) * (line.last_price or 0.0))
+                (line.order_qty or 0.0) * (line.last_price or 0.0)
+                * _mpp_line_uom_factor(line))
         return list(groups.values()), skipped
 
     def _rfq_plan(self, plan_id):
@@ -145,7 +148,8 @@ class MatiaProcurementPlanRfq(models.Model):
                     'code': line.product_id.default_code or '',
                     'name': line.product_id.display_name,
                     'order_qty': line.order_qty,
-                    'last_price': line.last_price,
+                    'last_price': (line.last_price or 0.0)
+                    * _mpp_line_uom_factor(line),
                     'last_currency': grp['currency_name'],
                 } for line in grp['lines']],
             })
@@ -229,12 +233,14 @@ class MatiaProcurementPlanRfq(models.Model):
                     uom = (line.uom_id.id if line.uom_id
                            else line.product_id.uom_po_id.id
                            if line.product_id.uom_po_id else False)
+                    _conv = (line.last_price or 0.0) \
+                        * _mpp_line_uom_factor(line)
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,
                         'product_qty': line.order_qty,
                         'product_uom': uom,
-                        'price_unit': line.last_price or 0.0,
+                        'price_unit': _conv,
                         'name': '[%s] %s' % (
                             plan.name, line.product_id.display_name),
                         'date_planned': fields.Date.today(),
@@ -243,8 +249,7 @@ class MatiaProcurementPlanRfq(models.Model):
                         'purchase_order_id': po.id,
                         'purchase_line_id': po_line.id,
                     })
-                    amount += ((line.order_qty or 0.0)
-                               * (line.last_price or 0.0))
+                    amount += ((line.order_qty or 0.0) * _conv)
                 created.append({
                     'id': po.id,
                     'name': po.name,
@@ -349,12 +354,14 @@ class MatiaProcurementPlanRfq(models.Model):
                     uom = (line.uom_id.id if line.uom_id
                            else line.product_id.uom_po_id.id
                            if line.product_id.uom_po_id else False)
+                    _conv2 = (line.last_price or 0.0) \
+                        * _mpp_line_uom_factor(line)
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,
                         'product_qty': line.order_qty,
                         'product_uom': uom,
-                        'price_unit': line.last_price or 0.0,
+                        'price_unit': _conv2,
                         'name': '[%s] %s' % (
                             plan.name, line.product_id.display_name),
                         'date_planned': fields.Date.today(),
@@ -364,7 +371,7 @@ class MatiaProcurementPlanRfq(models.Model):
                         'purchase_line_id': po_line.id,
                     })
                     amount += ((line.order_qty or 0.0)
-                               * (line.last_price or 0.0))
+                               * _conv2)
                 created.append({
                     'id': po.id,
                     'name': po.name,

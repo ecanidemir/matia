@@ -100,6 +100,32 @@ def _mpp_env_sudo(self):
     ).sudo().env
 
 
+def _mpp_line_uom_factor(line):
+    """Factor converting a price per PO UoM to price per line UoM.
+
+    Example: last buy 147.96 TRY/m, line UoM mm -> 0.001, so the
+    rolled cost uses 0.14796 TRY/mm. Returns 1.0 when UoMs match,
+    are missing, or conversion fails (fail-safe: old behaviour).
+
+    @param line: matia.procurement.plan.line record.
+    @return: float factor.
+    """
+    try:
+        last_uom = line.last_uom_id
+        line_uom = line.uom_id
+        if not last_uom or not line_uom:
+            return 1.0
+        if last_uom.id == line_uom.id:
+            return 1.0
+        return line_uom._compute_quantity(
+            1.0, last_uom, round=False) or 1.0
+    except Exception as exc:
+        _logger.warning(
+            'MPP UoM factor failed for line %s: %s; using 1.0',
+            getattr(line, 'id', '?'), exc)
+        return 1.0
+
+
 def _mpp_tr_stock_locs(env_sudo):
     """WHTR/Stock% internal locations (excluding NCR)."""
     locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
@@ -1072,14 +1098,16 @@ class MatiaProcurementPlan(models.Model):
         def _own_usd(pid):
             line = line_by_pid.get(pid)
             if line and line.route_type in ('buy', 'subcontract'):
-                return float(line.last_price_usd or 0.0)
+                return float(line.last_price_usd or 0.0) * \
+                    _mpp_line_uom_factor(line)
             return 0.0
 
         def _own_try(pid):
             line = line_by_pid.get(pid)
             if not line or line.route_type not in ('buy', 'subcontract'):
                 return 0.0
-            price = float(line.last_price or 0.0)
+            price = float(line.last_price or 0.0) * \
+                _mpp_line_uom_factor(line)
             if not price:
                 return 0.0
             cur = line.last_currency_id
@@ -1303,6 +1331,7 @@ class MatiaProcurementPlan(models.Model):
         """Last-purchase snapshot: price in own currency, USD at the
         historical rate of the purchase date, and date as 'Mon YYYY'."""
         vals = {'last_price': 0.0, 'last_currency_id': False,
+                'last_uom_id': False,
                 'last_price_usd': 0.0, 'last_date': False,
                 'last_company_id': False}
         if not lb:
@@ -1310,6 +1339,8 @@ class MatiaProcurementPlan(models.Model):
         price = float(lb.get('price_unit') or 0.0)
         cur = lb.get('currency_id')
         cur_id = cur[0] if cur else False
+        pou = lb.get('product_uom')
+        pou_id = pou[0] if pou else False
         # lb comes from _mpp_last_buys (order_id is int, date is buy_dt);
         # accept raw search_read shape too (order_id [id, name]).
         buy_dt = lb.get('buy_dt') or None
@@ -1335,6 +1366,7 @@ class MatiaProcurementPlan(models.Model):
         vals.update({
             'last_price': price,
             'last_currency_id': cur_id,
+            'last_uom_id': pou_id,
             'last_price_usd': usd_price,
             'last_date': buy_date,
             'last_company_id': lb.get('company_id') or False,
@@ -1380,6 +1412,8 @@ class MatiaProcurementPlan(models.Model):
                 'last_price': line.last_price,
                 'last_currency': line.last_currency_id.name
                 if line.last_currency_id else '',
+                'last_uom': _mpp_uom_en(
+                    line.last_uom_id.name if line.last_uom_id else ''),
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
                 'last_company': self._mpp_company_code(
@@ -1416,6 +1450,8 @@ class MatiaProcurementPlan(models.Model):
                 'last_price': line.last_price,
                 'last_currency': line.last_currency_id.name
                 if line.last_currency_id else '',
+                'last_uom': _mpp_uom_en(
+                    line.last_uom_id.name if line.last_uom_id else ''),
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
                 'last_company': self._mpp_company_code(
@@ -1571,6 +1607,9 @@ class MatiaProcurementPlan(models.Model):
                     'last_currency':
                         line.last_currency_id.name
                         if line and line.last_currency_id else '',
+                    'last_uom': _mpp_uom_en(
+                        line.last_uom_id.name
+                        if line and line.last_uom_id else ''),
                     'last_usd': line.last_price_usd if line else 0.0,
                     'last_try': self._mpp_line_try(env_sudo, plan, line),
                     'last_date': self._mpp_month_year(
@@ -1808,6 +1847,8 @@ class MatiaProcurementPlan(models.Model):
                 lp = float(line.last_price or 0.0)
                 lcur = line.last_currency_id.name \
                     if line.last_currency_id else ''
+                luom = _mpp_uom_en(
+                    line.last_uom_id.name if line.last_uom_id else '')
                 lusd = float(line.last_price_usd or 0.0)
                 ltry = self._mpp_line_try(env_sudo, plan, line)
                 ldate = self._mpp_month_year(line.last_date)
@@ -1823,6 +1864,8 @@ class MatiaProcurementPlan(models.Model):
                 lp = float(lb.get('price_unit') or 0.0)
                 cur = lb.get('currency_id')
                 lcur = cur[1] if cur else ''
+                pou = lb.get('product_uom')
+                luom = _mpp_uom_en(pou[1] if pou else '')
                 buy_dt = lb.get('buy_dt')
                 buy_date = buy_dt.date() if buy_dt else False
                 lusd, ltry = lp, lp
@@ -1843,7 +1886,21 @@ class MatiaProcurementPlan(models.Model):
                             'product id %s on %s, cost shown as 0.0: %s',
                             pid, buy_date, exc)
                 ldate = self._mpp_month_year(buy_date) if buy_date else ''
-                rtry, rusd = ltry, lusd
+                # Rolled unit cost is per BOM UoM: convert the PO-UoM
+                # snapshot before display (same rule as _compute_rollup).
+                _factor = 1.0
+                try:
+                    if pou and bl.product_uom_id and \
+                            pou[0] != bl.product_uom_id.id:
+                        _pou_rec = env_sudo['uom.uom'].browse(pou[0])
+                        _factor = bl.product_uom_id._compute_quantity(
+                            1.0, _pou_rec, round=False) or 1.0
+                except Exception as exc:
+                    _logger.warning(
+                        'MPP tree cost: UoM conversion failed for '
+                        'product id %s: %s; using 1.0', pid, exc)
+                    _factor = 1.0
+                rtry, rusd = ltry * _factor, lusd * _factor
                 _lp = lb.get('partner_id')
                 seller = _lp[1] if _lp else ''
                 lcompany = self._mpp_company_code(
@@ -1882,6 +1939,7 @@ class MatiaProcurementPlan(models.Model):
                 'last_company': lcompany,
                 'last_price': lp,
                 'last_currency': lcur,
+                'last_uom': luom,
                 'last_usd': lusd,
                 'last_try': ltry,
                 'last_date': ldate,
@@ -2361,12 +2419,18 @@ class MatiaProcurementPlanLine(models.Model):
     subtotal = fields.Float(digits=(16, 2))
     last_price = fields.Float(
         digits=(16, 4),
-        help='Last purchase unit price in its own currency (snapshot).')
+        help='Last purchase unit price in its own currency, per PO UoM '
+             '(snapshot, NOT scaled by BOM qty).')
     last_currency_id = fields.Many2one('res.currency')
+    last_uom_id = fields.Many2one(
+        'uom.uom',
+        help='PO line UoM of the last purchase (snapshot). Rolled costs '
+             'convert this price to the plan line UoM before multiplying '
+             'by BOM qty.')
     last_price_usd = fields.Float(
         digits=(16, 4),
-        help='Last purchase price converted to USD at the USD rate '
-             'of the last purchase date (snapshot).')
+        help='Last purchase price per PO UoM converted to USD at the USD '
+             'rate of the last purchase date (snapshot).')
     last_date = fields.Date(
         help='Last purchase date (shown as Mon YYYY).')
     last_company_id = fields.Many2one(
