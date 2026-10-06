@@ -191,63 +191,40 @@
         }
     }
 
-    /* Cross-BOM search results (server-side full-forest search). */
-    .mpp-search-results {
-        padding: 0.5rem 0.75rem;
+    /* Table filter mode (whole-forest search): match count line,
+       in-row location trail, clickable match names. */
+    .mpp-filter-count {
+        font-size: 0.78rem;
+        color: #475569;
+        padding: 0.5rem 0.75rem 0;
+    }
 
-        &:empty {
-            padding: 0;
-        }
+    .mpp-match-trail {
+        font-size: 0.68rem;
+        color: #64748b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 420px;
+        margin-top: 0.1rem;
 
-        .mpp-search-head {
+        .mpp-trail-group {
             font-weight: 700;
-            font-size: 0.8rem;
-            color: #0f172a;
-            margin-bottom: 0.4rem;
+            color: #0369a1;
         }
+    }
 
-        .mpp-search-empty {
-            font-size: 0.8rem;
-            color: #64748b;
-        }
+    .mpp-search-sep {
+        color: #94a3b8;
+        margin: 0 0.15rem;
+    }
 
-        .mpp-search-list {
-            list-style: none;
-            margin: 0;
-            padding: 0;
-        }
+    .mpp-match-jump {
+        cursor: pointer;
+    }
 
-        .mpp-search-row {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.3rem 0.5rem;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            margin-bottom: 0.3rem;
-            background: #fff;
-            font-size: 0.78rem;
-        }
-
-        .mpp-search-trail {
-            flex: 1;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            color: #334155;
-        }
-
-        .mpp-search-sep {
-            color: #94a3b8;
-            margin: 0 0.15rem;
-        }
-
-        .mpp-search-group {
-            font-size: 0.7rem;
-            color: #64748b;
-            white-space: nowrap;
-        }
+    .mpp-match-jump:hover {
+        text-decoration: underline;
     }
 
     /* Temporary highlight when jumping to a search hit. */

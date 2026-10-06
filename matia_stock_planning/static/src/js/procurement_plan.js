@@ -26,7 +26,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-create-mo': '_onCreateMo',
             'input .mpp-qty': '_onQtyInput',
             'input .mpp-tree-search': '_onTreeSearch',
-            'click .mpp-search-goto': '_onSearchGoto',
+            'click .mpp-match-jump': '_onMatchJump',
             'click .msp-btn-expand-all': '_onExpandAll',
             'click .msp-btn-collapse-all': '_onCollapseAll',
             'click .msp-btn-toggle-group': '_onGroupToggle',
@@ -47,7 +47,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.treeSearch = '';
             this.treeSearchTimer = null;
             this.treeSearchToken = 0;
-            this.treeSearchResults = [];
+            this.treeSearchMatches = [];
+            this.treeSearchDone = false;
+            this.treeSearchLoading = false;
             this.treeSort = {key: 'planned', dir: -1};
             // Per-group auto-fill targets (Tab 1 entry headers).
             this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
@@ -55,6 +57,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.activeTab = 1;
             this.supSummary = null;
             this.pendingRfqSeller = null;
+            this._expanding = false;
         },
 
         willStart: function () {
@@ -339,9 +342,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 self.supSummary = null;
                 self.pendingRfqSeller = null;
                 self.treeSearch = '';
-                self.treeSearchResults = [];
+                self.treeSearchMatches = [];
+                self.treeSearchDone = false;
+                self.treeSearchLoading = false;
+                self.treeSearchToken++;
                 self.$('.mpp-tree-search').val('');
-                self.$('.mpp-search-results').html('');
                 self._showTab(2);
             }, function (err) {
                 self._notifyErr(err);
@@ -376,106 +381,72 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // ---------------- tab 2: tree (msp-identical) ----------------
-        // Local keystroke filter (only sees loaded rows) + debounced
-        // server search across the WHOLE forest (collapsed subtrees
-        // included). Server hits render in .mpp-search-results with
-        // their parent trail; "Show" expands the tree to the hit.
+        // Typing filters the TABLE itself across the WHOLE forest
+        // (collapsed subtrees included): a debounced server search
+        // finds every match, their ancestor paths auto-expand for
+        // exact numbers, and the table renders only matching rows
+        // (flat, each with its location trail). Click a match to
+        // jump to it in the tree.
         _onTreeSearch: function (ev) {
             var self = this;
             var q = (ev.currentTarget.value || '').trim();
             this.treeSearch = q.toLowerCase();
-            this._renderTree();
+            this.treeSearchDone = false;
             clearTimeout(this.treeSearchTimer);
             if (q.length < 2 || !this._planId()) {
-                this.treeSearchResults = [];
-                this.$('.mpp-search-results').html('');
+                this.treeSearchLoading = false;
+                this.treeSearchMatches = [];
+                this._renderTree();
                 return;
             }
+            // Instant local filter on loaded rows, then server search.
+            this._renderTree();
             var token = ++this.treeSearchToken;
+            this.treeSearchLoading = true;
             this.treeSearchTimer = setTimeout(function () {
+                self._renderTree();
                 self._rpcPlan('search_tree',
                     [self._planId(), q]).then(function (res) {
                     if (token !== self.treeSearchToken) return;
-                    self.treeSearchResults =
+                    self.treeSearchMatches =
                         (res && res.matches) || [];
-                    self._renderSearchResults(q);
-                }, function () {
+                    self._expandSearchPaths().then(function () {
+                        if (token !== self.treeSearchToken) return;
+                        self.treeSearchLoading = false;
+                        self.treeSearchDone = true;
+                        self._renderTree();
+                    });
+                }, function (err) {
                     if (token !== self.treeSearchToken) return;
-                    self.treeSearchResults = [];
-                    self.$('.mpp-search-results').html('');
+                    self.treeSearchLoading = false;
+                    self.treeSearchMatches = [];
+                    self._notifyErr(err);
+                    self._renderTree();
                 });
             }, 350);
         },
 
-        _renderSearchResults: function (q) {
-            var list = this.treeSearchResults || [];
-            if (!list.length) {
-                this.$('.mpp-search-results').html(
-                    '<div class="mpp-search-empty">' +
-                    'No matches in any BOM for &ldquo;' + q +
-                    '&rdquo;.</div>');
-                return;
-            }
-            var html = '<div class="mpp-search-head">' +
-                '<i class="fa fa-search mr-1"></i>' + list.length +
-                (list.length === 1 ? ' result' : ' results') +
-                ' across all BOMs for &ldquo;' + q + '&rdquo;</div>' +
-                '<ul class="mpp-search-list">';
-            list.forEach(function (m) {
-                var trail = (m.trail || []).map(function (t, i, arr) {
-                    var label = (t.code ? '[' + t.code + '] ' : '') +
-                        (t.name || '');
-                    return i === arr.length - 1 ?
-                        '<strong>' + label + '</strong>' : label;
-                }).join(' <span class="mpp-search-sep">&rsaquo;</span> ');
-                var badge = (m.level || 0) > 0 ?
-                    '<span class="msp-level-badge msp-lvl-' +
-                    Math.min(m.level, 5) + '">L' + m.level + '</span>' :
-                    '<span class="msp-level-badge">TOP</span>';
-                html += '<li class="mpp-search-row">' + badge +
-                    '<span class="mpp-search-trail" title="' +
-                    (m.name || '') + '">' + trail + '</span>' +
-                    '<span class="mpp-search-group">' +
-                    (m.group_title || '') + '</span>' +
-                    '<button type="button" class="btn btn-sm ' +
-                    'btn-outline-primary mpp-search-goto" ' +
-                    'data-path="' + (m.path_ids || []).join('/') + '" ' +
-                    'data-group="' + (m.group_key || '') + '"' +
-                    ' title="Expand the tree to this part">' +
-                    '<i class="fa fa-crosshairs mr-1"></i>Show</button>' +
-                    '</li>';
-            });
-            this.$('.mpp-search-results').html(html + '</ul>');
-        },
-
-        // "Show": clears the text filter, expands the hit's ancestor
-        // chain top-down (each level's net comes from the freshly
-        // loaded parent rows, so child numbers stay exact), then
-        // scrolls to the row and flashes it.
-        _onSearchGoto: function (ev) {
+        // Expands one ancestor chain top-down (each level's net
+        // comes from the freshly loaded parent rows, so child numbers
+        // stay exact). includeLast also opens the final row's own BOM.
+        // Never rejects: a dead branch resolves null.
+        _expandPath: function (group, ids, includeLast) {
             var self = this;
-            var group = ev.currentTarget.dataset.group;
-            var ids = String(
-                ev.currentTarget.dataset.path || '').split('/').map(
-                function (x) { return parseInt(x, 10); }).filter(
-                function (x) { return x; });
-            if (!group || !ids.length) return;
             var grp = null;
             this.treeGroups.forEach(function (g) {
                 if (g.key === group) grp = g;
             });
-            if (!grp) return;
-            this.treeSearch = '';
-            this.$('.mpp-tree-search').val('');
-            this.treeSearchResults = [];
-            this.$('.mpp-search-results').html('');
-            this.collapsedGroups[group] = false;
+            if (!grp || !ids || !ids.length) {
+                return Promise.resolve(null);
+            }
             var pid = this._planId();
             var items = grp.items || [];
             var cur = null;
+            var last = includeLast ? ids.length : ids.length - 1;
             var chain = Promise.resolve();
             ids.forEach(function (wanted, idx) {
                 chain = chain.then(function () {
+                    if (idx >= last) return;
                     var row = null;
                     for (var i = 0; i < items.length; i++) {
                         if (items[i].product_id === wanted) {
@@ -483,7 +454,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             break;
                         }
                     }
-                    if (!row) return;
+                    if (!row) {
+                        items = [];
+                        return;
+                    }
                     cur = idx === 0 ?
                         (group + ':' + wanted) : (cur + '/' + wanted);
                     if (!row.has_bom || row._is_cycle) return;
@@ -505,23 +479,162 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             };
                             self.expanded[uid] = true;
                             items = sub;
-                        }, function (err) {
-                            self._notifyErr(err);
+                        }, function () {
+                            items = [];
                         });
                 });
             });
-            chain.then(function () {
+            return chain.then(function () {
+                return cur;
+            }, function () {
+                return cur;
+            });
+        },
+
+        // Opens every match's ancestor chain (shared prefixes hit the
+        // cache, so this costs one RPC per unopened parent, not per
+        // match). Sequential to avoid an RPC storm; never rejects.
+        _expandSearchPaths: function () {
+            var self = this;
+            var chain = Promise.resolve();
+            (this.treeSearchMatches || []).forEach(function (m) {
+                chain = chain.then(function () {
+                    return self._expandPath(m.group_key,
+                        m.path_ids || [], false);
+                });
+            });
+            return chain.then(function () {
+                return true;
+            }, function () {
+                return true;
+            });
+        },
+
+        // Match click: back to the tree, expanded to the hit.
+        _onMatchJump: function (ev) {
+            var self = this;
+            var group = ev.currentTarget.dataset.group;
+            var ids = String(
+                ev.currentTarget.dataset.path || '').split('/').map(
+                function (x) { return parseInt(x, 10); }).filter(
+                function (x) { return x; });
+            if (!group || !ids.length) return;
+            this.treeSearch = '';
+            this.treeSearchMatches = [];
+            this.treeSearchDone = false;
+            this.$('.mpp-tree-search').val('');
+            this.collapsedGroups[group] = false;
+            this._expandPath(group, ids, true).then(function (uid) {
                 self._renderTree();
-                if (!cur) return;
-                var el = self.$('tr[data-uid="' + cur + '"]');
-                if (el.length) {
-                    el[0].scrollIntoView({block: 'center'});
-                    el.addClass('msp-flash');
-                    setTimeout(function () {
-                        el.removeClass('msp-flash');
-                    }, 2200);
+                self._flashRow(uid);
+            });
+        },
+
+        _flashRow: function (uid) {
+            if (!uid) return;
+            var el = this.$('tr[data-uid="' + uid + '"]');
+            if (!el.length) return;
+            el[0].scrollIntoView({block: 'center'});
+            el.addClass('msp-flash');
+            setTimeout(function () {
+                el.removeClass('msp-flash');
+            }, 2200);
+        },
+
+        // Filter mode: flat table of every whole-forest match with
+        // exact numbers (rows come from the expanded caches) plus a
+        // location trail, so identical parts stay distinguishable.
+        _renderFilter: function () {
+            var self = this;
+            var order = {};
+            this.treeGroups.forEach(function (g, i) {
+                order[g.key] = i;
+            });
+            var list = (this.treeSearchMatches || []).slice();
+            list.sort(function (a, b) {
+                var ga = order[a.group_key] || 0,
+                    gb = order[b.group_key] || 0;
+                if (ga !== gb) return ga - gb;
+                var ca = (a.code || '') + ' ' + (a.name || ''),
+                    cb = (b.code || '') + ' ' + (b.name || '');
+                return ca < cb ? -1 : (ca > cb ? 1 : 0);
+            });
+            var html = '<div class="mpp-filter-count">' +
+                '<i class="fa fa-filter mr-1"></i>' + list.length +
+                (list.length === 1 ? ' part' : ' parts') +
+                ' in all BOMs match &ldquo;' + this.treeSearch +
+                '&rdquo; - click a part to show it in the tree.</div>';
+            html += '<table class="msp-table">' + this._theadHtml() +
+                '<tbody>';
+            var skipped = 0;
+            list.forEach(function (m) {
+                var row = self._matchRowHtml(m);
+                if (row) {
+                    html += row;
+                } else {
+                    skipped++;
                 }
             });
+            if (!list.length) {
+                html += '<tr><td colspan="15">' +
+                    '<div class="alert alert-info">No parts match ' +
+                    '&ldquo;' + this.treeSearch +
+                    '&rdquo; in any BOM.</div></td></tr>';
+            }
+            this.$('.mpp-tree-body').html(html + '</tbody></table>');
+            if (skipped) {
+                this.displayNotification({
+                    title: _t('Partial results'),
+                    message: _t('Some matches failed to load.') +
+                        ' (' + skipped + ')',
+                    type: 'warning',
+                });
+            }
+        },
+
+        _matchRowHtml: function (m) {
+            var r = this._matchRow(m);
+            if (!r) return '';
+            var uid = (m.group_key || '') + ':' +
+                (m.path_ids || []).join('/');
+            var trail = (m.trail || []).slice(0, -1).map(function (t) {
+                return (t.code ? '[' + t.code + '] ' : '') +
+                    (t.name || '');
+            });
+            var trailHtml = '<span class="mpp-trail-group">' +
+                (m.group_title || m.group_key || '') + '</span>' +
+                (trail.length ?
+                    ' <span class="mpp-search-sep">&rsaquo;</span> ' +
+                    trail.join(
+                        ' <span class="mpp-search-sep">&rsaquo;</span> ')
+                    : '');
+            return this._rowHtml(r, m.level || 0, m.group_key, uid,
+                trailHtml, (m.path_ids || []).join('/'));
+        },
+
+        // Row dict behind a match: tops live in treeGroups, deeper
+        // rows in the (now expanded) parent cache.
+        _matchRow: function (m) {
+            var pid = m.product_id;
+            var grp = null;
+            this.treeGroups.forEach(function (g) {
+                if (g.key === m.group_key) grp = g;
+            });
+            if (!grp) return null;
+            var kids, k;
+            if (!m.level) {
+                kids = grp.items || [];
+            } else {
+                var parentUid = (m.group_key || '') + ':' +
+                    (m.path_ids || []).slice(0, -1).join('/');
+                var cached = this.subCache[parentUid];
+                if (!cached) return null;
+                kids = cached.items || [];
+            }
+            for (k = 0; k < kids.length; k++) {
+                if (kids[k].product_id === pid) return kids[k];
+            }
+            return null;
         },
 
         _onSort: function (ev) {
@@ -592,14 +705,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
         },
 
-        // Recursive expand: opens the WHOLE forest, not just level 1.
-        // Missing sub-BOMs are fetched breadth-first; cycle leaves are
-        // never expanded; depth/node guards stop runaway trees. One
-        // failed branch warns but the rest still opens and renders
-        // (previously a single RPC error rejected the chain, render
-        // never ran, and the button looked completely dead).
+        // Recursive expand: opens the WHOLE forest down to the last
+        // level, not just level 1. Iterative promise pump (no sync
+        // recursion, so deep cached trees cannot overflow the stack);
+        // every continuation runs in a .then, the button shows live
+        // "Expanding x/y" progress, and the tree re-renders every 10
+        // nodes so the page never looks dead. One failed branch warns
+        // but the rest still opens and renders.
         _onExpandAll: function () {
             var self = this;
+            if (this._expanding) return;
             if (!this.summary || !this.treeGroups.length) {
                 this.displayNotification({
                     title: _t('Warning'),
@@ -609,63 +724,35 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 return;
             }
             var btn = this.$('.msp-btn-expand-all');
+            var label = btn.html();
+            this._expanding = true;
             btn.prop('disabled', true);
             var pid = this._planId();
             var queue = [];
             var seen = {};
             var fails = 0;
             var fetched = 0;
+            var opened = 0;
+            var total = 0;
             this.treeGroups.forEach(function (g) {
                 (g.items || []).forEach(function (it) {
-                    if (!it.has_bom) return;
+                    if (!it.has_bom || it._is_cycle) return;
                     var uid = g.key + ':' + it.product_id;
                     if (seen[uid]) return;
                     seen[uid] = true;
+                    total++;
                     self.expanded[uid] = true;
                     queue.push({uid: uid, pid: it.product_id,
                                 net: self._rowNet(it), level: 1,
                                 group: g.key});
                 });
             });
-            var step = function () {
-                if (!queue.length || fetched >= 2000) {
-                    return Promise.resolve();
-                }
-                var t = queue.shift();
-                if (t.level > 10) return step();
-                var enqueue = function (items) {
-                    (items || []).forEach(function (c) {
-                        if (!c.has_bom || c._is_cycle) return;
-                        var cuid = t.uid + '/' + c.product_id;
-                        if (seen[cuid]) return;
-                        seen[cuid] = true;
-                        self.expanded[cuid] = true;
-                        queue.push({uid: cuid, pid: c.product_id,
-                                    net: self._rowNet(c),
-                                    level: t.level + 1,
-                                    group: t.group});
-                    });
-                    return step();
-                };
-                var cached = self.subCache[t.uid];
-                if (cached) return enqueue(cached.items);
-                fetched++;
-                return self._rpcPlan('get_sub_bom_cost',
-                    [t.pid, t.net, pid || false]).then(function (res) {
-                    var items = (res && res.items) || [];
-                    self._markCycles(t.uid, items);
-                    self.subCache[t.uid] = {
-                        items: items, level: t.level,
-                        groupKey: t.group,
-                    };
-                    return enqueue(items);
-                }, function () {
-                    fails++;
-                    return step();
-                });
-            };
-            step().then(function () {
+            // Hidden groups would swallow the opened rows.
+            this.collapsedGroups = {};
+            var finish = function () {
+                self._expanding = false;
                 btn.prop('disabled', false);
+                btn.html(label);
                 self._renderTree();
                 if (fails) {
                     self.displayNotification({
@@ -673,14 +760,87 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         message: _t('Some sub-BOMs failed to load.') + ' (' + fails + ')',
                         type: 'warning',
                     });
+                } else if (fetched >= 2000) {
+                    self.displayNotification({
+                        title: _t('Expand capped'),
+                        message: _t('Stopped after 2000 sub-BOM loads; deeper levels may stay closed.'),
+                        type: 'warning',
+                    });
                 }
-            }, function () {
-                btn.prop('disabled', false);
-                self._renderTree();
-            });
+            };
+            if (!total) {
+                finish();
+                this.displayNotification({
+                    title: _t('Nothing to expand'),
+                    message: _t('No expandable sub-BOM rows in this plan.'),
+                    type: 'warning',
+                });
+                return;
+            }
+            var progress = function () {
+                btn.html('<i class="fa fa-spinner fa-spin mr-1"></i>' +
+                    _t('Expanding') + ' ' + opened + '/' + total);
+            };
+            progress();
+            var pump = function () {
+                if (!queue.length || fetched >= 2000) {
+                    return Promise.resolve();
+                }
+                var t = queue.shift();
+                var p;
+                if (t.level > 10) {
+                    p = Promise.resolve(null);
+                } else if (self.subCache[t.uid]) {
+                    p = Promise.resolve(self.subCache[t.uid].items);
+                } else {
+                    fetched++;
+                    p = self._rpcPlan('get_sub_bom_cost',
+                        [t.pid, t.net, pid || false]).then(
+                        function (res) {
+                            var items = (res && res.items) || [];
+                            self._markCycles(t.uid, items);
+                            self.subCache[t.uid] = {
+                                items: items, level: t.level,
+                                groupKey: t.group,
+                            };
+                            return items;
+                        }, function () {
+                            fails++;
+                            return null;
+                        });
+                }
+                // Every continuation runs in a .then: the stack
+                // unwinds each step, whatever the tree size.
+                return p.then(function (items) {
+                    (items || []).forEach(function (c) {
+                        if (!c.has_bom || c._is_cycle) return;
+                        var cuid = t.uid + '/' + c.product_id;
+                        if (seen[cuid]) return;
+                        seen[cuid] = true;
+                        total++;
+                        self.expanded[cuid] = true;
+                        queue.push({uid: cuid, pid: c.product_id,
+                                    net: self._rowNet(c),
+                                    level: t.level + 1,
+                                    group: t.group});
+                    });
+                    opened++;
+                    progress();
+                    if (opened % 10 === 0) self._renderTree();
+                }).then(pump);
+            };
+            pump().then(finish, finish);
         },
 
         _onCollapseAll: function () {
+            if (this._expanding) {
+                this.displayNotification({
+                    title: _t('Please wait'),
+                    message: _t('Expand All is still running.'),
+                    type: 'warning',
+                });
+                return;
+            }
             this.expanded = {};
             this._renderTree();
         },
@@ -821,16 +981,23 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return 'fa-sort';
         },
 
-        _rowHtml: function (r, level, groupKey, uid) {
+        _rowHtml: function (r, level, groupKey, uid, filterTrail,
+                filterPath) {
             var self = this;
             var lvl = Math.min(level, 5);
             var hasKids = !!r.has_bom && !r._is_cycle;
             var isOpen = !!this.expanded[uid];
             var net = this._rowNet(r);
-            var prodCls = hasKids ? 'cursor-pointer msp-clickable-prod' : '';
+            var filterMode = !!filterTrail;
+            var prodCls = (!filterMode && hasKids) ?
+                'cursor-pointer msp-clickable-prod' : '';
             var prodTitle = hasKids ? 'Click to show BOM components' : '';
             var toggle;
-            if (hasKids) {
+            if (filterMode) {
+                toggle = '<span class="msp-level-badge ' +
+                    (level > 0 ? 'msp-lvl-' + lvl : '') + ' mr-1">' +
+                    (level > 0 ? 'L' + level : 'TOP') + '</span>';
+            } else if (hasKids) {
                 toggle = '<button type="button" class="btn btn-sm btn-link msp-btn-sub-bom p-0 mr-1 text-primary"' +
                     ' data-uid="' + uid + '" data-pid="' + r.product_id + '"' +
                     ' data-net="' + net + '" data-level="' + level + '"' +
@@ -870,13 +1037,22 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<span class="prod-code' +
                 (level > 0 ? ' sub-prod-code' : '') + '">[' + r.code +
                 ']</span> ' : '') +
-                '<span class="prod-name ' + prodCls + '"' +
-                (hasKids ? ' data-uid="' + uid + '" data-pid="' +
-                    r.product_id + '" data-net="' + net +
-                    '" data-level="' + level + '" data-group="' + groupKey +
-                    '"' : '') +
-                (prodTitle ? ' title="' + prodTitle + '"' : '') + '>' +
+                '<span class="prod-name ' + prodCls +
+                (filterMode ? ' mpp-match-jump' : '') + '"' +
+                (filterMode ?
+                    ' data-path="' + (filterPath || '') +
+                    '" data-group="' + groupKey + '"' +
+                    ' title="Show in tree"' :
+                    (hasKids ? ' data-uid="' + uid + '" data-pid="' +
+                        r.product_id + '" data-net="' + net +
+                        '" data-level="' + level + '" data-group="' +
+                        groupKey + '"' : '') +
+                    (prodTitle ? ' title="' + prodTitle + '"' : '')) +
+                '>' +
                 (r.name || '') + '</span>' +
+                (filterMode ?
+                    '<div class="mpp-match-trail">' + filterTrail +
+                    '</div>' : '') +
                 (hasKids ? ' <span class="badge badge-light text-muted border ml-1" ' +
                     'style="font-size:0.65rem;" title="Has Sub-Assembly BOM">BOM</span>' : '') +
                 (level > 0 ?
@@ -1009,6 +1185,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<div class="alert alert-info">Calculate the tree first (Tab 1).</div>');
                 return;
             }
+            if (this.treeSearch && this.treeSearchDone) {
+                this._renderFilter();
+                return;
+            }
             var html = '<table class="msp-table">';
             html += this._theadHtml() + '<tbody>';
             this.treeGroups.forEach(function (g) {
@@ -1041,7 +1221,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     html += out.join('');
                 }
             });
-            this.$('.mpp-tree-body').html(html + '</tbody></table>');
+            var banner = this.treeSearchLoading ?
+                '<div class="mpp-filter-count">' +
+                '<i class="fa fa-spinner fa-spin mr-1"></i>' +
+                'Searching all BOMs...</div>' : '';
+            this.$('.mpp-tree-body').html(banner + html +
+                '</tbody></table>');
         },
 
         _collectExportRows: function () {

@@ -86,7 +86,7 @@
                     <div class="msp-table-search">
                         <div class="search-input-box">
                             <i class="fa fa-search"></i>
-                            <input type="text" class="mpp-tree-search" placeholder="Search part code or name..."/>
+                            <input type="text" class="mpp-tree-search" placeholder="Search part code or name (all BOMs)..."/>
                         </div>
                         <div class="table-legend">
                             <span><span class="dot-ok"></span> OK = covered by stock</span>
@@ -106,7 +106,6 @@
                             </button>
                         </div>
                     </div>
-                    <div class="mpp-search-results"/>
                     <div class="table-responsive mpp-tree-body"/>
                 </div>
                 <button class="btn btn-primary mt-2 mpp-btn-to-suppliers">
