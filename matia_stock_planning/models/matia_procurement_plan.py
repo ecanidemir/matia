@@ -1709,6 +1709,163 @@ class MatiaProcurementPlan(models.Model):
         items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
         return {'items': items}
 
+    @api.model
+    def search_tree(self, plan_id, query):
+        """Search every BOM tree of the plan, return matches with parents.
+
+        The Tab 2 filter only sees already-expanded rows, so a part
+        buried in a collapsed subtree (e.g. E1CBRN06 in 4 BOMs) is
+        invisible until its parents are opened. This walks the full
+        forest server-side (same BOM resolution as get_sub_bom_cost)
+        and returns each hit with its parent trail plus the id path
+        the client needs to expand-and-scroll to it.
+        @param plan_id Plan ID from create_plan.
+        @param query Case-insensitive substring on code or name.
+        @return {'matches': [...], 'total': int}, capped at 100 hits.
+            Each match: product_id/code/name/level, group_key,
+            group_title, top_pid/top_code, trail [{code, name} top
+            first, match last], path_ids [top..match] for expansion.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        q = (query or '').strip().lower()
+        if len(q) < 2:
+            return {'matches': [], 'total': 0}
+        try:
+            targets = json.loads(plan.target_json or '{}')
+        except ValueError:
+            targets = {}
+        try:
+            targets = {int(k) for k, v in targets.items()
+                       if float(v or 0) > 0}
+        except (TypeError, ValueError):
+            return {'matches': [], 'total': 0}
+        kit_cfgs = _mpp_find_kit_boms(env_sudo)
+        group_title = {'base': 'Base', 'screws': 'Screws',
+                       'outdoor': 'Outdoor', 'seat': 'Seat'}
+        matches = []
+        cap = 100
+        prod_cache = {}
+        bom_cache = {}
+
+        def _info(pid):
+            hit = prod_cache.get(pid)
+            if hit is None:
+                try:
+                    pr = env_sudo['product.product'].browse(int(pid))
+                    hit = {'code': pr.default_code or '',
+                           'name': pr.display_name or ''} \
+                        if pr.exists() else {'code': '', 'name': ''}
+                except Exception:
+                    hit = {'code': '', 'name': ''}
+                prod_cache[pid] = hit
+            return hit
+
+        def _kids_bom(pid):
+            if pid in bom_cache:
+                return bom_cache[pid]
+            bom = False
+            try:
+                prod = env_sudo['product.product'].browse(int(pid))
+                if prod.exists():
+                    bom = env_sudo['mrp.bom'].search(
+                        [('product_tmpl_id', '=',
+                          prod.product_tmpl_id.id),
+                         ('product_id', '=', prod.id)], limit=1)
+                    if not bom:
+                        bom = env_sudo['mrp.bom'].search(
+                            [('product_tmpl_id', '=',
+                              prod.product_tmpl_id.id)], limit=1)
+            except Exception:
+                bom = False
+            bom_cache[pid] = bom
+            return bom
+
+        def _hit(pid):
+            info = _info(pid)
+            return q in (info['code'] or '').lower() or \
+                q in (info['name'] or '').lower()
+
+        def _walk(pid, ancestors, depth, ctx):
+            if len(matches) >= cap or depth > 10 or pid in ancestors:
+                return
+            bom = _kids_bom(pid)
+            if not bom:
+                return
+            try:
+                lines = bom.bom_line_ids
+            except Exception:
+                return
+            for bl in lines:
+                cpid = bl.product_id.id
+                chain = ancestors + [pid]
+                if _hit(cpid):
+                    info = _info(cpid)
+                    trail = []
+                    for apid in chain + [cpid]:
+                        ainfo = _info(apid)
+                        trail.append({'code': ainfo['code'],
+                                      'name': ainfo['name']})
+                    matches.append({
+                        'product_id': cpid,
+                        'code': info['code'],
+                        'name': info['name'],
+                        'level': depth + 1,
+                        'group_key': ctx['group_key'],
+                        'group_title': ctx['group_title'],
+                        'top_pid': ctx['top_pid'],
+                        'top_code': ctx['top_code'],
+                        'top_name': ctx['top_name'],
+                        'path_ids': chain + [cpid],
+                        'trail': trail,
+                    })
+                    if len(matches) >= cap:
+                        return
+                _walk(cpid, chain, depth + 1, ctx)
+                if len(matches) >= cap:
+                    return
+
+        try:
+            for kit in kit_cfgs:
+                gkey = kit['key']
+                gtitle = group_title.get(gkey, gkey)
+                for bl in kit['bom'].bom_line_ids:
+                    tpid = bl.product_id.id
+                    if tpid not in targets:
+                        continue
+                    tinfo = _info(tpid)
+                    if _hit(tpid):
+                        matches.append({
+                            'product_id': tpid,
+                            'code': tinfo['code'],
+                            'name': tinfo['name'],
+                            'level': 0,
+                            'group_key': gkey,
+                            'group_title': gtitle,
+                            'top_pid': tpid,
+                            'top_code': tinfo['code'],
+                            'top_name': tinfo['name'],
+                            'path_ids': [tpid],
+                            'trail': [{'code': tinfo['code'],
+                                       'name': tinfo['name']}],
+                        })
+                        if len(matches) >= cap:
+                            break
+                    _walk(tpid, [], 0, {
+                        'group_key': gkey, 'group_title': gtitle,
+                        'top_pid': tpid, 'top_code': tinfo['code'],
+                        'top_name': tinfo['name']})
+                    if len(matches) >= cap:
+                        break
+                if len(matches) >= cap:
+                    break
+        except Exception as exc:
+            _logger.warning('MPP search_tree failed for plan %s: %s',
+                            plan_id, exc)
+        return {'matches': matches, 'total': len(matches)}
+
     # ------------------------------------------------------------------
     # Tab 3: supplier summary + MO creation (fulfillment, writes POs/MOs).
     # Subcontract chain: subcontract lines are ordered from their seller

@@ -106,6 +106,7 @@
                             </button>
                         </div>
                     </div>
+                    <div class="mpp-search-results"/>
                     <div class="table-responsive mpp-tree-body"/>
                 </div>
                 <button class="btn btn-primary mt-2 mpp-btn-to-suppliers">
