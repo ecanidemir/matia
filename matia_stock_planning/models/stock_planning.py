@@ -159,7 +159,21 @@ class MatiaStockPlanning(models.AbstractModel):
 
             lines_list = []
             if bom:
-                for line in bom.bom_line_ids:
+                # Batch has_bom lookup: one query instead of one per line.
+                # Same semantics as bool(p.product_tmpl_id.bom_ids) under
+                # this env (active_test=False, no extra domain).
+                bom_lines = bom.bom_line_ids
+                tmpl_ids = list({l.product_id.product_tmpl_id.id for l in bom_lines})
+                tmpl_with_bom = set()
+                if tmpl_ids:
+                    for br in env_sudo['mrp.bom'].search_read(
+                        [('product_tmpl_id', 'in', tmpl_ids)],
+                        ['product_tmpl_id']
+                    ):
+                        t = br.get('product_tmpl_id')
+                        if t:
+                            tmpl_with_bom.add(t[0])
+                for line in bom_lines:
                     p = line.product_id
                     all_product_ids.add(p.id)
                     lines_list.append({
@@ -169,7 +183,7 @@ class MatiaStockPlanning(models.AbstractModel):
                         'display_name': p.display_name or p.name,
                         'bom_qty': line.product_qty or 1.0,
                         'uom_name': _UOM_NAME_MAP.get(line.product_uom_id.name or '', line.product_uom_id.name or 'Units'),
-                        'has_bom': bool(p.product_tmpl_id.bom_ids),
+                        'has_bom': p.product_tmpl_id.id in tmpl_with_bom,
                     })
 
             groups_data.append({
@@ -381,11 +395,23 @@ class MatiaStockPlanning(models.AbstractModel):
                 elif cname.startswith('WHUS/Stock') and include_usa:
                     selected_loc_ids.append(loc.id)
 
-        # 2. Extract lines
+        # 2. Extract lines (has_bom batched: one query, not one per line)
         lines_list = []
         sub_product_ids = set()
 
-        for line in bom.bom_line_ids:
+        bom_lines = bom.bom_line_ids
+        tmpl_ids = list({l.product_id.product_tmpl_id.id for l in bom_lines})
+        tmpl_with_bom = set()
+        if tmpl_ids:
+            for br in env_sudo['mrp.bom'].search_read(
+                [('product_tmpl_id', 'in', tmpl_ids)],
+                ['product_tmpl_id']
+            ):
+                t = br.get('product_tmpl_id')
+                if t:
+                    tmpl_with_bom.add(t[0])
+
+        for line in bom_lines:
             p = line.product_id
             sub_product_ids.add(p.id)
             sub_qty = float(line.product_qty or 1.0)
@@ -401,7 +427,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 'parent_bom_qty': parent_bom_qty,
                 'bom_qty': eff_clean,
                 'uom_name': _UOM_NAME_MAP.get(line.product_uom_id.name or '', line.product_uom_id.name or 'Units'),
-                'has_bom': bool(p.product_tmpl_id.bom_ids),
+                'has_bom': p.product_tmpl_id.id in tmpl_with_bom,
             })
 
         # 3. Read stock across all companies

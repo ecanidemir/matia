@@ -616,7 +616,15 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         _onExpandAllBoms: function (ev) {
             ev.preventDefault();
             var self = this;
+            // Re-entry guard: a second click while expanding would stack
+            // duplicate RPC chains for the same rows.
+            if (self._expanding) return;
+            self._expanding = true;
             self._expandFails = 0;
+            var $expandBtn = self.$('.msp-btn-expand-all');
+            var expandBtnHtml = $expandBtn.html();
+            $expandBtn.prop('disabled', true);
+            $expandBtn.html('<i class="fa fa-spinner fa-spin mr-1"></i> Expanding...');
 
             // Expand one currently-visible level per pass: newly rendered rows
             // expose the next level's buttons for the following pass.
@@ -688,10 +696,19 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
             var chain = Promise.resolve();
             for (var d = 0; d < self.MAX_SUB_DEPTH; d++) {
-                chain = chain.then(expandOneLevel);
+                // IIFE binds the pass number so the progress label counts up.
+                (function (pass) {
+                    chain = chain.then(function () {
+                        $expandBtn.html('<i class="fa fa-spinner fa-spin mr-1"></i> Expanding... (' + (pass + 1) + '/' + self.MAX_SUB_DEPTH + ')');
+                        return expandOneLevel();
+                    });
+                })(d);
             }
 
             chain.then(function () {
+                self._expanding = false;
+                $expandBtn.prop('disabled', false);
+                $expandBtn.html(expandBtnHtml);
                 if (self._expandFails) {
                     self.displayNotification({
                         title: _t("Partially Expanded"),
@@ -706,6 +723,17 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                         type: 'success'
                     });
                 }
+            }, function () {
+                // Safety net: a synchronous throw mid-chain must never
+                // leave the button stuck in Expanding state.
+                self._expanding = false;
+                $expandBtn.prop('disabled', false);
+                $expandBtn.html(expandBtnHtml);
+                self.displayNotification({
+                    title: _t("Expand Failed"),
+                    message: _t("An unexpected error stopped the expansion."),
+                    type: 'danger'
+                });
             });
         },
 

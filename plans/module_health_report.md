@@ -157,6 +157,27 @@ grup kontrolü; `mrp.bom.search` N+1'leri.
 
 **Doğrulama:** PY-OK, JS1-OK, JS2-OK, XML-OK.
 
+## CAPACITY TURU (2026-10-06, kullanıcı onayı)
+
+Sıra: veri kalitesi teyidi → üst-BOM toplu sorgu → derin-expand.
+NCR'lar hariç tutulmaya devam edecek (kullanıcı kararı).
+
+**Canlı teyit (read-only):** negatif `stock.quant` 3752 (önce 3745,
++7 artmış); NCR lokasyonlarındaki negatif sayısı 0 → 3752 adedin
+tamamı capacity hesabına giren lokasyonlarda, plan sayılarını
+etkiliyor. NCR TR 333 (`NCR Alanı`, WHTR altı, aktif) + US 332
+(`NCR Storage`, WHUS altı, aktif) doğrulandı — hariç tutma kuralı
+geçerli. Not: sayım temizliği yapılmadan plan güvenilmez (depo
+operasyonu, kod işi değil).
+
+**Kod:**
+- `has_bom` N+1 → tek `search_read` (iki metotta da): satır başına
+  `N` sorgu kalktı; anlambilim birebir (`active_test=False`, ek
+  domain yok).
+- Expand-all: tekrar-giriş kilidi (çift tıklama yinelenen RPC
+  zinciri kuruyordu), butonda `Expanding... (X/Y)` ilerlemesi,
+  zincir-ortası istisnada butonu kilitli bırakmayan güvenlik ağı.
+
 ## PERFORMANS PAKETİ (2026-10-06, kullanıcı seçimi)
 
 Kullanıcı 4 paketten "Performans paketi"ni seçti. JS API değişmedi;

@@ -179,6 +179,12 @@
 - Canli MCP bagli ama `matia.procurement.*` model yok (Fault 2) -> canli alan dogrulamasi upgrade sonrasina bloklu.
 - DokunulMAyanlar: capacity menu `group_user` (export kilidi bozardi); location/env tekrari (farkli include mantigi); unlink iz-silme; RPC grup kontrolu; `mrp.bom.search` N+1'leri.
 
+## Capacity Turu (2026-10-06)
+
+- Negatif quant 3752 (once 3745); NCR icinde negatif 0 -> tamami plana giren lokasyonlarda. NCR TR 333 + US 332 aktif ve kural gecerli; NCR'lar haric tutulmaya devam (kullanici karari).
+- `has_bom` satir-basi `bom_ids` erisimi N+1'di; tek `search_read` ile toplulastirildi (iki metot). Kural: `active_test=False` env + ek domainsiz batch, anlambilim birebir.
+- Expand-all cift tiklamada yinelenen RPC zinciri kuruyordu; `_expanding` kilidi + butonda `(X/Y)` ilerleme + hata guvenlik agi eklendi.
+
 ## Performans Paketi (2026-10-06)
 
 - `get_tree_with_cost` satirlar hedeflerle uyumluysa yeniden kurulumu atlar (`built_target_json` alani). Kural: ongorulebilir RPC metodlarinda girdi-hash'i sakla, ayni girdiyle gelen cagrida salt-okunur sun.
