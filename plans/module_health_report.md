@@ -99,8 +99,9 @@ Bilinçli olarak DEĞİŞTİRİLMEYENLER (insan kararı gerekir):
 
 ## İNSAN ADIMLARI (sırayla)
 
-1. `node --check` (tüm JS) + XML parse doğrulamasını çalıştırın
-   (bu ortamda yapılmadı).
+1. ~~`node --check` (tüm JS) + XML parse doğrulamasını çalıştırın
+   (bu ortamda yapılmadı).~~ YAPILDI — PY-OK (5 dosya), JS1-OK,
+   JS2-OK, XML-OK (tüm xml, xml.dom ile).
 2. ~~`@odoo-reviewer` ile salt-okunur final denetimi isteyin.~~ YAPILDI
    (yukarıdaki bölüm); kapatılmayan maddeler bilinçli erteleme.
 3. Staging yok: değişiklikleri canlıya almadan önce odoobulut
@@ -113,3 +114,45 @@ Bilinçli olarak DEĞİŞTİRİLMEYENLER (insan kararı gerekir):
 5. Push/merge kararı + branch temizliği.
 6. Kalıcı bulgular `docs/discovery.md` sonuna eklenecek (henüz
    eklenmedi).
+
+## TAM TARAMA TURU (2026-10-06, capacity dahil)
+
+Kullanıcı isteği: capacity dahil her dosyaya bakılması, bakılmamış
+yer kalmaması, tüm iyileştirmelerin yapılması, çalışan yerin
+bozulmaması. Bu turda capacity yasağı kaldırıldı.
+
+**Düzeltilenler:**
+- procurement `get_sub_bom_cost` `_is_cycle` göndermiyordu →
+  client uid yolundan cycle türeten `_markCycles` helper
+  (`procurement_plan.js`); capacity'deki path kontrolüyle aynı
+  mantık. Döngüsel BOM'da sınırsız derinleşme riski kapandı.
+- Capacity refresh `_fetchPlanningData` hatayı yutup success toast
+  gösteriyordu → `_lastFetchOk` bayrağı, hatada toast yok.
+- Capacity expand-all catch sessiz + final toast hep success →
+  `_expandFails` sayacı + kısmi-başarı uyarısı.
+- Search input'a 150ms debounce (`stock_planning.js`).
+- Ölü sort `code` dalı silindi (capacity `th` yok).
+- Dinamik `_t` concat 2 nokta düzeltildi (`_onFill`, capacity
+  `_onSort`).
+- Ölü `this.targets` yazımları silindi (okuyan yok).
+- Capacity model: `_MSP_TR/US_COMPANY_ID` + `_MSP_FLOAT_EPS`
+  sabitleri; ölü `if max_dev<0` guard ×2 silindi; `ceil`lere
+  epsilon (tam sayılar aynı, float gürültüsü +1'i önlenir).
+- `main.py`: bare except ×2 → `(TypeError, ValueError)`; `need`
+  dalında bozuk girişte `val=0` fallback (xlsxwriter çöküyordu);
+  `json.loads` koruması. `procurement_export.py`: `json.loads`
+  koruması.
+- SCSS ölü temizlik: procurement scss'ten capacity sınıflarını
+  kullanan ağacın kopya stilleri; capacity scss'ten ebeveyni
+  olmayan `.msp-add-col-input` + mobil `.msp-control-bar` bloğu.
+- Template yorumu `clamped to 5` → 8 (JS + SCSS 1-8 ile tutarlı).
+
+**Bilinçli dokunulmayanlar (risk):** capacity menü `group_user`
+(export'a grup kilidi eklenmedi — bozardı); location/env kurulum
+tekrarı (iki metot farklı include mantığı); unlink iz-silme; RPC
+grup kontrolü; `mrp.bom.search` N+1'leri.
+
+**Canlı notu:** MCP bağlı ama `matia.procurement.*` model yok
+(Fault 2) — canlı alan doğrulaması upgrade'e kadar bloklu.
+
+**Doğrulama:** PY-OK, JS1-OK, JS2-OK, XML-OK.

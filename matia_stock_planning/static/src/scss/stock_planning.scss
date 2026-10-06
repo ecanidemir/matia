@@ -746,12 +746,6 @@
         }
     }
 
-    /* Modal / Alert Prompt */
-    .msp-add-col-input {
-        max-width: 140px;
-        display: inline-block;
-    }
-
     /* Sub-assembly BOM Accordion & Table Rows */
     .msp-bom-spacer {
         display: inline-flex;
@@ -975,35 +969,6 @@
                             }
                         }
                     }
-                }
-            }
-        }
-
-        .msp-control-bar {
-            padding: 0.65rem 0.75rem;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-
-            .msp-location-group,
-            .msp-button-group {
-                flex-wrap: wrap;
-                width: 100%;
-                gap: 0.35rem;
-            }
-
-            .btn {
-                font-size: 0.78rem;
-                padding: 0.3rem 0.55rem;
-            }
-
-            .msp-add-col-inline {
-                flex-wrap: wrap;
-                width: 100%;
-                gap: 0.35rem;
-
-                input.msp-col-target-input {
-                    width: 70px;
-                    font-size: 0.8rem;
                 }
             }
         }

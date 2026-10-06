@@ -31,7 +31,10 @@ class MatiaProcurementPlanController(http.Controller):
         # Admin group only
         if not request.env.user.has_group('base.group_system'):
             return request.not_found()
-        data = json.loads(data_json)
+        try:
+            data = json.loads(data_json)
+        except (TypeError, ValueError):
+            return request.not_found()
         plan_name = data.get('plan_name', 'Plan')
         kits = data.get('kits', [])
         rolled_total = data.get('rolled_total', 0)

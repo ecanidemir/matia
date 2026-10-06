@@ -106,11 +106,13 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             }).then(function (result) {
                 self.groups = result.groups || [];
                 self.summary = result.summary || {};
+                self._lastFetchOk = true;
                 // Apply current sort state after fresh data
                 if (self.sort_col) {
                     self._applySortToGroups();
                 }
             }).catch(function (error) {
+                self._lastFetchOk = false;
                 self.displayNotification({
                     title: _t("Data Loading Error"),
                     message: error.message || _t("An error occurred while fetching stock data."),
@@ -150,9 +152,6 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     if (col === 'name') {
                         aVal = (a.product_name || '').toLowerCase();
                         bVal = (b.product_name || '').toLowerCase();
-                    } else if (col === 'code') {
-                        aVal = (a.product_code || '').toLowerCase();
-                        bVal = (b.product_code || '').toLowerCase();
                     } else if (col === 'bom_qty') {
                         aVal = parseFloat(a.bom_qty) || 0;
                         bVal = parseFloat(b.bom_qty) || 0;
@@ -198,11 +197,13 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.expanded_boms = {};
             this._fetchPlanningData().then(function () {
                 self._updateView();
-                self.displayNotification({
-                    title: _t("Success"),
-                    message: _t("Stock data updated successfully."),
-                    type: 'success'
-                });
+                if (self._lastFetchOk !== false) {
+                    self.displayNotification({
+                        title: _t("Success"),
+                        message: _t("Stock data updated successfully."),
+                        type: 'success'
+                    });
+                }
             });
         },
 
@@ -299,7 +300,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             if (this.dynamic_targets.indexOf(target) !== -1) {
                 this.displayNotification({
                     title: _t("Already Added"),
-                    message: _t(target + " Devices target column is already in the table."),
+                    message: target + ' ' +
+                        _t('Devices target column is already in the table.'),
                     type: 'info'
                 });
                 inputEl.val('');
@@ -386,7 +388,16 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         // ─── Search (includes sub-BOM rows) ─────────────────────────────────────
 
         _onSearchInput: function (ev) {
-            var query = $(ev.currentTarget).val().toLowerCase().trim();
+            var self = this;
+            var rawQuery = $(ev.currentTarget).val();
+            clearTimeout(this._searchTimer);
+            this._searchTimer = setTimeout(function () {
+                self._applySearchFilter(rawQuery);
+            }, 150);
+        },
+
+        _applySearchFilter: function (rawQuery) {
+            var query = (rawQuery || '').toLowerCase().trim();
 
             if (!query) {
                 this.$('.item-row').show();
@@ -605,6 +616,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         _onExpandAllBoms: function (ev) {
             ev.preventDefault();
             var self = this;
+            self._expandFails = 0;
 
             // Expand one currently-visible level per pass: newly rendered rows
             // expose the next level's buttons for the following pass.
@@ -665,6 +677,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                             j.$btn.removeClass('expanded');
                         }
                     }).catch(function () {
+                        self._expandFails = (self._expandFails || 0) + 1;
                         j.$btn.removeClass('expanded');
                         j.$btn.find('.msp-bom-arrow').removeClass('fa-spinner fa-spin').addClass('fa-caret-right');
                     });
@@ -679,11 +692,20 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             }
 
             chain.then(function () {
-                self.displayNotification({
-                    title: _t("Expanded"),
-                    message: _t("All available sub-assembly BOMs have been expanded."),
-                    type: 'success'
-                });
+                if (self._expandFails) {
+                    self.displayNotification({
+                        title: _t("Partially Expanded"),
+                        message: self._expandFails + ' ' +
+                            _t('sub-assemblies could not be loaded.'),
+                        type: 'warning'
+                    });
+                } else {
+                    self.displayNotification({
+                        title: _t("Expanded"),
+                        message: _t("All available sub-assembly BOMs have been expanded."),
+                        type: 'success'
+                    });
+                }
             });
         },
 

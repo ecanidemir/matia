@@ -169,3 +169,13 @@
 - ACL: procurement modelleri yalniz `base.group_system` (admin-only tasarim); dogrudan RPC cagrilari grup kontrolsuz sudo ile calisir — bilinclilik karari, raporda (`plans/module_health_report.md`).
 - Push YOK, 4 faz commiti branch'te; deploy + upgrade insan adimi.
 
+## Tam Tarama Turu (2026-10-06, capacity dahil)
+
+- Procurement `get_sub_bom_cost` `_is_cycle` gondermiyordu; client `_markCycles` helper ile uid yolundan cycle turetiyor (capacity'deki path kontrolunun aynisi). Kural: server cycle bayragi gondermiyorsa client uid-yolu ile ayni-dal tekrarini yakala.
+- Capacity `_fetchPlanningData` hatayi yutup success toast gosteriyordu; `_lastFetchOk` bayragi eklendi. Kural: toast'tan once sonuc bayragini kontrol et.
+- Capacity model sabitleri: `_MSP_TR/US_COMPANY_ID`, `_MSP_FLOAT_EPS=1e-9` (ceil oncesi float gurultusu +1'i onler; tam sayilar degismez).
+- `controllers/main.py` bare except -> `(TypeError, ValueError)`; `need` dalinda bozuk giriste `val=0` (xlsxwriter cokuyordu); `json.loads` korumasizdi (2 controller).
+- SCSS olu temizlik: procurement agaci capacity siniflarini kullaniyor, kopya stiller silindi; `.msp-add-col-input` + mobil `.msp-control-bar` blogunun ebeveyni yoktu.
+- Canli MCP bagli ama `matia.procurement.*` model yok (Fault 2) -> canli alan dogrulamasi upgrade sonrasina bloklu.
+- DokunulMAyanlar: capacity menu `group_user` (export kilidi bozardi); location/env tekrari (farkli include mantigi); unlink iz-silme; RPC grup kontrolu; `mrp.bom.search` N+1'leri.
+

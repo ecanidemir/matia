@@ -24,36 +24,8 @@
         p { margin: 0; font-size: 0.85rem; color: #fed7aa; }
     }
 
-    .mpp-step {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 1rem 1.25rem;
-        margin-bottom: 1rem;
-    }
-
-    .mpp-tabs .btn { margin-right: 0.35rem; }
     .mpp-qty { max-width: 110px; }
 
-    .mpp-entry-toolbar .btn, .mpp-tree-toolbar .btn { margin-left: 0.35rem; }
+    .mpp-entry-toolbar .btn { margin-left: 0.35rem; }
     .mpp-fill-n { margin: 0 0.35rem; }
-
-    .mpp-kit-group { margin-bottom: 1rem; }
-    .mpp-kit-header {
-        background: #f1f5f9;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 0.4rem 0.6rem;
-        margin-bottom: 0.4rem;
-    }
-    .mpp-tree-table { font-size: 0.85rem; }
-    .mpp-part { display: flex; align-items: flex-start; gap: 0.25rem; }
-    .mpp-tree-toggle { cursor: pointer; color: #7c2d12; font-weight: 700; }
-    .mpp-tree-leaf { color: #cbd5e1; }
-    .mpp-indent {
-        display: inline-block; width: 1.25rem;
-        border-left: 2px solid #e2e8f0; margin-right: 0.15rem;
-    }
-    .mpp-child-row td { background-color: #fffbeb; }
-    .mpp-sort { color: inherit; text-decoration: underline dotted; }
 }

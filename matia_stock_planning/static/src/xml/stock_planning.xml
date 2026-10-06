@@ -380,7 +380,7 @@
     <t t-name="MatiaStockPlanning.SubBomRows">
         <t t-foreach="data.items" t-as="item">
             <!-- data-group passed from JS so collapse-all and search can filter by group -->
-            <!-- level starts at 1 for first sub-level; lvl is clamped to 5 for CSS classes -->
+            <!-- level starts at 1 for first sub-level; lvl is clamped to 8 for CSS classes -->
             <tr t-attf-class="item-row sub-bom-row sub-level-#{lvl}"
                 t-att-data-parent-id="parent_id"
                 t-att-data-parent-node="parent_node"

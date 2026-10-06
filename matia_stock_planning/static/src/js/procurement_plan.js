@@ -39,7 +39,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.plan = null;
             this.summary = null;
             this.treeGroups = [];
-            this.targets = {};
             this.expanded = {};
             this.subCache = {};
             this.collapsedGroups = {};
@@ -180,8 +179,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._renderEntry();
             this.displayNotification({
                 title: _t('Filled'),
-                message: _t('Quantities filled to ') + n +
-                    _t(' (TR+USA on-hand, reserves ignored).'),
+                message: n + ' ' +
+                    _t('units filled (TR+USA on-hand, reserves ignored).'),
                 type: 'success',
             });
         },
@@ -233,7 +232,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }).then(function (summary) {
                 self.summary = summary;
                 self.treeGroups = (summary && summary.tree_groups) || [];
-                self.targets = (summary && summary.targets) || {};
                 self.expanded = {};
                 self.subCache = {};
                 self.collapsedGroups = {};
@@ -295,6 +293,20 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._renderTree();
         },
 
+        // Marks child rows whose product already occurs on the expansion
+        // path as cycle leaves. Mirrors the server-side path guard so a
+        // circular BOM cannot be expanded forever from the cached rows.
+        _markCycles: function (uid, items) {
+            var seen = {};
+            (uid || '').split('/').forEach(function (seg) {
+                var parts = seg.split(':');
+                seen[parts[parts.length - 1]] = true;
+            });
+            (items || []).forEach(function (it) {
+                if (seen[String(it.product_id)]) it._is_cycle = true;
+            });
+        },
+
         _onSubBom: function (ev) {
             var self = this;
             var el = ev.currentTarget;
@@ -318,8 +330,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             this._rpcPlan('get_sub_bom_cost', [pid, net, this._planId()])
                 .then(function (res) {
+                    var items = (res && res.items) || [];
+                    self._markCycles(uid, items);
                     self.subCache[uid] = {
-                        items: (res && res.items) || [],
+                        items: items,
                         level: parseInt(el.dataset.level, 10) + 1 || 1,
                         groupKey: el.dataset.group,
                     };
@@ -351,8 +365,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     return self._rpcPlan('get_sub_bom_cost',
                         [t.it.product_id, net, pid || false]).then(
                         function (res) {
+                            var items = (res && res.items) || [];
+                            self._markCycles(t.uid, items);
                             self.subCache[t.uid] = {
-                                items: (res && res.items) || [],
+                                items: items,
                                 level: 1, groupKey: t.g.key,
                             };
                             self.expanded[t.uid] = true;

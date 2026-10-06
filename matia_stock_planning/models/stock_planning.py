@@ -19,6 +19,16 @@ _UOM_NAME_MAP = {
     'takım': 'Set',
 }
 
+# Company roots are independent (see docs/discovery.md): TR = 1, US = 2.
+_MSP_TR_COMPANY_ID = 1
+_MSP_US_COMPANY_ID = 2
+
+# Float-noise guard for display-only requirement math: e.g. 20 * 0.3 can
+# evaluate to 6.000000000001, which would push math.ceil one unit up and
+# wrongly show NEED. Subtracting eps keeps exact integers exact while
+# leaving genuine fractions untouched.
+_MSP_FLOAT_EPS = 1e-9
+
 class MatiaStockPlanning(models.AbstractModel):
     _name = 'matia.stock.planning'
     _description = 'Matia TekRMD Device Capacity and Stock Planning'
@@ -58,12 +68,12 @@ class MatiaStockPlanning(models.AbstractModel):
             cid = loc.company_id.id if loc.company_id else False
             is_ncr = 'NCR' in cname
 
-            if 'WHTR' in cname or cid == 1:
+            if 'WHTR' in cname or cid == _MSP_TR_COMPANY_ID:
                 if is_ncr:
                     tr_ncr_locs.append(loc.id)
                 elif cname.startswith('WHTR/Stock'):
                     tr_stock_locs.append(loc.id)
-            elif 'WHUS' in cname or cid == 2:
+            elif 'WHUS' in cname or cid == _MSP_US_COMPANY_ID:
                 if is_ncr:
                     usa_ncr_locs.append(loc.id)
                 elif cname.startswith('WHUS/Stock'):
@@ -226,8 +236,6 @@ class MatiaStockPlanning(models.AbstractModel):
                 # Maximum devices producible (based on available stock)
                 if b_qty > 0:
                     max_dev = math.floor(max(0.0, avail_qty) / b_qty)
-                    if max_dev < 0:
-                        max_dev = 0
                 else:
                     max_dev = 0
 
@@ -238,7 +246,7 @@ class MatiaStockPlanning(models.AbstractModel):
                     req_20_val = 0
                 else:
                     req_20_status = 'NEED'
-                    req_20_val = int(math.ceil(needed_20))
+                    req_20_val = int(math.ceil(needed_20 - _MSP_FLOAT_EPS))
 
                 # Dynamic columns
                 dynamic_needs = {}
@@ -251,7 +259,7 @@ class MatiaStockPlanning(models.AbstractModel):
                             'text': 'OK'
                         }
                     else:
-                        c_val = int(math.ceil(needed_target))
+                        c_val = int(math.ceil(needed_target - _MSP_FLOAT_EPS))
                         dynamic_needs[str(target)] = {
                             'status': 'NEED',
                             'val': c_val,
@@ -362,12 +370,12 @@ class MatiaStockPlanning(models.AbstractModel):
             cid = loc.company_id.id if loc.company_id else False
             is_ncr = 'NCR' in cname
 
-            if 'WHTR' in cname or cid == 1:
+            if 'WHTR' in cname or cid == _MSP_TR_COMPANY_ID:
                 if is_ncr and include_tr:
                     selected_ncr_ids.append(loc.id)
                 elif cname.startswith('WHTR/Stock') and include_tr:
                     selected_loc_ids.append(loc.id)
-            elif 'WHUS' in cname or cid == 2:
+            elif 'WHUS' in cname or cid == _MSP_US_COMPANY_ID:
                 if is_ncr and include_usa:
                     selected_ncr_ids.append(loc.id)
                 elif cname.startswith('WHUS/Stock') and include_usa:
@@ -444,8 +452,6 @@ class MatiaStockPlanning(models.AbstractModel):
 
             if b_qty > 0:
                 max_dev = math.floor(max(0.0, avail_qty) / b_qty)
-                if max_dev < 0:
-                    max_dev = 0
             else:
                 max_dev = 0
 
@@ -456,7 +462,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 req_20_val = 0
             else:
                 req_20_status = 'NEED'
-                req_20_val = int(math.ceil(needed_20))
+                req_20_val = int(math.ceil(needed_20 - _MSP_FLOAT_EPS))
 
             # Dynamic columns
             dynamic_needs = {}
@@ -469,7 +475,7 @@ class MatiaStockPlanning(models.AbstractModel):
                         'text': 'OK'
                     }
                 else:
-                    c_val = int(math.ceil(needed_target))
+                    c_val = int(math.ceil(needed_target - _MSP_FLOAT_EPS))
                     dynamic_needs[str(target)] = {
                         'status': 'NEED',
                         'val': c_val,

@@ -37,6 +37,7 @@ _MPP_KIT_BOMS = [
 
 _MPP_MAX_LEVEL = 10
 _MPP_TR_COMPANY_ID = 1
+_MPP_US_COMPANY_ID = 2
 
 
 def _mpp_env_sudo(self):
@@ -178,7 +179,7 @@ class MatiaProcurementPlan(models.Model):
                 [('usage', '=', 'internal')]):
             cname = loc.complete_name or ''
             cid = loc.company_id.id if loc.company_id else False
-            if ('WHUS' in cname or cid == 2) and 'NCR' not in cname \
+            if ('WHUS' in cname or cid == _MPP_US_COMPANY_ID) and 'NCR' not in cname \
                     and cname.startswith('WHUS/Stock'):
                 usa_locs.append(loc.id)
 

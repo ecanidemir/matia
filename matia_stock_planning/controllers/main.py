@@ -21,7 +21,10 @@ class MatiaStockPlanningController(http.Controller):
         if not data_json:
             return request.not_found()
 
-        data = json.loads(data_json)
+        try:
+            data = json.loads(data_json)
+        except (TypeError, ValueError):
+            return request.not_found()
         headers = data.get('headers', [])
         groups = data.get('groups', [])
         filter_info = data.get('filter_info', '')
@@ -225,8 +228,8 @@ class MatiaStockPlanningController(http.Controller):
                         need_val = 0
                         try:
                             need_val = int(val) if val not in [False, None, ''] else 0
-                        except:
-                            need_val = val
+                        except (TypeError, ValueError):
+                            need_val = 0
                         worksheet.write(row, col_idx, need_val, cell_need_format)
                     elif c_type == 'number':
                         num_val = 0
@@ -237,7 +240,7 @@ class MatiaStockPlanningController(http.Controller):
                                     num_val = int(num_val)
                             else:
                                 num_val = 0
-                        except:
+                        except (TypeError, ValueError):
                             num_val = 0
                         fmt = sub_num_by_level[lvl] if lvl else cell_num_format
                         worksheet.write(row, col_idx, num_val, fmt)
