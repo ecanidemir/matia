@@ -726,13 +726,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 (l.last_currency ? ' ' + l.last_currency : '');
         },
 
-        // Tiny per-UoM note under the USD price (e.g. "per m",
-        // "per kg"): tells which unit the snapshot price belongs to.
+        // Tiny per-UoM note after the USD price (e.g. "/m", "/kg"):
+        // tells which unit the snapshot price belongs to. Inline so the
+        // row stays one line high.
         _perUomNote: function (r) {
             var u = this._uomEn(r.last_uom || r.uom);
             if (!u) return '';
-            return '<div class="text-muted" style="font-size:0.65rem;">per ' +
-                u + '</div>';
+            return ' <small class="text-muted">/' + u + '</small>';
         },
 
         // UoM names come from the DB in Turkish (e.g. 'Adet'); the UI is
@@ -787,20 +787,19 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Shared-pool note: when a child's stock pool was split among
-        // several parents, show the received share under the number.
-        // The full per-parent distribution (server-built) is the tooltip.
+        // several parents, show only the parent count under the number
+        // (compact: "4 parents"). The full per-parent distribution
+        // (server-built) stays in the tooltip.
         _sharedNote: function (r) {
             var n = parseInt(r.share_n) || 0;
             if (n <= 1) return '';
             var pct = parseFloat(r.share_pct);
-            var pctTxt = isNaN(pct) ? '' : pct + '% of pool';
             var title = r.share_note ||
                 ('Shared stock: this branch received ' +
                 (isNaN(pct) ? 'part' : pct + '%') +
                 ' of the available pool, split among ' + n + ' parents');
             return '<div class="msp-shared-note" title="' + title + '">' +
-                '<i class="fa fa-share-alt mr-1"></i>' + pctTxt +
-                ' &middot; ' + n + ' parents</div>';
+                '<i class="fa fa-share-alt mr-1"></i>' + n + ' parents</div>';
         },
 
         // Net shortage after the cascade (tops: planned; subs: net).
@@ -906,7 +905,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     ' <span class="msp-level-badge msp-lvl-' + lvl +
                     '" title="BOM Level ' + level + '">L' + level + '</span>' : '') +
                 '</td>' +
-                '<td class="td-bom-qty">' + this._fmtNum(r.bom_qty, 2) +
+                '<td class="td-bom-qty">' + this._fmtNum(r.bom_qty) +
                 ' <small class="text-muted">' + this._uomEn(r.uom) +
                 '</small></td>' +
                 '<td class="td-stock" title="TR unreserved: on-hand ' +
@@ -935,7 +934,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>' :
                     '<span class="badge-req-need td-planned-num">' + this._fmtNum(net, 0) +
                     '</span>') + '</td>' +
-                '<td>' + (r.seller || '') + '</td>' +
+                '<td class="td-seller" title="' + (r.seller || '') + '">' +
+                (r.seller || '') + '</td>' +
                 '<td class="text-center">' + this._srcBadge(r) + '</td>' +
                 '<td class="text-right">' + this._fmtLast(r) + '</td>' +
                 '<td class="text-right">' + this._fmtNum(r.last_usd, 4) +
@@ -1060,7 +1060,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'class="form-control form-control-sm mpp-fill-n" ' +
                     'data-group="' + g.key + '" style="width:80px;"/>' +
                     '<button type="button" class="btn btn-secondary btn-sm mpp-btn-needfill" ' +
-                    'data-group="' + g.key + '">' + _t('Apply') + '</button>' +
+                    'data-group="' + g.key + '">Apply</button>' +
                     '</span>' +
                     '<span class="ml-2 text-muted" style="font-size: 0.75rem;">' +
                     'BOM: ' + (g.bom_name || '') + '</span>' +

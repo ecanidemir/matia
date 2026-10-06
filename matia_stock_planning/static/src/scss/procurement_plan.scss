@@ -191,6 +191,33 @@
         }
     }
 
+    /* Compact Plan table (Tab 1): 14 columns must fit small screens.
+     * This file loads after stock_planning.scss, so these
+     * same-specificity rules win without touching Capacity. */
+    .msp-table-card table.msp-table {
+        thead th {
+            padding: 0.6rem 0.5rem;
+            font-size: 0.75rem;
+        }
+        tbody tr.item-row td {
+            padding: 0.45rem 0.5rem;
+            font-size: 0.8rem;
+        }
+        td.td-seller {
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        td.td-max-dev, td.td-stock, td.td-bom-qty, td.td-req {
+            white-space: nowrap;
+        }
+    }
+    .mpp-need {
+        max-width: 84px;
+        padding: 0.2rem 0.4rem;
+    }
+
     /* Table filter mode (whole-forest search): match count line,
        in-row location trail, clickable match names. */
     .mpp-filter-count {

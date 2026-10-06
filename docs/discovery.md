@@ -298,3 +298,9 @@
 - Canli E1CBRN06: (2,2,2,3) = 5000, kalan 0, over_cap bos. Test: `scratch/test_remainder.py` shipped fonksiyonlari kaynak dilimleyip exec eder (drift yok, Odoo importsuz), 15/15 PASS (canli kablo, slack over-cap, tie determinizm + sira-kararlilik, negatif/bos/sifir-size guard, out-of-band min-waste, fallback parity, sonuc-sekli sozlesmesi).
 - Kural: dagitim politikasi degisince once `waste_band` default'unu canli ornekle caprazla; band genisletmek kalan birakir. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Recalculate edilmeden yeni dali gostermez. Once staging'de dogrula.
 
+## Production Plan Kompakt Tablo + _t Cakismasi (2026-10-06)
+
+- `_t('Apply')` Odoo core TR cevirisine takilip butonda "Uygula" cikiyordu; grup basligi sabit `'Apply'` yazildi. Kural: kisa/jenerik kelimelerde (`Apply`, `Show`, `Save`) `_t()` kullanma — core ceviriyle carpisir; Show/Hide zaten plain string oldugu icin Ingilizce kalmisti.
+- Producible paylasim notu kisa: `35.9% of pool · 4 parents` yerine sadece `4 parents` (dagitim detayi tooltip'te). Planned hucresindeki `top_breakdown` alti-notu onceki turda kaldirilmisti.
+- Tab 1 kompakt (sadece procurement SCSS, Capacity'ye dokunulmaz): th/td yatay padding `0.85->0.5rem`, Needed input `110->84px`, Seller `max-width:150px` + ellipsis (+title tooltip), Usage `282.00->282` (fmt decimalsiz), UoM notu `/m` inline (satir tek satir). Deploy: static-only -> Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
+
