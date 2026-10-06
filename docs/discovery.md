@@ -192,3 +192,28 @@
 - `items = []` gibi yaygin anchor'larla edit yapma: yanlis blogu tuttu, IndentationError verdi, py_compile ile yakalandi. Kural: edit oncesi hedef blogun ustundeki benzersiz 3-5 satiri anchor'a dahil et.
 - `mrp.bom.search` N+1'leri (agac + sub-bom `has_bom`) tek `in` sorgusuna indi.
 
+## Tree+Cost Crash: `_last_buy_vals` order_id Tip Uyumsuzlugu (2026-10-06)
+
+- Hata: `get_tree_with_cost -> action_assign_suppliers -> _last_buy_vals` zincirinde `TypeError: 'int' object is not subscriptable` (`lb['order_id'][0]`).
+- Kok neden: batch refactor sonrasi `_mpp_last_buys` `order_id`'yi int (`_oid or False`) donerken, tuketici `_last_buy_vals` hala `search_read` seklini (`[id, name]`, `[0]` ile okuma) varsayiyordu. Diger many2one'lar (`partner_id`, `currency_id`, `product_uom`) hala `[id,name]` oldugu icin sadece `order_id` patladi.
+- Cozum: `_last_buy_vals` once `lb.get('buy_dt')` kullanir, yoksa `order_id`'yi normalize eder (list/tuple -> `[0]`, int -> aynen) ve `order_dates` (int key) map'inden okur; en son `date_planned` fallback. Ham `search_read` dict'i de kabul edilir.
+- Kural: batch'e cevrilmis helper'in dondurdugu dict seklini degistirince tum tuketicileri guncelle; `search_read` `[id,name]` vs normalize edilmis int ayrimi her okumada gozetilmeli.
+- Deploy: Python degisikligi staging'de Git Deploy + Upgrade/restart gerektirir (mesai disi + backup); `button_immediate_upgrade` yetmez.
+
+## Production Plan Tab 1 Entry Gruplama (2026-10-06)
+
+- Tab 1 "Enter quantities" artik capacity plan ile ayni grup rozetiyle gruplaniyor: Base, Outdoor Parts, Seat Parts, Common Screws (`procurement_plan.js::_entryGroupOrder/_entryGroupHtml/_renderEntry`).
+- Grup rozeti CSS'i (`stock_planning.scss` `tr.group-row` + `.group-title-badge`) sadece `table.msp-table.msp-table-card` icinde gecerli; Tab 1 tablo ayni wrapper'a alindi.
+- Kit ve On-Hand Base sutunlari kaldirildi (5 sutun: Code/Product/TR Avail./USA Stock/Qty; `colspan=5` tutarli).
+- Grup basi auto-fill: her grup basliginda `Auto-fill <Title> to [N] [Apply]` (fa-magic); `fillN={base,outdoor,seat,screws}` (default 50); `qty=max(0,ceil(N-fill_base))`.
+- Toggle class ayrimi kritik: entry butonu `mpp-btn-entry-toggle` (gorsel icin `msp-btn-group-show/hide` yeniden kullanilir) — tree tab'daki `msp-btn-toggle-group` secicisiyle cakismamali, yoksa iki tab birbirini acar/kapatir.
+- `kit_key` kaynagi: `get_entry_products` her item'a `kit_key` ekler (`base|outdoor|seat|screws`); bilinmeyen key trailing grup, bossa `(0 Parts)` — cokus yok.
+- Plan: `plans/production_plan_entry_groups.md`. Sadece static (JS/XML/SCSS) degisti → deploy icin modul Upgrade yeterli, servis restart gerekmez.
+
+## Capacity Alt-Parca Bagimli Talep Duzeltmesi (2026-10-06)
+
+- Hata: capacity sayfasinda alt-parca ihtiyac sutunlari hep brut `hedef*bom_qty-avail` ile hesaplaniyordu; ornek E2CPAN01 ihtiyaci 5 iken cocugu M3U2PB01 20, torunu M2U2SN06 18 gosteriyordu (dogru: 5 ve 3).
+- Kok neden: `get_sub_bom_details` parent net eksigini hic kullanmiyordu; `parent_bom_qty` sadece gorunen kullanim miktarini olceklendiriyordu.
+- Cozum: metoda `parent_req_20` + `parent_dynamic_needs` {hedef: net} eklendi; cocuk ihtiyac `parent_need*sub_qty_per_parent - max(0,avail)` (bagimli talep), `None` gelirse legacy brut formulu. JS parent netini `data-req-20`/`data-dyn-needs` (`widget._dynNeedsKey`, `t:v;t:v` format) ile RPC'ye tasir; cache key 4 parcali (urun|qty|req20|dyn), export recursion ayni key ile arar. `max_devices` degismedi (brut kapasite gostergesi).
+- Kural: parent OK (0) + cocukta asiri rezerve (avail<0) birlesiminde avail 0'a kirpilir, yoksa sahte NEED cikar. Deploy: Python+JS+XML degisikligi Git Deploy/restart gerektirir (mesai disi + backup); sonrasi tam sayfa reload sart (stale DOM'da attr yok).
+

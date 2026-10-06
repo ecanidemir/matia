@@ -457,10 +457,58 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         // flag (products already present higher in the path get no expand btn).
         MAX_SUB_DEPTH: 8,
 
-        // Cache key includes effective qty: the same product can appear in
-        // different branches with different per-device quantities.
-        _subBomCacheKey: function (prodId, bomQty) {
-            return prodId + '|' + (bomQty || 1);
+        // Cache key includes effective qty AND the parent net shortages: the
+        // same product can appear in different branches with different
+        // per-device quantities or different parent needs (dependent demand),
+        // which yield different child need values.
+        _subBomCacheKey: function (prodId, bomQty, parentReq20, parentDynKey) {
+            var qtyPart = (bomQty || 1);
+            var reqPart = (parentReq20 === undefined || parentReq20 === null) ? 'g' : String(Number(parentReq20) || 0);
+            var dynPart = (parentDynKey === undefined || parentDynKey === null) ? 'g' : String(parentDynKey || '');
+            return prodId + '|' + qtyPart + '|' + reqPart + '|' + dynPart;
+        },
+
+        // Compact "t:val;t:val" encoding of an item's net needs per current
+        // dynamic target (0 when OK). Used in DOM data attributes (no quotes
+        // to escape) and as part of the sub-BOM cache key.
+        _dynNeedsKey: function (item) {
+            var parts = [];
+            for (var i = 0; i < this.dynamic_targets.length; i++) {
+                var t = this.dynamic_targets[i].toString();
+                var dyn = item && item.dynamic_needs && item.dynamic_needs[t];
+                var v = (dyn && dyn.status !== 'OK') ? (dyn.val || 0) : 0;
+                parts.push(t + ':' + v);
+            }
+            return parts.join(';');
+        },
+
+        // Parse "t:val;t:val" back into {t: val} for the RPC call.
+        _dynMapFromKey: function (dynKey) {
+            var map = {};
+            if (!dynKey) return map;
+            var pairs = String(dynKey).split(';');
+            for (var i = 0; i < pairs.length; i++) {
+                var kv = pairs[i].split(':');
+                if (kv.length !== 2 || !kv[0]) continue;
+                var v = parseFloat(kv[1]);
+                map[kv[0]] = isNaN(v) ? 0 : v;
+            }
+            return map;
+        },
+
+        // Read the parent row's own net needs from its expand button. These
+        // are the dependent-demand basis for the children being fetched.
+        _readParentNeeds: function ($btn) {
+            var reqRaw = $btn.attr('data-req-20');
+            var req20 = (reqRaw === undefined || reqRaw === null || reqRaw === '') ? null : parseFloat(reqRaw);
+            if (req20 !== null && isNaN(req20)) req20 = null;
+            var dynKey = $btn.attr('data-dyn-needs');
+            if (dynKey === undefined || dynKey === null) dynKey = null;
+            return {
+                req20: req20,
+                dynKey: dynKey,
+                dynMap: this._dynMapFromKey(dynKey),
+            };
         },
 
         _onProductClick: function (ev) {
@@ -520,18 +568,23 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             $btn.addClass('expanded');
             $btn.find('.msp-bom-arrow').removeClass('fa-caret-right').addClass('fa-spinner fa-spin');
 
-            var cacheKey = this._subBomCacheKey(prodId, bomQty);
-            var fetchPromise = this._isSubBomCacheValid(cacheKey)
-                ? Promise.resolve(this.sub_bom_cache[cacheKey])
-                : this._rpc({
+            // Dependent demand: children needs derive from THIS parent's net
+            // shortage (not from the gross 20-device target).
+            var parentNeeds = self._readParentNeeds($btn);
+            var cacheKey = self._subBomCacheKey(prodId, bomQty, parentNeeds.req20, parentNeeds.dynKey);
+            var fetchPromise = self._isSubBomCacheValid(cacheKey)
+                ? Promise.resolve(self.sub_bom_cache[cacheKey])
+                : self._rpc({
                     model: 'matia.stock.planning',
                     method: 'get_sub_bom_details',
                     kwargs: {
                         product_id: parseInt(prodId, 10),
                         parent_bom_qty: bomQty || 1.0,
-                        dynamic_targets: this.dynamic_targets,
-                        include_tr: this.include_tr,
-                        include_usa: this.include_usa,
+                        dynamic_targets: self.dynamic_targets,
+                        include_tr: self.include_tr,
+                        include_usa: self.include_usa,
+                        parent_req_20: parentNeeds.req20,
+                        parent_dynamic_needs: parentNeeds.dynMap,
                     }
                 });
 
@@ -647,10 +700,15 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
                 if (!jobs.length) return Promise.resolve();
 
-                // Render already-cached ones immediately (no RPC)
+                // Attach each parent's own net needs (dependent-demand basis)
+                // and render already-cached ones immediately (no RPC).
                 var pending = [];
                 jobs.forEach(function (j) {
-                    var ck = self._subBomCacheKey(j.prodId, j.bomQty);
+                    var pn = self._readParentNeeds(j.$btn);
+                    j.parentReq20 = pn.req20;
+                    j.parentDynKey = pn.dynKey;
+                    j.parentDynMap = pn.dynMap;
+                    var ck = self._subBomCacheKey(j.prodId, j.bomQty, j.parentReq20, j.parentDynKey);
                     if (self._isSubBomCacheValid(ck)) {
                         self._renderSubBomRows(j.$btn, j.prodId, j.grpKey, self.sub_bom_cache[ck]);
                     } else {
@@ -675,11 +733,13 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                             dynamic_targets: self.dynamic_targets,
                             include_tr: self.include_tr,
                             include_usa: self.include_usa,
+                            parent_req_20: j.parentReq20,
+                            parent_dynamic_needs: j.parentDynMap,
                         }
                     }).then(function (result) {
                         j.$btn.find('.msp-bom-arrow').removeClass('fa-spinner fa-spin').addClass('fa-caret-right');
                         if (result && result.has_bom) {
-                            self.sub_bom_cache[self._subBomCacheKey(j.prodId, j.bomQty)] = result;
+                            self.sub_bom_cache[self._subBomCacheKey(j.prodId, j.bomQty, j.parentReq20, j.parentDynKey)] = result;
                             self._renderSubBomRows(j.$btn, j.prodId, j.grpKey, result);
                         } else {
                             j.$btn.removeClass('expanded');
@@ -864,11 +924,13 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
         // Recursively append open sub-BOM rows (any depth) to the export.
         // No name/code prefix: rows carry is_sub/level flags only.
-        _appendSubRowsToExport: function (grpItems, nodeId, prodId, bomQty, level) {
+        // parentReq20/parentDynKey identify the cache entry created with the
+        // parent's own net needs (dependent demand).
+        _appendSubRowsToExport: function (grpItems, nodeId, prodId, bomQty, level, parentReq20, parentDynKey) {
             if (!this.expanded_boms[nodeId]) {
                 return;
             }
-            var subData = this.sub_bom_cache[this._subBomCacheKey(prodId, bomQty)];
+            var subData = this.sub_bom_cache[this._subBomCacheKey(prodId, bomQty, parentReq20, parentDynKey)];
             if (!subData || !subData.items) {
                 return;
             }
@@ -879,12 +941,15 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     is_sub: true,
                     level: level,
                 });
+                var childReq20 = (subItem.req_20_status === 'OK') ? 0 : (subItem.req_20_val || 0);
                 this._appendSubRowsToExport(
                     grpItems,
                     nodeId + '/' + subItem.product_id,
                     subItem.product_id,
                     subItem.bom_qty,
-                    level + 1
+                    level + 1,
+                    childReq20,
+                    this._dynNeedsKey(subItem)
                 );
             }
         },
@@ -929,7 +994,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
                     // Sub-BOM rows (recursive, all open levels)
                     var topNode = 'g-' + grp.key + '-' + item.product_id;
-                    self._appendSubRowsToExport(grpItems, topNode, item.product_id, item.bom_qty, 1);
+                    var topReq20 = (item.req_20_status === 'OK') ? 0 : (item.req_20_val || 0);
+                    self._appendSubRowsToExport(grpItems, topNode, item.product_id, item.bom_qty, 1, topReq20, self._dynNeedsKey(item));
                 }
                 exportGroups.push({
                     key: grp.key,

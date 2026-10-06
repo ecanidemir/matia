@@ -330,10 +330,22 @@ class MatiaStockPlanning(models.AbstractModel):
         }
 
     @api.model
-    def get_sub_bom_details(self, product_id, parent_bom_qty=1.0, dynamic_targets=None, include_tr=True, include_usa=True):
+    def get_sub_bom_details(self, product_id, parent_bom_qty=1.0, dynamic_targets=None, include_tr=True, include_usa=True,
+                            parent_req_20=None, parent_dynamic_needs=None):
         """
         Fetches the Bill of Materials (BOM) components and their current stock levels
         for a specific sub-assembly product, scaled to the main device requirements.
+
+        @param product_id: parent (sub-assembly) product id being expanded.
+        @param parent_bom_qty: qty of this parent used per one device (scales display bom_qty).
+        @param parent_req_20: NET shortage of the parent for the 20-device target,
+            in parent units (0 means parent stock covers the target). When given,
+            each child need is computed as dependent demand:
+            ``max(0, parent_need * sub_qty_per_parent - avail_child)``.
+            When None (old clients), falls back to the legacy gross formula.
+        @param parent_dynamic_needs: dict {str(target): net parent need} with the same
+            dependent-demand semantics per dynamic target column.
+        @return: dict with has_bom, items (each with stock/need fields), min_producible.
         """
         # Multi-company context: include ALL companies (even inactive/archived ones)
         # Odoo 15 pattern: use with_context().sudo().env — Environment has no .sudo()
@@ -351,6 +363,22 @@ class MatiaStockPlanning(models.AbstractModel):
             dynamic_targets = []
         dynamic_targets = [int(t) for t in dynamic_targets if str(t).isdigit() and int(t) > 0][:3]
         parent_bom_qty = float(parent_bom_qty or 1.0)
+
+        # Parent NET shortages (dependent demand basis). None = legacy gross mode.
+        if parent_req_20 is None:
+            _parent_need_20 = None
+        else:
+            try:
+                _parent_need_20 = max(0.0, float(parent_req_20 or 0.0))
+            except (TypeError, ValueError):
+                _parent_need_20 = None
+        _parent_dyn = {}
+        if isinstance(parent_dynamic_needs, dict):
+            for _k, _v in parent_dynamic_needs.items():
+                try:
+                    _parent_dyn[str(_k)] = max(0.0, float(_v or 0.0))
+                except (TypeError, ValueError):
+                    continue
 
         # Find BOM for this product
         bom = env_sudo['mrp.bom'].search([
@@ -470,6 +498,7 @@ class MatiaStockPlanning(models.AbstractModel):
         for item in lines_list:
             pid = item['product_id']
             b_qty = float(item['bom_qty']) # Effective qty per 1 device
+            sub_qty = float(item.get('sub_bom_qty') or 0.0)
             s_qty = product_stock.get(pid, 0.0)
             r_qty = product_reserved.get(pid, 0.0)
             n_qty = product_ncr.get(pid, 0.0)
@@ -481,8 +510,15 @@ class MatiaStockPlanning(models.AbstractModel):
             else:
                 max_dev = 0
 
-            # Requirement for 20 devices: (20 * bom_qty) - available_stock
-            needed_20 = (20.0 * b_qty) - avail_qty
+            # Requirement for 20 devices. With parent net shortage known, the
+            # child need is dependent demand: parent_need * sub_qty - avail.
+            # Otherwise (legacy) fall back to gross: (20 * bom_qty) - avail.
+            # NOTE: dependent branch clamps avail at 0 — with over-reserved
+            # stock (avail < 0) and parent_need == 0 the child must stay OK.
+            if _parent_need_20 is not None:
+                needed_20 = (_parent_need_20 * sub_qty) - max(0.0, avail_qty)
+            else:
+                needed_20 = (20.0 * b_qty) - avail_qty
             if needed_20 <= 0:
                 req_20_status = 'OK'
                 req_20_val = 0
@@ -490,10 +526,14 @@ class MatiaStockPlanning(models.AbstractModel):
                 req_20_status = 'NEED'
                 req_20_val = int(math.ceil(needed_20 - _MSP_FLOAT_EPS))
 
-            # Dynamic columns
+            # Dynamic columns (same dependent-demand rule per target)
             dynamic_needs = {}
             for target in dynamic_targets:
-                needed_target = (float(target) * b_qty) - avail_qty
+                tkey = str(target)
+                if tkey in _parent_dyn:
+                    needed_target = (_parent_dyn[tkey] * sub_qty) - max(0.0, avail_qty)
+                else:
+                    needed_target = (float(target) * b_qty) - avail_qty
                 if needed_target <= 0:
                     dynamic_needs[str(target)] = {
                         'status': 'OK',
