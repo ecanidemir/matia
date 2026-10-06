@@ -326,3 +326,18 @@
 - Kural kararlari: Usage Prod'da ham satir miktari, baslik `Per-Parent Qty` (Capacity olceklenmis efektif gosterir); expand-all iki sayfada da filtreyi temizleyip tam acar; export ekrani yansitir (gizli grup haric + arama filtresi; Cap'te `_exportNameMatch`, Prod'da `_subtreeMatch` + collapsed skip); Cap arama sadece yuklu satirlarda (placeholder title'da yazar); Prod TR/US kesirli stok gosterir (dec yok).
 - Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); static-only degisiklik Upgrade yeterli, sonrasi Ctrl+F5.
 
+## Production Auto-Fill Lineless-Top Bug (2026-10-06, staging MPP-0004)
+
+- Sikayet: Screws grubuna 60 + Apply sonrasi stok fazlasi 2 civatada (N1FTAG65 avail 250, N1FTRS12 avail 90) Needed 60, digerlerinde 0. Formül dogru (`need=max(0,N-avail)`), girdi yanlis.
+- Kok neden: `_onNeedFill` (procurement_plan.js:225) avail'i client cache `treeGroups`'tan okur; plan satiri OLMAYAN top'ta server `avail_tr/avail_us/avail_total=0` gonderir (`get_tree_with_cost`, `line=None` dali). Satirsiz = onceki hedef + bagimli tuketim (Base patlamasi) YOK demek. 1881/1824'te gross == hedef == 60 (saf targets, bagimli sifir); 1887'de gross 2340/net 681 (bagimli vardi, satir vardi, avail 759 biliniyordu -> need 0 dogru).
+- Etki SINIRLI (kritik degil): rebuild `planned=max(0,need-gercek_avail)` ile gercek stoktan netler -> 1881/1824 net 0, order 0 (canli dogrulandi). Yanlis Needed sadece hedef siskinligi + kafa karisikligi; satinalma tetiklemez.
+- Fix yonu: `get_tree_with_cost`'ta satirsiz top'a canli `_mpp_stock_split` stokunu koy (0 yerine) veya auto-fill'i server-side RPC yap (`auto_fill_group`: gercek avail ile hesapla + yaz + rebuild). Gecici cozum: satirlar olustuktan SONRA Apply'a tekrar bas (artik avail biliniyor -> 60'lar 0'lanir; gercek acik 2418 gibi avail 0 olanlarda 60 kalir, dogru).
+- Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup).
+
+## Production Tab 2 Expandable Suppliers (2026-10-06)
+
+- Istek: Tab 2 Supplier listesinde tedarikci isimleri acilabilir olacak, altinda hangi parcalarin alindigi gorunecek.
+- Server: `get_supplier_summary` her tedarikciye code-sirali `lines` ekler (code/name/order_qty/uom/route/last_price/last_currency/last_usd/last_date/rolled_usd/total_usd); toplamlar degismedi.
+- Client: `_supKey` (seller:company), `_onSupToggle` (caret + isim tiklamasi), `_supplierLinesHtml` (acik satir altinda mavi alt-satirlar: kod/ad, order+UoM, route rozeti, rolled x qty = total + last-price notu); durum `expandedSup` map'inde, plan degisince sifirlanir. TR-karakter 0 (yeni kod), py_compile + node --check OK.
+- Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); sonrasi Ctrl+F5.
+
