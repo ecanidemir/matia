@@ -179,3 +179,10 @@
 - Canli MCP bagli ama `matia.procurement.*` model yok (Fault 2) -> canli alan dogrulamasi upgrade sonrasina bloklu.
 - DokunulMAyanlar: capacity menu `group_user` (export kilidi bozardi); location/env tekrari (farkli include mantigi); unlink iz-silme; RPC grup kontrolu; `mrp.bom.search` N+1'leri.
 
+## Performans Paketi (2026-10-06)
+
+- `get_tree_with_cost` satirlar hedeflerle uyumluysa yeniden kurulumu atlar (`built_target_json` alani). Kural: ongorulebilir RPC metodlarinda girdi-hash'i sakla, ayni girdiyle gelen cagrida salt-okunur sun.
+- `_mpp_write_if_changed`: ayni degerleri `write` etme (UPDATE + computed zinciri yok). Many2one karsilastirmasi id ile.
+- `items = []` gibi yaygin anchor'larla edit yapma: yanlis blogu tuttu, IndentationError verdi, py_compile ile yakalandi. Kural: edit oncesi hedef blogun ustundeki benzersiz 3-5 satiri anchor'a dahil et.
+- `mrp.bom.search` N+1'leri (agac + sub-bom `has_bom`) tek `in` sorgusuna indi.
+
