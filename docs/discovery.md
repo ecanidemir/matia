@@ -348,3 +348,11 @@
 - Fix: sifir-siparisli buy/subcontract satirlari da seller mantigindan gecer (`seller_id` + `unit_price` yazilir, bilgi amacli); min-qty uyarisi `order_qty>0` sarti aldi (siparis yoksa uyari yok); subtotal zaten `price x 0 = 0`. Guvenli: RFQ gruplama (`order_qty>0 and seller_id`) + supplier ozeti (`buy and order_qty>0`) filtreli oldugu icin hayalet RFQ uremez.
 - Kural: agacta gorunen seller her zaman `line.seller_id`'dir; bilgi-amacli seller yazmak RFQ uretmez cunku RFQ yolu order filtresinden gecer. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Calculate/supplier-preview tekrar calismadan seller'i gostermez.
 
+## Production Auto-Fill Gross-Want Duzeltmesi (2026-10-06, cift-netting + paylasimli parca)
+
+- Onceki bulgu (yukaridaki Lineless-Top) semptomdu; derindeki hata: auto-fill `need=N-avail` yaziyor, rebuild cascade'i (`net=demand-avail`, `matia_procurement_plan.py:820`) stoktan BIR KEZ DAHA dusuyordu. `0<avail<N` olan HER satir avail kadar EKSIK siparis uretiyordu (simulasyon `scratch/test_autofill_gross.py`: avail 10/N 60 -> net 40, dogrusu 50; paylasimli ornekte 240 vs 250; avail 250 + dep 200 durumunda 0 vs dogrusu 10 - siparis tamamen yok oluyordu).
+- Cozum (brut-anlam): `_onNeedFill` artik `needMap=N` yazar (stok okumaz -> lineless bayat-avail sinifi kapandi); stok dusumu tek elde (server cascade). Satirsiz top'lar `get_tree_with_cost`'ta canli `_mpp_stock_split` stokunu gosterir (tek bulk okuma, eskiden 0/0). Tooltip + Needed/Planned basliklari guncellendi: Needed = brut istek, Planned = havuzlanmis net (paylasimli tuketim dahil).
+- Paylasimli parca sorusunun cevabi: Needed artik "net acik" iddiasinda degil, o yuzden yaniltmaz; siparis karari Planned'dan okunur (brut istek + diger ebeveynlerin net tuketimi - stok). `Also used in` notu paylasimi gosterir (v2 kurali).
+- Yukaridaki "Tek Sayfa" girdisindeki `need=max(0,ceil(N-avail))` formulunu GECERSIZ kilar (tarihsel kayit olarak durur).
+- Test: `py_compile` + `node --check` OK; simulasyon 5/5 NEW-dogru. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); JS icin sonrasi Ctrl+F5. Plan: `plans/production_autofill_gross_fill.md`.
+

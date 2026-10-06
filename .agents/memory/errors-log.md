@@ -13,3 +13,4 @@
 2026-10-06 | [O15] tree+cost TypeError int object is not subscriptable (_last_buy_vals order_id) | _mpp_last_buys order_id'yi int donerken _last_buy_vals [id,name] varsayip [0] okudu -> buy_dt oncelikli + order_id normalize (list/tuple->[0], int aynen) ile order_dates okuma
 2026-10-06 | [auto] APIError [400]: Requests ending with a model turn are not supported. | kürate edilmedi -> /log-error ile işle
 2026-10-06 | [O15] production plan usage qty hep 1.0 | get_tree_with_cost level-0 satırlarda bom_qty 1.0 sabit yazılmış, bl.product_qty okunmamış -> matia_procurement_plan.py:1867 float(bl.product_qty or 1.0) yapıldı
+2026-10-06 | [O15] mpp auto-fill double-netting + lineless avail 0 | Auto-fill N-avail yazip cascade bir kez daha dusuyordu (cift-netting); satirsiz top avail 0 okunuyordu -> Needed=N brut yazilir, stok tek elde netlenir; satirsiz top canli split stok gosterir (branch, staging verify bekliyor)
