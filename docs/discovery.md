@@ -272,3 +272,9 @@
 - Tooltip: `producible_json` artik `alloc_note` tutar ("E1CBRN06 pool 5000 mm: E2CBAN02 500x2 + ... = 5000, leftover 0 mm"); satirlara `share_note` olarak tasinir, JS `_sharedNote` title yapar (eski metin fallback). Ingilizce + ASCII zorunlu, cift tirnak sanitize.
 - Kural: paylasimli havuz dagitiminde bagimsiz floor birakma; largest-remainder + ceil cap kullan. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Calculate ile yeniden kurulmadan yeni dal/not gorunmez. Once staging'de dogrula.
 
+## Tree+Cost UoM Rollup Hatası (2026-10-06, RAL6K125 x M3MTMN05)
+
+- `last_price` / `last_price_usd` snapshot'ı PO satırının ham biriminden gelir (UoM çevrimsiz); `unit_price` ise satır UoM'una çevrilir. `_compute_rollup` `_own_usd/_own_try` olarak çevrimsiz snapshot'ı kullanıp BOM edge qty ile çarpar.
+- Örnek: RAL6K125 son alım 147.96 TRY/**m** (PO/24-00264, date_order 15 Feb 2024) -> 4.82 USD/**m**; BOM'da 282 **mm** kullanılıyor. Ekranda 4.82 x 282 = 1359.24 USD (1000x şişik); doğrusu 4.82/1000 x 282 = ~1.36 USD. Ebeveyn M3MTMN05 (subcontract, 200 TRY/Units -> 6.52 USD) rolled = 6.52 + 1359.24 = 1365.76; doğrusu ~7.88 USD.
+- Kural: rolled maliyette UoM uyumsuz ürün (satınalma UoM != BOM/stok UoM) varsa ekrandaki birim fiyatı PO UoM'una aittir, qty ile doğrudan çarpılamaz. Fix: rollup'ta `last_price_usd`'yi satır UoM'una normalize et (ya da `unit_price` USD karşılığını kullan).
+
