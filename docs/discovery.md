@@ -237,3 +237,17 @@
 - Arama kutusu sadece yuklenmis (acik) satirlari filtreliyordu; kapali subtree gorunmezdi. 2+ harfte `search_tree(plan_id, q)` tum ormani server-side gezer (get_sub_bom_cost ile ayni BOM cozumu, depth<=10, cap 100) ve her eslesmeyi parent trail ile dondurur (`trail` TOP-ilk, `path_ids` genisletme icin, `group_key/top_*`). Ornek: E1CBRN06 -> 4 sonuc, her biri ust kod zinciriyle. `Show` filtreyi temizler, yolu top-down acar (net'ler taze parent satirlardan, sayilar exact), satira scroll + sari flash (`.msp-flash`).
 - Kural: paylasilan alt agaclar her ust icin AYRI gezilir (dedupe yok) - ayni parca N BOM'daysa N sonuc doner. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup).
 
+## Table-Filter Search + Expand All Rewrite (2026-10-06, production plan Tab 2)
+
+- Kullanici karari: arama ayri panel degil TABLONUN kendisinde filtre olacak (acilmamis subtree dahil); Expand All en alt seviyeye kadar acacak.
+- Arama artik tablo-ici filtre: 2+ harfte `search_tree` sonuclari `_expandSearchPaths` ile acilir (ortak prefix cache'ten, sira sira RPC, reject yok) ve `_renderFilter` flat tablo cizer (grup + kod sirali, satirda konum trail'i, 15 kolon ve sayilar cache'ten exact). Eslesmeye tiklama `_onMatchJump` ile agaca ziplar (filtre temizlenir, `_expandPath(group, ids, true)`, scroll + `.msp-flash`). Eski panel kaldirildi (`mpp-search-results` div + SCSS blogu + `_renderSearchResults`/`_onSearchGoto`/`mpp-search-goto`).
+- Expand All pump rewrite: her adim `.then` icinde kosar (stack-unwind, buyuk agac guvenli), butonda canli `Expanding x/y`, her 10 dugumde ara render, bos kuyrukta `Nothing to expand` uyarisi, calisirken `_expanding` kilidi (Collapse All bekle der), gizli gruplar acilir. `_expandPath` jump + filtre tarafindan ortak kullanilir.
+- Teshis notu: staging'de `search_tree` CANLI cikti (`scratch/check_search_tree.py`: 'cab' -> 62 sonuc); sikayet eski koddan degil, render-sizlik + senkron ozyineleme riskiydi.
+- Deploy: static-only (JS/XML/SCSS, Python YOK) -> modul Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
+
+## Expand All Hizlandirma (2026-10-06, paralel pump)
+
+- Sikayet: Expand All calisiyor ama cok uzun suruyor. Kok neden: pump kuyruktan TEK dugum cekip RPC yanitini sira sira bekliyordu; acilmamis her alt-BOM = 1 gidis-gelis suresi, art arda. Ayrica `seen` tam-yol uid ile tutuldugu icin paylasilan parca her ebeveyn altinda AYRI RPC yiyor (carpan etkisi).
+- Cozum (static-only): en fazla 6 paralel fetch (CONC havuzu), cached dugumler senkron katlanir, ara full-render her 10 yerine her 50 dugumde (buyuyen tabloda render O(n^2) yapiyordu; buton etiketi her dugumde guncellenir). `finish()` tek-seferlik (`_expanding` guard + cap-bitince kuyruk birakma ele alindi). `_expandPath` (arama filtresi) derinlik<=10 oldugu icin sira sira birakildi.
+- Kural: toplu agac acma islerinde RPC'yi sira sira zincirleme; CONC=6 havuz + seyrek ara render kullan. Deploy: static-only -> Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
+
