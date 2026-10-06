@@ -228,5 +228,6 @@
 - `Producible` artik bottom-up: `pool(X)=own+min_C floor(pay(C->X)/kullanim)`, paylasilan cocuk NET-talep agirlikli bolunur (`pay(C->P)=pool(C)*katki[P->C]/girdi(C)`). Satinalma (planned/net/cascade) aynen durur, sadece goruntu kolonu.
 - Saklama: `matia.procurement.plan.producible_json` (`{"pool":{},"branch":{"P>C":int}}`), explode'da yazilir; onbellekli gorunum + sub-BOM buradan okur, eski plansiz cagrilar legacy formüle duser. Phantom own=0.
 - Dogrulama: staging canli verisi E2CBAN02 hedef 50 -> net 47, dallar [10,2,43,283,248,24], pool 5 (kullanicinin el hesabi birebir). Paylasim sizinti testi OK (`scratch/verify_pool.py`).
+- 2026-10-06 ek (paylasim notu): E2CBAN02 ornegi paylasimi kanitladi — planda ~65 hedef varken Cable 4 BOM'da, Shrink 9 BOM'da kullanildigi icin dallar kirpildi (Cable 10->1, Shrink 283->23); sadece bu BOM'daki Connector/Faston tam pay aldi. `producible_json` artik `share`+`driver` de tutar; `share_n>1` hucrede kehribar rakam + `⇄ % · N parents` notu (JS `_sharedNote`, SCSS `.msp-shared-note`).
 - Plan: `plans/producible_bottomup.md`. Deploy: Python degisikligi Git Deploy + Upgrade/restart (mesai disi + backup).
 

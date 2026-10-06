@@ -69,15 +69,17 @@ def _mpp_load_pools(pool_json):
     """Parse a stored bottom-up producible snapshot.
 
     @param pool_json: content of matia.procurement.plan.producible_json.
-    @return: (pool, branch) where pool maps product id -> bottom-up units
-        (float) and branch maps (parent id, child id) -> allocated units
-        (int). Unparseable input yields ({}, {}) so callers fall back to
-        the legacy own-stock formula.
+    @return: (pool, branch, share, driver) where pool maps product id ->
+        bottom-up units (float), branch maps (parent id, child id) ->
+        allocated units (int), share maps (parent id, child id) ->
+        (pct of child pool, parent count), and driver maps parent id ->
+        its min-branch child id. Unparseable input yields empty dicts so
+        callers fall back to the legacy own-stock formula.
     """
     try:
         data = json.loads(pool_json or '{}')
     except ValueError:
-        return {}, {}
+        return {}, {}, {}, {}
     pool = {}
     try:
         for _k, _v in (data.get('pool') or {}).items():
@@ -91,7 +93,21 @@ def _mpp_load_pools(pool_json):
             branch[(int(_p), int(_c))] = int(_v)
         except (TypeError, ValueError):
             continue
-    return pool, branch
+    share = {}
+    for _k, _v in (data.get('share') or {}).items():
+        try:
+            _p, _c = str(_k).split('>')
+            _pct, _n = list(_v)[:2]
+            share[(int(_p), int(_c))] = (float(_pct), int(_n))
+        except (TypeError, ValueError):
+            continue
+    driver = {}
+    for _k, _v in (data.get('driver') or {}).items():
+        try:
+            driver[int(_k)] = int(_v)
+        except (TypeError, ValueError):
+            continue
+    return pool, branch, share, driver
 
 
 def _mpp_find_kit_boms(env_sudo):
@@ -500,6 +516,31 @@ class MatiaProcurementPlan(models.Model):
                 _mins.append(_b)
             pool_map[_x] = _own + min(_mins) if _mins else _own
 
+        # Share info for the display note (which branches split a
+        # child's pool): pct of the child's pool this parent received
+        # + how many parents share it. Driver = min-branch child.
+        share_map, driver_map = {}, {}
+        _par_count = {}
+        for (_pp, _cc), _ct in contrib.items():
+            if _ct > 0:
+                _par_count[_cc] = _par_count.get(_cc, 0) + 1
+        for (_pp, _cc) in branch_map:
+            _inflow = demand.get(_cc, 0.0)
+            _pct = 100.0 * contrib.get((_pp, _cc), 0.0) / _inflow \
+                if _inflow > 0 else 0.0
+            share_map[(_pp, _cc)] = (round(_pct, 1),
+                                     _par_count.get(_cc, 1))
+        for _pp, _ch in edges.items():
+            _best, _best_c = None, None
+            for _cc in _ch:
+                _b = branch_map.get((_pp, _cc))
+                if _b is None:
+                    continue
+                if _best is None or _b < _best:
+                    _best, _best_c = _b, _cc
+            if _best_c is not None:
+                driver_map[_pp] = _best_c
+
         # Info: confirmed incoming POs + open MO output (NOT netted, display only)
         incoming, mo_out = {}, {}
         po_ids = env_sudo['purchase.order'].search([
@@ -590,6 +631,9 @@ class MatiaProcurementPlan(models.Model):
             'pool': {str(k): v for k, v in pool_map.items()},
             'branch': {'%s>%s' % (p, c): v
                        for (p, c), v in branch_map.items()},
+            'share': {'%s>%s' % (p, c): [pct, n]
+                      for (p, c), (pct, n) in share_map.items()},
+            'driver': {str(p): c for p, c in driver_map.items()},
         })
         plan.state = 'calculated'
         plan.built_target_json = plan.target_json
@@ -1288,7 +1332,8 @@ class MatiaProcurementPlan(models.Model):
                     [('product_tmpl_id', 'in', list(missing_tmpls))]):
                 extra_bom_tmpls.add(b.product_tmpl_id.id)
         tree_groups = []
-        pool_map, _pool_branch = _mpp_load_pools(plan.producible_json)
+        pool_map, _pool_branch, share_map, driver_map = \
+            _mpp_load_pools(plan.producible_json)
         for kit in kit_cfgs:
             key = kit['key']
             bom = kit['bom']
@@ -1306,6 +1351,9 @@ class MatiaProcurementPlan(models.Model):
                 # Bottom-up pool (own stock + assemblable from children);
                 # legacy own-stock value when the plan predates pools.
                 _pool = pool_map.get(pid, avail)
+                _drv = driver_map.get(pid)
+                _sh = share_map.get((pid, _drv), (100.0, 1)) \
+                    if _drv is not None else (100.0, 1)
                 items.append({
                     'product_id': pid,
                     'code': bl.product_id.default_code or '',
@@ -1330,6 +1378,8 @@ class MatiaProcurementPlan(models.Model):
                         0.0, float(targets.get(pid, 0)) - avail),
                     'producible': int(math.floor(_pool))
                     if _pool > 0 else 0,
+                    'share_pct': _sh[0],
+                    'share_n': _sh[1],
                     'net': line.net_qty if line else 0.0,
                     'order_qty': line.order_qty if line else 0.0,
                     'seller': line.seller_id.display_name
@@ -1540,8 +1590,8 @@ class MatiaProcurementPlan(models.Model):
         snap = {}
         plan = env_sudo['matia.procurement.plan'].browse(
             int(plan_id)) if plan_id else False
-        _pool_map, branch_map = _mpp_load_pools(
-            plan.producible_json if plan else '')
+        _pool_map, branch_map, share_map, _pool_driver = \
+            _mpp_load_pools(plan.producible_json if plan else '')
         if plan and plan.exists():
             for line in plan.line_ids.filtered(
                     lambda l: l.product_id.id in child_ids):
@@ -1626,6 +1676,7 @@ class MatiaProcurementPlan(models.Model):
             if _branch is None:
                 _branch = int(math.floor(avail / bqty)) \
                     if bqty > 0 and avail > 0 else 0
+            _sh = share_map.get((prod.id, pid), (100.0, 1))
             items.append({
                 'product_id': pid,
                 'code': cp.default_code or '',
@@ -1643,6 +1694,8 @@ class MatiaProcurementPlan(models.Model):
                 'reserved_tr': rs,
                 'avail_tr': avail,
                 'producible': _branch,
+                'share_pct': _sh[0],
+                'share_n': _sh[1],
                 'seller': seller,
                 'last_company': lcompany,
                 'last_price': lp,

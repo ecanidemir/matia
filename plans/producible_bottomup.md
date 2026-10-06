@@ -37,6 +37,11 @@ mantığı önerdi, doğrulandı.
 - Alt satır (`get_sub_bom_cost`, parent P biliniyor): `branch[(P,C)]`, yoksa
   `floor(avail/bqty)`. Dal numarası = o ebeveyne ayrılan payın karşıladığı
   P adedi; ebeveyn pool'u bunların min'i + own.
+- Paylaşım notu (2026-10-06 ek): explode `share {"P>C":[pct,ebeveyn_sayisi]}`
+  + `driver {P:min_dal}` yazar; `share_n>1` olan hücrede rakam kehribar
+  (`dev-shared`) + altında minik not (`⇄ %pay · N parents`, tooltip'li).
+  Üst satır sürücüsü paylaşılıyorsa üstte de not çıkar. Salt-görüntü, Excel
+  aynen rakam (notsuz).
 - Excel (`controllers/procurement_export.py`) aynı satırları okur — otomatik
   tutarlı, değişiklik yok. JS `_producible` fallback'ına `max(0)` guard.
 

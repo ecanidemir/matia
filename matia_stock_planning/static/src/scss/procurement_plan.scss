@@ -176,4 +176,18 @@
             }
         }
     }
+
+    /* Shared-pool producible: amber number + tiny share note. */
+    .td-max-dev {
+        .dev-normal.dev-shared {
+            color: #b45309;
+        }
+
+        .msp-shared-note {
+            font-size: 0.68rem;
+            color: #b45309;
+            white-space: nowrap;
+            margin-top: 0.1rem;
+        }
+    }
 }

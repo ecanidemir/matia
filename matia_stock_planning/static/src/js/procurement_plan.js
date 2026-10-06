@@ -564,6 +564,21 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return Math.max(0, avail);
         },
 
+        // Shared-pool note: when a child's stock pool was split among
+        // several parents, show the received share under the number.
+        _sharedNote: function (r) {
+            var n = parseInt(r.share_n) || 0;
+            if (n <= 1) return '';
+            var pct = parseFloat(r.share_pct);
+            var pctTxt = isNaN(pct) ? '' : pct + '% of pool';
+            var title = 'Shared stock: this branch received ' +
+                (isNaN(pct) ? 'part' : pct + '%') +
+                ' of the available pool, split among ' + n + ' parents';
+            return '<div class="msp-shared-note" title="' + title + '">' +
+                '<i class="fa fa-share-alt mr-1"></i>' + pctTxt +
+                ' &middot; ' + n + ' parents</div>';
+        },
+
         // Net shortage after the cascade (tops: planned; subs: net).
         _rowNet: function (r) {
             if (r.net !== undefined && r.net !== null && r.net !== '') {
@@ -626,6 +641,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var rs = parseFloat(r.reserved_tr) || 0;
             var avail = parseFloat(r.avail_tr) || 0;
             var prod = this._producible(r);
+            var shared = (parseInt(r.share_n) || 0) > 1;
             var order = (r.order_qty !== undefined && r.order_qty !== null &&
                 r.order_qty !== '') ? this._fmtNum(r.order_qty, 0) : '';
             var breakdown = r.top_breakdown ?
@@ -677,8 +693,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '</strong></td>' +
                 '<td class="td-max-dev">' + (prod <= 0 ?
                     '<span class="dev-badge dev-critical">0</span>' :
-                    '<span class="dev-normal">' + this._fmtNum(prod, 0) +
-                    '</span>') + '</td>' +
+                    '<span class="dev-normal' +
+                    (shared ? ' dev-shared' : '') + '">' +
+                    this._fmtNum(prod, 0) + '</span>') +
+                this._sharedNote(r) + '</td>' +
                 '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
                     '<span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>' :
                     '<span class="badge-req-need">' + this._fmtNum(net, 0) +
