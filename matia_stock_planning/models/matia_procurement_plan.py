@@ -2148,82 +2148,42 @@ class MatiaProcurementPlan(models.Model):
         return s
 
     @api.model
-    def get_sub_bom_cost(self, product_id, parent_qty=1.0, plan_id=False):
-        """Children of one product with TR+US avail + cost snapshot.
+    def _mpp_sub_items(self, env_sudo, plan, parent_pid, mult, bom,
+                       split, snap_by_pid, last_buy, bom_tmpls, usd,
+                       pool, ancestors=None):
+        """Child rows for one parent BOM (shared single/bulk helper).
 
-        Capacity-style lazy expansion for the procurement tree.
-        @param product_id Parent product ID.
-        @param parent_qty Parent multiplier (usage per top unit).
-        @param plan_id Optional plan (uses its line snapshots first).
-        @return {'items': [...]}, each with bom_qty, avail, last
-            price/TRY/USD + short date, rolled TRY/USD unit, has_bom.
+        Same row shape as get_sub_bom_cost; used by both the single
+        lazy path and the bulk get_full_tree walk so the two paths
+        cannot drift apart.
+        @param env_sudo Sudo env.
+        @param plan matia.procurement.plan record (or False).
+        @param parent_pid Parent product ID (branch/pool lookup key).
+        @param mult Parent net multiplier (usage scales with it).
+        @param bom mrp.bom record of the parent.
+        @param split {pid: (oh_tr, rs_tr, oh_us, rs_us)} raw stock.
+        @param snap_by_pid {pid: plan line} snapshot lines.
+        @param last_buy {pid: last-buy dict} (see _mpp_last_buys).
+        @param bom_tmpls Set of template IDs that have a BOM (has_bom).
+        @param usd res.currency USD record (or False).
+        @param pool (branch_map, share_map, use_notes) pool lookups.
+        @param ancestors Optional set of path pid ints; children in it
+            are flagged _is_cycle and must not be expanded further.
+        @return List of row dicts, code/name sorted.
         """
-        env_sudo = _mpp_env_sudo(self)
-        prod = env_sudo['product.product'].browse(int(product_id))
-        if not prod.exists():
-            raise UserError(_('Product not found.'))
-        bom = env_sudo['mrp.bom'].search(
-            [('product_tmpl_id', '=', prod.product_tmpl_id.id),
-             ('product_id', '=', prod.id)], limit=1)
-        if not bom:
-            bom = env_sudo['mrp.bom'].search(
-                [('product_tmpl_id', '=', prod.product_tmpl_id.id)],
-                limit=1)
-        if not bom:
-            return {'items': []}
-        try:
-            mult = float(parent_qty or 1.0)
-        except (TypeError, ValueError):
-            mult = 1.0
-        child_ids = [bl.product_id.id for bl in bom.bom_line_ids]
-        # TR + US combined unreserved (same rule as the explosion).
-        split = _mpp_stock_split(env_sudo, child_ids)
-        onhand, reserv, onhand_us, reserv_us = {}, {}, {}, {}
-        for _pid, (_oht, _rst, _ohu, _rsu) in split.items():
-            onhand[_pid] = max(0.0, _oht)
-            reserv[_pid] = max(0.0, _rst)
-            onhand_us[_pid] = max(0.0, _ohu)
-            reserv_us[_pid] = max(0.0, _rsu)
-        # Snapshot: plan lines first, else last PO line lookup.
-        snap = {}
-        plan = env_sudo['matia.procurement.plan'].browse(
-            int(plan_id)) if plan_id else False
-        _pool_map, branch_map, share_map, _pool_driver, use_notes, _par_n = \
-            _mpp_load_pools(plan.producible_json if plan else '')
-        if plan and plan.exists():
-            for line in plan.line_ids.filtered(
-                    lambda l: l.product_id.id in child_ids):
-                snap[line.product_id.id] = line
-        missing = [c for c in child_ids if c not in snap]
-        usd = env_sudo['res.currency'].search(
-            [('name', '=', 'USD')], limit=1)
-        # Latest purchase across TR+USA per missing child: the latest
-        # order wins regardless of company (same rule as the tree).
-        last_buy = self._mpp_last_buys(env_sudo, missing)
-        order_dates = {}
-        for _lb in last_buy.values():
-            if _lb.get('order_id') and _lb.get('buy_dt') is not None:
-                order_dates[_lb['order_id']] = _lb['buy_dt']
-        # One query for child templates with a BOM (was: one search
-        # per child in the loop below).
-        child_tmpls = {bl.product_id.product_tmpl_id.id
-                       for bl in bom.bom_line_ids}
-        bom_tmpls = set()
-        if child_tmpls:
-            for b in env_sudo['mrp.bom'].search(
-                    [('product_tmpl_id', 'in', list(child_tmpls))]):
-                bom_tmpls.add(b.product_tmpl_id.id)
+        branch_map, share_map, use_notes = pool
         items = []
         for bl in bom.bom_line_ids:
             cp = bl.product_id
             pid = cp.id
-            oh = max(0.0, onhand.get(pid, 0.0))
-            rs = max(0.0, reserv.get(pid, 0.0))
-            oh_u = max(0.0, onhand_us.get(pid, 0.0))
-            rs_u = max(0.0, reserv_us.get(pid, 0.0))
+            _t = split.get(pid, (0.0, 0.0, 0.0, 0.0))
+            oh = max(0.0, _t[0] or 0.0)
+            rs = max(0.0, _t[1] or 0.0)
+            oh_u = max(0.0, _t[2] or 0.0)
+            rs_u = max(0.0, _t[3] or 0.0)
             avail = max(0.0, oh - rs) + max(0.0, oh_u - rs_u)
             bqty = float(bl.product_qty or 1.0)
-            line = snap.get(pid)
+            line = snap_by_pid.get(pid)
             if line:
                 lp = float(line.last_price or 0.0)
                 lcur = line.last_currency_id.name \
@@ -2290,12 +2250,12 @@ class MatiaProcurementPlan(models.Model):
             # Branch producible: this parent's allocated share of the
             # child's pool; legacy own-stock formula when the plan
             # predates pools (or no plan was passed).
-            _branch = branch_map.get((prod.id, pid))
+            _branch = branch_map.get((parent_pid, pid))
             if _branch is None:
                 _branch = int(math.floor(avail / bqty)) \
                     if bqty > 0 and avail > 0 else 0
-            _sh = share_map.get((prod.id, pid), (100.0, 1))
-            items.append({
+            _sh = share_map.get((parent_pid, pid), (100.0, 1))
+            _row = {
                 'product_id': pid,
                 'code': cp.default_code or '',
                 'name': cp.name or '',
@@ -2330,9 +2290,268 @@ class MatiaProcurementPlan(models.Model):
                 'last_date': ldate,
                 'rolled_try': rtry,
                 'rolled_usd': rusd,
-            })
+            }
+            if ancestors and pid in ancestors:
+                _row['_is_cycle'] = True
+            items.append(_row)
         items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
+        return items
+
+    @api.model
+    def get_sub_bom_cost(self, product_id, parent_qty=1.0, plan_id=False):
+        """Children of one product with TR+US avail + cost snapshot.
+
+        Capacity-style lazy expansion for the procurement tree.
+        @param product_id Parent product ID.
+        @param parent_qty Parent multiplier (usage per top unit).
+        @param plan_id Optional plan (uses its line snapshots first).
+        @return {'items': [...]}, each with bom_qty, avail, last
+            price/TRY/USD + short date, rolled TRY/USD unit, has_bom.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        prod = env_sudo['product.product'].browse(int(product_id))
+        if not prod.exists():
+            raise UserError(_('Product not found.'))
+        bom = env_sudo['mrp.bom'].search(
+            [('product_tmpl_id', '=', prod.product_tmpl_id.id),
+             ('product_id', '=', prod.id)], limit=1)
+        if not bom:
+            bom = env_sudo['mrp.bom'].search(
+                [('product_tmpl_id', '=', prod.product_tmpl_id.id)],
+                limit=1)
+        if not bom:
+            return {'items': []}
+        try:
+            mult = float(parent_qty or 1.0)
+        except (TypeError, ValueError):
+            mult = 1.0
+        child_ids = [bl.product_id.id for bl in bom.bom_line_ids]
+        # TR + US combined unreserved (same rule as the explosion).
+        split = _mpp_stock_split(env_sudo, child_ids)
+        # Snapshot: plan lines first, else last PO line lookup.
+        snap = {}
+        plan = env_sudo['matia.procurement.plan'].browse(
+            int(plan_id)) if plan_id else False
+        _pool_map, branch_map, share_map, _pool_driver, use_notes, _par_n = \
+            _mpp_load_pools(plan.producible_json if plan else '')
+        if plan and plan.exists():
+            for line in plan.line_ids.filtered(
+                    lambda l: l.product_id.id in child_ids):
+                snap[line.product_id.id] = line
+        missing = [c for c in child_ids if c not in snap]
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        # Latest purchase across TR+USA per missing child: the latest
+        # order wins regardless of company (same rule as the tree).
+        last_buy = self._mpp_last_buys(env_sudo, missing)
+        # One query for child templates with a BOM (was: one search
+        # per child in the loop below).
+        child_tmpls = {bl.product_id.product_tmpl_id.id
+                       for bl in bom.bom_line_ids}
+        bom_tmpls = set()
+        if child_tmpls:
+            for b in env_sudo['mrp.bom'].search(
+                    [('product_tmpl_id', 'in', list(child_tmpls))]):
+                bom_tmpls.add(b.product_tmpl_id.id)
+        items = self._mpp_sub_items(
+            env_sudo, plan, prod.id, mult, bom, split, snap, last_buy,
+            bom_tmpls, usd, (branch_map, share_map, use_notes))
         return {'items': items}
+
+    @api.model
+    def get_full_tree(self, plan_id, top_nets=None, max_depth=10,
+                      cap=2000):
+        """Expand the whole forest in ONE RPC for Expand All.
+
+        Same rows as get_sub_bom_cost per parent (shared _mpp_sub_items),
+        same net rule (child net = max(0, parent net x usage - avail)),
+        same client uid scheme (group:pid/...), same cycle/depth/cap
+        guards. Bulk loads keep the query count flat: one stock split,
+        one last-buy fetch, one child-BOM existence search, no matter
+        how many nodes the forest has.
+        @param plan_id Plan ID (see get_startup_tree).
+        @param top_nets Optional {level-0 uid: net} from the client
+            (its _rowNet values); missing tops fall back to the saved
+            line net, or need minus avail when there is no line.
+        @param max_depth Max parent depth to expand (matches client).
+        @param cap Max parents to expand (matches client fetched cap).
+        @return {'trees': {parent_uid: [items]}, 'count': int,
+            'capped': bool}.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(
+            int(plan_id)) if plan_id else False
+        try:
+            max_depth = int(max_depth)
+        except (TypeError, ValueError):
+            max_depth = 10
+        try:
+            cap = int(cap)
+        except (TypeError, ValueError):
+            cap = 2000
+        max_depth = max(0, min(max_depth, _MPP_MAX_LEVEL))
+        cap = max(0, min(cap, 5000))
+        if not isinstance(top_nets, dict):
+            top_nets = {}
+        targets = {}
+        if plan and plan.exists():
+            try:
+                targets = json.loads(plan.target_json or '{}')
+            except ValueError:
+                targets = {}
+            try:
+                targets = {int(k): float(v)
+                           for k, v in targets.items()
+                           if float(v or 0) > 0}
+            except (TypeError, ValueError):
+                targets = {}
+        kit_cfgs = _mpp_find_kit_boms(env_sudo)
+        # Phase 1: structure walk (BOM reads only, pid-cached, same
+        # variant-first resolution as get_sub_bom_cost). BFS order so
+        # parents always precede their children in the build phase.
+        bom_cache = {}
+
+        def _kids_bom(pid):
+            if pid in bom_cache:
+                return bom_cache[pid]
+            bom = False
+            try:
+                prod = env_sudo['product.product'].browse(int(pid))
+                if prod.exists():
+                    bom = env_sudo['mrp.bom'].search(
+                        [('product_tmpl_id', '=',
+                          prod.product_tmpl_id.id),
+                         ('product_id', '=', prod.id)], limit=1)
+                    if not bom:
+                        bom = env_sudo['mrp.bom'].search(
+                            [('product_tmpl_id', '=',
+                              prod.product_tmpl_id.id)], limit=1)
+            except Exception:
+                bom = False
+            bom_cache[pid] = bom
+            return bom
+
+        nodes = []
+        queue = []
+        for kit in kit_cfgs:
+            gkey = kit['key']
+            try:
+                toplines = kit['bom'].bom_line_ids
+            except Exception:
+                continue
+            for bl in toplines:
+                tpid = bl.product_id.id
+                queue.append({'uid': '%s:%s' % (gkey, tpid),
+                              'pid': tpid, 'level': 0, 'group': gkey,
+                              'ancestors': ()})
+        seen_uid = set()
+        while queue and len(nodes) < cap:
+            nd = queue.pop(0)
+            if nd['uid'] in seen_uid:
+                continue
+            seen_uid.add(nd['uid'])
+            bom = _kids_bom(nd['pid'])
+            if not bom:
+                continue
+            try:
+                lines = bom.bom_line_ids
+            except Exception:
+                continue
+            nd['bom'] = bom
+            nodes.append(nd)
+            if not lines or nd['level'] >= max_depth:
+                continue
+            chain = nd['ancestors'] + (nd['pid'],)
+            for bl in lines:
+                cpid = bl.product_id.id
+                if cpid in chain:
+                    continue
+                queue.append({'uid': nd['uid'] + '/' + str(cpid),
+                              'pid': cpid, 'level': nd['level'] + 1,
+                              'group': nd['group'],
+                              'ancestors': chain})
+        capped = bool(queue and len(nodes) >= cap)
+        # Phase 2: bulk loads (flat query count, node-count free).
+        all_pids = set()
+        for nd in nodes:
+            all_pids.add(nd['pid'])
+            for bl in nd['bom'].bom_line_ids:
+                all_pids.add(bl.product_id.id)
+        all_pids = list(all_pids)
+        split = _mpp_stock_split(env_sudo, all_pids)
+        snap = {}
+        if plan and plan.exists():
+            _cset = set(all_pids)
+            for line in plan.line_ids.filtered(
+                    lambda l: l.product_id.id in _cset):
+                snap[line.product_id.id] = line
+        missing = [c for c in all_pids if c not in snap]
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        last_buy = self._mpp_last_buys(env_sudo, missing)
+        tmpl_of = {}
+        if all_pids:
+            for pr in env_sudo['product.product'].browse(
+                    all_pids).read(['product_tmpl_id']):
+                _t = pr.get('product_tmpl_id')
+                if _t:
+                    tmpl_of[pr['id']] = _t[0]
+        bom_tmpls = set()
+        _tmpls = list(set(tmpl_of.values()))
+        for i in range(0, len(_tmpls), 200):
+            for b in env_sudo['mrp.bom'].search(
+                    [('product_tmpl_id', 'in', _tmpls[i:i + 200])]):
+                bom_tmpls.add(b.product_tmpl_id.id)
+        _pool_map, branch_map, share_map, _pool_driver, use_notes, \
+            _par_n = _mpp_load_pools(plan.producible_json if plan else '')
+        # Phase 3: top-down build. A node's multiplier is its own net:
+        # tops come from the client (server fallback below), children
+        # reuse the net of their row in the already-built parent.
+        net_by_uid = {}
+        for nd in nodes:
+            if nd['level'] != 0:
+                continue
+            _v = None
+            if nd['uid'] in top_nets:
+                try:
+                    _v = float(top_nets[nd['uid']])
+                except (TypeError, ValueError):
+                    _v = None
+            if _v is None:
+                _ln = snap.get(nd['pid'])
+                if _ln:
+                    try:
+                        _v = float(_ln.net_qty or 0.0)
+                    except (TypeError, ValueError):
+                        _v = 0.0
+                else:
+                    _t = split.get(nd['pid'], (0.0, 0.0, 0.0, 0.0))
+                    _av = max(0.0, max(0.0, _t[0] or 0.0)
+                              - max(0.0, _t[1] or 0.0)) + \
+                        max(0.0, max(0.0, _t[2] or 0.0)
+                            - max(0.0, _t[3] or 0.0))
+                    _v = max(0.0, float(targets.get(nd['pid'], 0)
+                                        or 0) - _av)
+            net_by_uid[nd['uid']] = _v
+        trees = {}
+        for nd in nodes:
+            mult = net_by_uid.get(nd['uid'], 0.0)
+            items = self._mpp_sub_items(
+                env_sudo, plan, nd['pid'], mult, nd['bom'], split,
+                snap, last_buy, bom_tmpls, usd,
+                (branch_map, share_map, use_notes),
+                ancestors=set(nd['ancestors'] + (nd['pid'],)))
+            trees[nd['uid']] = items
+            for it in items:
+                _cuid = nd['uid'] + '/' + str(it.get('product_id'))
+                if _cuid in net_by_uid:
+                    continue
+                try:
+                    _cnet = float(it.get('net') or 0.0)
+                except (TypeError, ValueError):
+                    _cnet = 0.0
+                net_by_uid[_cuid] = _cnet
+        return {'trees': trees, 'count': len(nodes), 'capped': capped}
 
     @api.model
     def search_tree(self, plan_id, query):

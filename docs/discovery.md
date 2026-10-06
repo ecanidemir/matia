@@ -368,3 +368,9 @@
 - Kural: supplier toplaminda rolled ASLA toplanmaz (ebeveyn+cocuk cift sayar); satin alma tahmini = own x order, rolled = mal degeri bilgisidir. RFQ tutarlariyla caprazla (ayni baz olmali).
 - Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); MEVCUT planlar Recalculate/supplier-preview tekrar calismadan yeni toplami gostermez; sonrasi Ctrl+F5. Commit/push YOK (kullanici onayi bekleniyor).
 
+## Expand All Bulk Tek-RPC (2026-10-06, production Tab 1)
+
+- Kok neden: her acilmamis node 1 RPC (`get_sub_bom_cost`) yiyordu; her RPC 2 BOM search + tum lokasyon taramasi + 2 read_group + 1 POL search_read + convert'ler + workers=2 kuyrugu + her pass'te full render.
+- Cozum: `get_full_tree(plan_id, top_nets, max_depth=10, cap=2000)` — Faz1 yapi yuruyusu (pid-cache BOM), Faz2 toplu yuk (tek stock split / tek last-buy / tek BOM-varlik search), Faz3 top-down insa (net yayilimi: cocuk neti = parent net x kullanim - avail). Satir kurucu `_mpp_sub_items` helper'a cikarildi; `get_sub_bom_cost` ayni helper'i cagirir (drift yok). JS `_onExpandAll` tek RPC + tek render; uid semasi/level/cap/cycle kurallari birebir.
+- Kural: agac-acma islerinde N-RPC yerine tek bulk RPC + paylasilan satir-kurucu helper kullan. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); once staging. Plan: `plans/production_expand_all_bulk.md`. Commit/push YOK (kullanici onayi bekleniyor).
+

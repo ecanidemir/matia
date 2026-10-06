@@ -512,14 +512,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
         },
 
-        // Recursive expand, capacity-page pattern (stock_planning.js
-        // _onExpandAllBoms): one pass per level. Each pass fires ALL
-        // currently visible unopened sub-BOM buttons at once
-        // (Promise.all), re-renders, and the next pass picks up the
-        // newly visible buttons. No manual queue: the DOM plus the
-        // expanded/subCache maps are the state, so no node can stall
-        // or get lost. Failed branches are parked in dead[] and not
-        // retried on later passes.
+        // Bulk expand in ONE RPC (get_full_tree): the server walks the
+        // whole forest with a flat query cost, so N nodes no longer mean
+        // N round-trips (plus server queueing on workers=2), and the
+        // table renders exactly once. Cache/expanded maps keep the same
+        // uid scheme, so single expand, search jump and export keep
+        // working on the bulk-filled caches.
         _onExpandAll: function () {
             var self = this;
             if (this._expanding) return;
@@ -535,87 +533,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var label = btn.html();
             this._expanding = true;
             btn.prop('disabled', true);
-            var pid = this._planId();
-            var maxDepth = 10;
-            var fails = 0;
-            var fetched = 0;
-            var dead = {};
-            var openedAny = false;
-            var finish = function () {
+            btn.html('<i class="fa fa-spinner fa-spin mr-1"></i>' +
+                _t('Expanding...'));
+            var done = function () {
                 self._expanding = false;
                 btn.prop('disabled', false);
                 btn.html(label);
-                self._renderTree();
-                if (fails) {
-                    self.displayNotification({
-                        title: _t('Partially expanded'),
-                        message: _t('Some sub-BOMs failed to load.') + ' (' + fails + ')',
-                        type: 'warning',
-                    });
-                } else if (fetched >= 2000) {
-                    self.displayNotification({
-                        title: _t('Expand capped'),
-                        message: _t('Stopped after 2000 sub-BOM loads; deeper levels may stay closed.'),
-                        type: 'warning',
-                    });
-                }
-            };
-            // Capacity-style level passes: collect every visible
-            // unopened button, fire at once, render, repeat. A pass
-            // that opens nothing ends the run (later passes would
-            // find nothing new either).
-            var expandOneLevel = function (pass) {
-                btn.html('<i class="fa fa-spinner fa-spin mr-1"></i>' +
-                    _t('Expanding') + ' (' + pass + '/' +
-                    maxDepth + ')');
-                var pending = [];
-                var queued = {};
-                var openedCached = 0;
-                self.$('.msp-btn-sub-bom:visible').each(function () {
-                    var uid = this.dataset.uid;
-                    var prodId = parseInt(this.dataset.pid, 10);
-                    var level = parseInt(this.dataset.level, 10) || 0;
-                    if (!uid || !prodId || level >= maxDepth) return;
-                    if (self.expanded[uid] || dead[uid] ||
-                        queued[uid]) return;
-                    if (self.subCache[uid]) {
-                        self.expanded[uid] = true;
-                        openedCached++;
-                    } else if (fetched + pending.length < 2000) {
-                        queued[uid] = true;
-                        pending.push({
-                            uid: uid, pid: prodId,
-                            net: parseFloat(
-                                this.dataset.net || '0') || 0,
-                            level: level,
-                            group: this.dataset.group,
-                        });
-                    }
-                });
-                if (!pending.length) {
-                    return Promise.resolve(openedCached);
-                }
-                var promises = pending.map(function (j) {
-                    fetched++;
-                    return self._rpcPlan('get_sub_bom_cost',
-                        [j.pid, j.net, pid || false]).then(
-                        function (res) {
-                            var items =
-                                (res && res.items) || [];
-                            self._markCycles(j.uid, items);
-                            self.subCache[j.uid] = {
-                                items: items, level: j.level + 1,
-                                groupKey: j.group,
-                            };
-                            self.expanded[j.uid] = true;
-                        }, function () {
-                            fails++;
-                            dead[j.uid] = true;
-                        });
-                });
-                return Promise.all(promises).then(function () {
-                    return pending.length + openedCached;
-                });
             };
             // Expand All works on the full tree, not on a search
             // filter: drop any in-flight search first.
@@ -628,34 +551,53 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var $input = this.$('.mpp-tree-search');
             if ($input.length) $input.val('');
             // Hidden groups render no rows, so unhide first and
-            // render once: pass 1 scans the real DOM.
+            // render once: the bulk result fills the real caches.
             this.collapsedGroups = {};
             this._renderTree();
-            var runPass = function (pass) {
-                if (!self._expanding || pass > maxDepth) {
-                    finish();
-                    return;
-                }
-                expandOneLevel(pass).then(function (opened) {
-                    if (opened) {
-                        openedAny = true;
-                        self._renderTree();
-                        runPass(pass + 1);
-                    } else {
-                        finish();
-                        if (!openedAny && !fails) {
-                            self.displayNotification({
-                                title: _t('Nothing to expand'),
-                                message: _t('No expandable sub-BOM rows in this plan.'),
-                                type: 'warning',
-                            });
-                        }
-                    }
-                }, function () {
-                    finish();
+            // Top nets drive the whole cascade (child net = parent net
+            // x usage - avail): send this screen's own _rowNet values.
+            var topNets = {};
+            this.treeGroups.forEach(function (g) {
+                (g.items || []).forEach(function (r) {
+                    topNets[g.key + ':' + r.product_id] =
+                        self._rowNet(r);
                 });
-            };
-            runPass(1);
+            });
+            this._rpcPlan('get_full_tree',
+                [this._planId() || false, topNets]).then(
+                function (res) {
+                    var trees = (res && res.trees) || {};
+                    var uids = Object.keys(trees);
+                    uids.forEach(function (uid) {
+                        var items = trees[uid] || [];
+                        self._markCycles(uid, items);
+                        self.subCache[uid] = {
+                            items: items,
+                            level: uid.split('/').length,
+                            groupKey: uid.split(':')[0],
+                        };
+                        self.expanded[uid] = true;
+                    });
+                    done();
+                    self._renderTree();
+                    if (!uids.length) {
+                        self.displayNotification({
+                            title: _t('Nothing to expand'),
+                            message: _t('No expandable sub-BOM rows in this plan.'),
+                            type: 'warning',
+                        });
+                    } else if (res && res.capped) {
+                        self.displayNotification({
+                            title: _t('Expand capped'),
+                            message: _t('Stopped after 2000 sub-BOM loads; deeper levels may stay closed.'),
+                            type: 'warning',
+                        });
+                    }
+                }, function (err) {
+                    done();
+                    self._renderTree();
+                    self._notifyErr(err);
+                });
         },
 
         _onCollapseAll: function () {
