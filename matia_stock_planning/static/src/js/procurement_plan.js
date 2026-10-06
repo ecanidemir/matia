@@ -768,8 +768,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _sortItems: function (rows) {
             var k = this.treeSort.key, d = this.treeSort.dir;
-            var num = {onhand: 1, reserved: 1, avail: 1, producible: 1,
-                planned: 1, est: 1};
+            var num = {avail: 1, producible: 1, planned: 1, est: 1};
             var self = this;
             rows.sort(function (a, b) {
                 var av = self._sortVal(a, k), bv = self._sortVal(b, k);
@@ -785,8 +784,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _sortVal: function (r, k) {
             if (k === 'code') return (r.code || '') + ' ' + (r.name || '');
-            if (k === 'onhand') return this._onhand(r);
-            if (k === 'reserved') return parseFloat(r.reserved_tr) || 0;
             if (k === 'avail') return parseFloat(r.avail_tr) || 0;
             if (k === 'producible') return this._producible(r);
             if (k === 'planned') return this._rowNet(r);
@@ -809,15 +806,19 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 (l.last_currency ? ' ' + l.last_currency : '');
         },
 
-        _onhand: function (r) {
-            if (r.onhand !== undefined && r.onhand !== null) {
-                return parseFloat(r.onhand) || 0;
-            }
-            if (r.stock_tr !== undefined && r.stock_tr !== null) {
-                return parseFloat(r.stock_tr) || 0;
-            }
-            return (parseFloat(r.avail_tr) || 0) +
-                (parseFloat(r.reserved_tr) || 0);
+        // UoM names come from the DB in Turkish (e.g. 'Adet'); the UI is
+        // English-only (user rule). Server already maps, this is the
+        // client fallback for cached/legacy rows. Mirrors _MPP_UOM_NAME_MAP.
+        _uomEn: function (name) {
+            var map = {
+                'Adet': 'Units', 'adet': 'Units',
+                'Birim': 'Units', 'birim': 'Units',
+                'Kg': 'kg', 'Metre': 'm', 'metre': 'm',
+                'Paket': 'Pack', 'paket': 'Pack',
+                'Set': 'Set', 'Takim': 'Set', 'takim': 'Set',
+            };
+            if (!name) return '';
+            return map[name] || name;
         },
 
         _producible: function (r) {
@@ -907,13 +908,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 toggle = '<span class="msp-bom-spacer mr-1">' +
                     '<i class="fa fa-circle msp-no-bom-dot"></i></span>';
             }
-            var oh = this._onhand(r);
-            var rs = parseFloat(r.reserved_tr) || 0;
             var avail = parseFloat(r.avail_tr) || 0;
             var prod = this._producible(r);
             var shared = (parseInt(r.share_n) || 0) > 1;
-            var order = (r.order_qty !== undefined && r.order_qty !== null &&
-                r.order_qty !== '') ? this._fmtNum(r.order_qty, 0) : '';
             var breakdown = r.top_breakdown ?
                 ' title="Per-top: ' + r.top_breakdown + '"' : '';
             var trCls = 'item-row' +
@@ -950,18 +947,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '" title="BOM Level ' + level + '">L' + level + '</span>' : '') +
                 '</td>' +
                 '<td class="td-bom-qty">' + this._fmtNum(r.bom_qty, 2) +
-                ' <small class="text-muted">' + (r.uom || '') + '</small></td>' +
-                '<td class="td-stock" title="Total On-Hand: ' + oh +
-                (rs ? ' (Reserved: ' + rs + ', Usable: ' + avail + ')' : '') +
-                '">' + (oh <= 0 ?
-                    '<span class="stock-zero">0</span>' : this._fmtNum(oh, 0)) +
-                '</td>' +
-                '<td class="td-reserved"><span class="reserved-pill' +
-                (rs > 0 ? ' reserved-has-qty' : '') + '" title="' +
-                (rs > 0 ? rs + ' units reserved' : 'None reserved') + '">' +
-                this._fmtNum(rs, 0) + '</span></td>' +
-                '<td class="td-stock"><strong>' + this._fmtNum(avail, 0) +
-                '</strong></td>' +
+                ' <small class="text-muted">' + this._uomEn(r.uom) +
+                '</small></td>' +
+                '<td class="td-stock" title="Net usable stock ' +
+                '(reserved excluded)"><strong>' +
+                this._fmtNum(avail, 0) + '</strong></td>' +
                 '<td class="td-max-dev">' + (prod <= 0 ?
                     '<span class="dev-badge dev-critical">0</span>' :
                     '<span class="dev-normal' +
@@ -975,9 +965,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 (r.top_breakdown ?
                     '<div class="text-muted small" style="max-width:220px;">' +
                     r.top_breakdown + '</div>' : '') + '</td>' +
-                '<td class="td-req">' + this._fmtNum(net, 0) +
-                (order !== '' ? ' / <strong>' + order + '</strong>' : '') +
-                '</td>' +
                 '<td>' + (r.seller || '') + '</td>' +
                 '<td class="text-center">' + this._srcBadge(r) + '</td>' +
                 '<td class="text-right">' + this._fmtLast(r) + '</td>' +
@@ -1002,9 +989,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Header mirrors the Capacity Plan thead: dark sticky bar,
-        // left-aligned product column, sortable columns with icons,
-        // "On Hand (incl. reserved)" note. Only the column SET differs
-        // (cost columns instead of device targets).
+        // left-aligned product column, sortable columns with icons.
+        // Only the column SET differs (cost columns instead of device
+        // targets; On Hand / Reserved / Net-Order hidden per user rule).
         _theadHtml: function () {
             var self = this;
             var th = function (key, label, cls, title) {
@@ -1025,22 +1012,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'Sort by name') +
                 th(null, 'Usage Qty', 'th-bom-qty',
                     'Quantity per parent assembly') +
-                th('onhand',
-                    'On Hand <small style="font-size:0.65rem; ' +
-                    'font-weight:400; opacity:0.85;">(incl. reserved)</small>',
-                    'th-stock',
-                    'Total on-hand stock (includes reserved). Reserved ' +
-                    'and NCR quantities are excluded from netting.') +
-                th('reserved', 'Reserved', 'th-reserved',
-                    'Reserved stock (excluded from netting)') +
                 th('avail', 'Unreserved', 'th-stock',
-                    'Net usable stock (on-hand minus reserved)') +
+                    'Net usable stock (on-hand minus reserved; ' +
+                    'reserved and NCR excluded from netting)') +
                 th('producible', 'Producible', 'th-max-dev',
                     'Producible units from net stock') +
                 th('planned', 'Planned', 'th-req',
                     'Net shortage after stock netting') +
-                th(null, 'Net / Order', 'th-req',
-                    'Net shortage / order quantity') +
                 th(null, 'Seller', '', 'Last supplier') +
                 th(null, 'Source', '', 'Company of the last buy') +
                 th(null, 'Last Price', '', 'Last purchase price') +
@@ -1089,7 +1067,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
                 items = self._sortItems(items.slice());
                 html += '<tr class="group-row group-' + g.key +
-                    '" data-group="' + g.key + '"><td colspan="15">' +
+                    '" data-group="' + g.key + '"><td colspan="12">' +
                     '<div class="group-title-badge">' +
                     '<i class="fa ' + self._groupIcon(g.key) + ' mr-1"></i>' +
                     '<span>' + g.title + '</span>' +
@@ -1114,7 +1092,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 }
             });
             if (searching && !visibleTotal && !this.treeSearchLoading) {
-                html += '<tr><td colspan="15">' +
+                html += '<tr><td colspan="12">' +
                     '<div class="alert alert-info">No parts match ' +
                     '&ldquo;' + this.treeSearch +
                     '&rdquo; in any BOM.</div></td></tr>';
@@ -1135,17 +1113,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     var uid = self._canonUid(parentUid, r.product_id);
                     if (!self._subtreeMatch(uid, r)) return;
                     var net = self._rowNet(r);
-                    var order = (r.order_qty !== undefined &&
-                        r.order_qty !== null && r.order_qty !== '') ?
-                        r.order_qty : '';
                     rows.push({
                         code: r.code, name: r.name, level: level,
-                        bom_qty: r.bom_qty, uom: r.uom,
-                        onhand: self._onhand(r),
-                        reserved: parseFloat(r.reserved_tr) || 0,
+                        bom_qty: r.bom_qty, uom: self._uomEn(r.uom),
                         avail: parseFloat(r.avail_tr) || 0,
                         producible: self._producible(r),
-                        planned: net, net: net, order: order,
+                        planned: net,
                         seller: r.seller || '',
                         source: r.last_company || '',
                         last: self._fmtLast(r),

@@ -257,6 +257,13 @@
 - Production `_onExpandAll` ayni desene cevrilidi: tur-basi `expandOneLevel(pass)` (`.msp-btn-sub-bom:visible` tara, acilmamis + olu-degil + level<10 olanlari topla, cache'tekini RPC'siz ac, Promise.all ile atesle, sayiyi don), `runPass` aclan yoksa bitirir (sonraki turlar da bos olurdu), basarisiz dal `dead[]`'e alinir (sonraki turlarda tekrar denenmez), baslangicta arama filtresi temizlenir + gruplar acilir + bir kez render edilir (1. tur gercek DOM'u tarar).
 - Kural: agac-acma islerinde kaynagi DOM taramasi yap, uid kuyrugu elle tutma. Deploy: static-only -> Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
 
+## Tree+Cost Sadelestirme + Seller/UoM Duzeltmesi (2026-10-06, production plan Tab 2)
+
+- Kullanici karari: On Hand + Reserved sutunlari kaldirildi, sadece Unreserved gosterilir (netting zaten `avail=max(0,onhand-reserved)`, NCR haric). Net/Order sutunu kaldirildi (Usage+Unreserved+Producible+Planned yeterli). Tablo 15->12 sutun (`colspan=12` 2 yerde guncellendi); sort key'leri `onhand/reserved` silindi; `_onhand` helper olu kod olarak kaldirildi. Excel tree export ayni 4 sutunu birakti (CSV format 20->16 `%s`, xlsx 18->14 kolon: 0 code,1 name,2 usage,3 avail,4 producible,5 planned,6 seller,7 source,8 last,9 usd,10 date,11 rolled,12 est,13 breakdown).
+- Turkce UoM (`Adet` DB dilinde sakli) Tree+Cost'ta ham gorunuyordu; capacity'deki `_UOM_NAME_MAP` procurement'a tasindi: server `_MPP_UOM_NAME_MAP` + `_mpp_uom_en()` (tree top/sub/summary/production 4 nokta) + JS `_uomEn()` fallback (cached/legacy satirlar). Degisen 4 dosya case-sensitive TR-karakter taramasinda temiz (`Select-String -CaseSensitive`; NOT: case-insensitive tarama Turkce `i/I` folding yuzunden her satiri eslestirir, her zaman `-CaseSensitive` kullan).
+- Seller'da Matia TR/US cikiyordu (sirketlerarasi PO'lar vendor olarak kendi sirketimizi gosterir). Cozum: `_mpp_own_partner_ids()` (tum `res.company` partner_id'leri) `_mpp_last_buys` PO satirlarini + pricelist `seller_map`'i filtreler; `action_assign_suppliers`'da ek safety-net (filtre disi sizma pricelist'e duser). Kural: kendi sirketimiz asla seller olamaz; son-alim yoksa "No supplier".
+- Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); `py_compile` + `node --check` OK. Capacity sayfasina DOKUNULMADI (reserved-pill/td-reserved SCSS+XML orada durur).
+
 ## Largest-Remainder Havuz Dagitimi + Tooltip (2026-10-06, production Producible)
 
 - Kullanici bulgusu: E1CBRN06 4 BOM'da, havuz 5000mm; dagitim 500x1 + 810x2 + 590x2 + 400x2 = 4100, 900mm sahipsiz kaldi. Kullanici el hesabi: 500x2 + 810x2 + 590x2 + 400x3 = 5000 (sifir kalan).

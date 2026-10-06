@@ -39,6 +39,56 @@ _MPP_MAX_LEVEL = 10
 _MPP_TR_COMPANY_ID = 1
 _MPP_US_COMPANY_ID = 2
 
+# UoM display names are stored in the DB language (TR). The whole preview
+# UI is English-only (user rule), so raw names like 'Adet' must never
+# reach the client. Same map as the Capacity page (stock_planning.py).
+_MPP_UOM_NAME_MAP = {
+    'Adet': 'Units',
+    'adet': 'Units',
+    'Birim': 'Units',
+    'birim': 'Units',
+    'Kg': 'kg',
+    'Metre': 'm',
+    'metre': 'm',
+    'Paket': 'Pack',
+    'paket': 'Pack',
+    'Set': 'Set',
+    'Takim': 'Set',
+    'takim': 'Set',
+}
+
+
+def _mpp_uom_en(name):
+    """English UoM label for the preview UI.
+
+    @param name: raw uom.uom name from the DB (may be Turkish).
+    @return: mapped English name, or the input unchanged when unknown.
+    """
+    if not name:
+        return ''
+    return _MPP_UOM_NAME_MAP.get(name, name)
+
+
+def _mpp_own_partner_ids(env_sudo):
+    """Partner IDs of our own companies (never valid sellers).
+
+    Inter-company POs list Matia TR/US as the vendor; the preview must
+    skip those lines and use the latest purchase from a real supplier.
+    @param env_sudo: sudo environment.
+    @return: set of res.partner ids belonging to any company.
+    """
+    try:
+        comps = env_sudo['res.company'].with_context(
+            active_test=False).sudo().search_read([], ['partner_id'])
+    except Exception:
+        return set()
+    own = set()
+    for comp in comps or []:
+        _p = comp.get('partner_id')
+        if _p:
+            own.add(_p[0] if isinstance(_p, (list, tuple)) else _p)
+    return own
+
 
 def _mpp_env_sudo(self):
     """sudo env covering all companies (proven pattern from this module)."""
@@ -833,11 +883,18 @@ class MatiaProcurementPlan(models.Model):
                 pr.get('product_tmpl_id')
                 for pr in tmpl_map.values()) if t})
         seller_map = {}
+        # Pricelist sellers that are our own companies are never valid
+        # (same rule as last-buy: TR/US can never be the seller).
+        own_partners = _mpp_own_partner_ids(env_sudo)
         if tmpl_ids:
             for s in Supplier.search_read([
                     ('product_tmpl_id', 'in', tmpl_ids),
             ], ['product_tmpl_id', 'name', 'price', 'min_qty',
                 'currency_id', 'product_uom', 'sequence']):
+                _sn = s.get('name')
+                _sid = _sn[0] if _sn else False
+                if _sid and _sid in own_partners:
+                    continue
                 _st = s.get('product_tmpl_id')
                 seller_map.setdefault(
                     _st[0] if _st else 0, []).append(s)
@@ -859,6 +916,11 @@ class MatiaProcurementPlan(models.Model):
             lp = lb.get('partner_id')
             _tmpl = pr.get('product_tmpl_id')
             sellers = seller_map.get(_tmpl[0] if _tmpl else 0, [])
+            # Safety net: never assign our own company even if an
+            # unfiltered last-buy slips through (falls to pricelist).
+            if lp and lp[0] in own_partners:
+                lb = {}
+                lp = False
             if lp:
                 # Real purchase history wins: order from the last
                 # supplier (TR or USA) at the last price. The pricelist
@@ -1119,6 +1181,9 @@ class MatiaProcurementPlan(models.Model):
         pids = sorted({p for p in (pids or []) if p})
         if not pids:
             return res
+        # Our own companies (TR/US) are never valid sellers: skip
+        # inter-company PO lines so the latest REAL supplier wins.
+        own_partners = _mpp_own_partner_ids(env_sudo)
         POLine = env_sudo['purchase.order.line']
         # ONE batched fetch for all products (was: one search_read per
         # product). Same order, first 5 rows per product kept, so the
@@ -1133,6 +1198,10 @@ class MatiaProcurementPlan(models.Model):
             _cp = c.get('product_id')
             _cpid = _cp[0] if _cp else False
             if not _cpid:
+                continue
+            _pp = c.get('partner_id')
+            _ppid = _pp[0] if _pp else False
+            if _ppid and _ppid in own_partners:
                 continue
             bucket = by_pid.setdefault(_cpid, [])
             if len(bucket) < 5:
@@ -1302,7 +1371,8 @@ class MatiaProcurementPlan(models.Model):
                 'open_mo_info': line.open_mo_info,
                 'net': line.net_qty,
                 'order_qty': line.order_qty,
-                'uom': line.uom_id.name if line.uom_id else '',
+                'uom': _mpp_uom_en(
+                    line.uom_id.name if line.uom_id else ''),
                 'seller': line.seller_id.display_name
                 if line.seller_id else '',
                 'price': line.unit_price,
@@ -1468,10 +1538,11 @@ class MatiaProcurementPlan(models.Model):
                     'display': pr.get('display_name')
                     or bl.product_id.display_name,
                     'bom_qty': 1.0,
-                    'uom': pr.get('uom_id', [0, ''])[1]
-                    if pr.get('uom_id') else (
-                        bl.product_uom_id.name
-                        if bl.product_uom_id else ''),
+                    'uom': _mpp_uom_en(
+                        pr.get('uom_id', [0, ''])[1]
+                        if pr.get('uom_id') else (
+                            bl.product_uom_id.name
+                            if bl.product_uom_id else '')),
                     'has_bom': bool(has_bom),
                     'level': 0,
                     'stock_tr': line.stock_tr if line else 0.0,
@@ -1796,8 +1867,9 @@ class MatiaProcurementPlan(models.Model):
                 # avail (same cascade rule as the explosion).
                 'planned': bqty * mult,
                 'net': max(0.0, bqty * mult - avail),
-                'uom': bl.product_uom_id.name
-                if bl.product_uom_id else '',
+                'uom': _mpp_uom_en(
+                    bl.product_uom_id.name
+                    if bl.product_uom_id else ''),
                 'has_bom': has_bom,
                 'stock_tr': oh,
                 'reserved_tr': rs,
@@ -2093,7 +2165,8 @@ class MatiaProcurementPlan(models.Model):
                 'name': line.product_id.display_name,
                 'route': line.route_type,
                 'order_qty': line.order_qty,
-                'uom': line.uom_id.name if line.uom_id else '',
+                'uom': _mpp_uom_en(
+                    line.uom_id.name if line.uom_id else ''),
                 'seller': line.seller_id.display_name
                 if line.seller_id else '',
                 'mo': mo,
