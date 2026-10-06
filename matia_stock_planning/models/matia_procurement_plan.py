@@ -566,7 +566,11 @@ def _mpp_classify_route(route_names, purchase_ok=False):
     Single source of truth for the Tab 3 Type column and the
     override guards: manufactured products have no own purchase
     price, so they never accept a corrected price or location.
-    @param route_names: list of stock.location.route names.
+    @param route_names: list of stock.location.route names, ALWAYS in
+        source language (English): route names are translated
+        (ir.translation), so callers must read them with
+        lang='en_US' or Turkish users get 'Uretim'/'Fason' and every
+        manufactured product falls through to 'unknown'/'buy'.
     @param purchase_ok: fallback when no route matches.
     @return: 'buy' / 'subcontract' / 'make' / 'unknown'.
     """
@@ -595,7 +599,8 @@ def _mpp_product_routes(env_sudo, pids):
             continue
         tmpl = pr.product_tmpl_id
         out[pr.id] = _mpp_classify_route(
-            tmpl.route_ids.mapped('name'),
+            tmpl.route_ids.with_context(
+                lang='en_US').mapped('name'),
             tmpl.purchase_ok)
     return out
 
@@ -1114,7 +1119,8 @@ class MatiaProcurementPlan(models.Model):
         for pr in prod_info.values():
             all_route_ids.update(pr.get('route_ids') or [])
         if all_route_ids:
-            for r in env_sudo['stock.location.route'].browse(
+            for r in env_sudo['stock.location.route'].with_context(
+                    lang='en_US').browse(
                     list(all_route_ids)).read(['name']):
                 route_names[r['id']] = r['name']
 
@@ -3530,7 +3536,8 @@ class MatiaProcurementPlan(models.Model):
         for pr in prod_info.values():
             all_route_ids.update(pr.get('route_ids') or [])
         if all_route_ids:
-            for rdr in env_sudo['stock.location.route'].browse(
+            for rdr in env_sudo['stock.location.route'].with_context(
+                    lang='en_US').browse(
                     list(all_route_ids)).read(['name']):
                 route_names[rdr['id']] = rdr['name']
         # Sellers prefer the plan lines (already assigned snapshot);
@@ -3603,53 +3610,11 @@ class MatiaProcurementPlan(models.Model):
                 'has_override': bool(corr > 0 or ovr.get('location')),
             })
         items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
-        # TEMP-DEBUG (route split-brain): log what THIS worker computed
-        # so the browser Network response can be compared 1:1. Remove
-        # once the Manufacture/Subcontract filter issue is resolved.
-        try:
-            _hist = {}
-            for _it in items:
-                _hist[_it['route']] = _hist.get(_it['route'], 0) + 1
-            _probe = {
-                _it['code']: (
-                    _it['product_id'],
-                    [route_names.get(
-                        rid, '?') for rid in (
-                        prod_info.get(
-                            _it['product_id'], {}).get(
-                            'route_ids') or [])],
-                    _it['route'])
-                for _it in items
-                if _it.get('code') in (
-                    'E2CBAN03', 'M2H1WN05', 'N2PGAN02', 'M2WHAN04')}
-            _logger.info(
-                'MPP-TEMP get_price_overview uid=%s plan=%s count=%s '
-                'hist=%s routes=%s probe=%s kit_tops=%s',
-                self.env.uid, plan.id if plan else False,
-                len(items), _hist, route_names, _probe,
-                sorted(kit_top_pids))
-        except Exception:
-            _logger.exception('MPP-TEMP price overview log failed')
-        # TEMP-DEBUG: same data inside the JSON response, because the
-        # panel log view does not show INFO lines. Read it in the
-        # browser: Network -> get_price_overview -> Response -> debug.
-        # Remove together with the MPP-TEMP block above.
-        _debug = {'db': self.env.cr.dbname}
-        try:
-            _debug.update({
-                'uid': self.env.uid,
-                'plan': plan.id if plan else False,
-                'hist': _hist,
-                'probe': _probe,
-            })
-        except Exception:
-            pass
         return {
             'items': items,
             'count': len(items),
             'override_count': sum(
                 1 for it in items if it['has_override']),
-            'debug': _debug,
         }
 
     @api.model

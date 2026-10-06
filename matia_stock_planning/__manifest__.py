@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Matia TekRMD Stock & Capacity Planning',
-    'version': '15.0.2.3.0',
+    'version': '15.0.2.4.0',
     'category': 'Inventory/Inventory',
     'summary': 'Device Production Capacity & Stock Analysis based on TekRMD BOMs',
     'description': """
