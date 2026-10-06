@@ -278,3 +278,10 @@
 - Örnek: RAL6K125 son alım 147.96 TRY/**m** (PO/24-00264, date_order 15 Feb 2024) -> 4.82 USD/**m**; BOM'da 282 **mm** kullanılıyor. Ekranda 4.82 x 282 = 1359.24 USD (1000x şişik); doğrusu 4.82/1000 x 282 = ~1.36 USD. Ebeveyn M3MTMN05 (subcontract, 200 TRY/Units -> 6.52 USD) rolled = 6.52 + 1359.24 = 1365.76; doğrusu ~7.88 USD.
 - Kural: rolled maliyette UoM uyumsuz ürün (satınalma UoM != BOM/stok UoM) varsa ekrandaki birim fiyatı PO UoM'una aittir, qty ile doğrudan çarpılamaz. Fix: rollup'ta `last_price_usd`'yi satır UoM'una normalize et (ya da `unit_price` USD karşılığını kullan).
 
+## Production Plan Cift Kod Hatasi (2026-10-06, T2STNN03)
+
+- Sikayet: Part Name `[T2STNN03] [T2STNN03] Foot Stabilizing Strap`, dogrusu `[T2STNN03] Foot Stabilizing Strap`.
+- Kok neden: `product.product` temizdi (name=`Foot Stabilizing Strap`, display=`[T2STNN03] Foot...`); procurement server `code` ayri + `name`=display_name gonderiyor, JS `[code]` + `name` birlestirince one ek iki kez geldi (Tab1 entry, Tab2 tree, uretim sekmesi, export).
+- Cozum: server `name` artik `product.name` (plain); JS `_plainName(code,name)` bastaki `[CODE]` one ekini soyuyor (eski cache guvencesi). Capacity etkilenmedi (zaten `p.name` kullaniyor).
+- Kural: kodu ayri gosteren her satirda `name` plain olmali; `display_name` yalniz tek-hucrelik alanlarda kullanilir. Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup).
+
