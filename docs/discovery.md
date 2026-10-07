@@ -413,3 +413,27 @@
 - stock.location.route name'ir.translation ile cevrilir: TR kullanicida 'Uretim'/'Siparis Uzerine Fason Firmaya Tedarik', MCP'de (en) 'Manufacture'/'Resupply Subcontractor...'. _mpp_classify_route Ingilizce substring baktigi icin TR oturumda make/sub hep unknown'a dustu (buy purchase_ok fallback ile kurtuldu).
 - Cozum: route name okunan 3 nokta (line build, get_price_overview, _mpp_product_routes) lang='en_US' ile okur. Beklenen dagilim: buy ~571, subcontract ~305, make ~88, kit 5, unknown ~0.
 - Kural: cevrilebilir display name uzerinden anahtar eslestirme YASAK; ya kaynak dilde oku ya ID/xmlid karsilastir. TEMP MPP-TEMP log + response debug blogu kaldirildi.
+
+## M1WHRN07 Cift Kaynak (buy + make) Ornegi (2026-10-06, staging)
+
+- Urun: [M1WHRN07] Outdoor Tail Wheel (product/template 1243, Units, purchase_ok, route Buy+Manufacture). 2 normal BOM (TR 1220, US 1714): M1WHRN08 Rim x1 + M1WHRN09 Rubber x1 + M1WHRN10 Tube x1 (3 cocuk saf Buy, SIFIR satinalma gecmisi).
+- Kullanim: TEKRMD04 (BOM 1718) + TekRMD Outdoor Parts (BOM 1737) icinde 2'ser adet.
+- Son montajli alim: 23.95 USD, ROLKO North America, PO/24-00324 (Mar 2024). Cocuklarin last-buy'u yok -> pricelist fallback ROLKO KOHLGRUBER (Rim 1098.9 / Rubber 280.92 / Tube 85.38 TRY), last_price 0 (unpriced).
+- 15.0.2.4.0 oncesi plan satirlari parent'i 'buy' gosterir (ceviri bug'i mirasi): MPP-0004'te parent gross 46 / avail 4+0 / net-order 42 + seller ROLKO NA + rolled 23.95, cocuklar gross 46 / order 46 -> montajli + komponent CIFTE siparis. Fix sonrasi Recalculate sart: parent 'make' olur (seller/fiyat silinir, rolled = cocuk toplami = su an 0), cocuk talebi parent NET x kullanim olur.
+- Kural: hem alinip hem uretilen urunde kod her zaman uretimi secer (BOM varsa patlatilir, Manufacture varsa make); buy-vs-make karari manueldir, Prices'ta montajli son-fiyat sadece bilgi olarak yanina konmali.
+
+## Subcontract Etiketi Ornegi (2026-10-06, T1RURB51 + T1CBRN01)
+
+- T1CBRN01 Cable 1.5mm2 (1382) + T1RURB51 Elasticated Column Band 50mm (1462): kendi BOM'u YOK, purchase_ok, template route [Buy(5), Resupply Subcontractor on Order(9)].
+- `_mpp_classify_route` onceligi Subcontract > Manufacture > Buy oldugu icin ikisi de 'subcontract' cikar (Buy olmasina ragmen).
+- Gerekce: ikisi de BOM 1680 [T2SCNN01] Seat Cushion (type subcontract, TR) komponenti -> fasoncuya resupply edilen malzeme, route 9 muhtemelen bilerek konmus.
+- Kural: komponent fason BOM'da kullaniliyorsa template'teki route 9'u silme (fason resupply kirilir); etiket "fason akisina giriyor" demektir, tedarik yine PO ile cikar. Dogrulama: malzeme fiziken fasoncuya gidiyor mu?
+
+## Prices UoM Kolonu + Corrected Birim Semantigi (2026-10-06, henuz deploy edilmedi)
+
+- Sorun: Prices sekmesinde birim kolonu yoktu; T1CBRN01 stok UoM 'mm', satinalma UoM 'm' (BOM 1680'de koltuk basi 260 mm). Corrected'a metre fiyati (orn. 2) girilse tum formuller bunu per-mm sanip 1000x siserdi (260 x 2 = 520 USD/minder).
+- Semantik (kalici): corrected INPUT her zaman satinalma (ticari) UoM'undan girilir; `save_price_override` `_mpp_stock_per_po_factor` ile stok/satir UoM'una cevirip saklar (2 USD/m -> 0.002 USD/mm). STORAGE degismedi: tum maliyet formulleri (_own_usd/_own_try, supplier PO toplamlari, _rfq_line_eff, tree Est.) hala per-line-UoM okur, kod degisikligi gerekmez. Gosterge tersi yonde carpar (stored x faktor).
+- Prices items yeni alanlar: uom (satir/stok), last_uom (son alim birimi, farkliysa parantez), price_uom (giris birimi), price_factor, corrected_display (giris birimine cevrilmis). Sifir override vardi -> migrasyon riski yok.
+- Reviewer yakaladi: ilk surumde display `/` ile bolunuyordu (2 -> 0.000002 gorunurdu); `*` olarak duzeltildi (get_price_overview + save else-kolu).
+- T1CBRN01 corrected etkisi (kod izi, ampirik dogrulama deploy sonrasi): miktarlar (gross/net/order) ASLA degismez; subtotal hep 0 (subcontract'a subtotal yazilmaz); seller yoksa unit_price 0 + 'No supplier'. Degisen: T2SCNN01 rolled_usd += 260 x saklanan-per-mm (2 USD/m girilirse +0.52 USD/minder), supplier PO toplami (order>0 subcontract satirlar dahil, own x order), RFQ taslak fiyati (seller atanirsa; PO satir UoM = mm, ticari olarak m'ye cevrilmesi manuel). Beklenen delta formulu: minder basi = kullanim_mm x girilen_USD_per_m / 1000.
+- Dogrulama: py_compile OK, node --check OK, eklenen satirlarda non-ASCII 0 (dosyadaki TR karakterler pre-existing header). Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); sonrasi Ctrl+F5. Commit/push YOK.

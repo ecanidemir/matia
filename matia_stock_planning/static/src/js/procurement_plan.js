@@ -1917,6 +1917,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<th class="mpp-th-price-sort" data-col="type" ' +
                 'style="cursor:pointer;" title="Sort by type">' +
                 'Type' + this._priceArrow('type') + '</th>' +
+                '<th title="Stock unit (line UoM); last purchase ' +
+                'unit in brackets when different">UoM</th>' +
                 '<th class="mpp-th-price-sort" data-col="seller" ' +
                 'style="cursor:pointer;" title="Sort by seller">' +
                 'Seller' + this._priceArrow('seller') + '</th>' +
@@ -1950,6 +1952,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     ['make', 'Manufacture'], ['kit', 'Kit'],
                     ['unknown', 'Unknown']]) +
                 '</select></td>' +
+                '<td></td>' +
                 '<td><input type="text" class="form-control ' +
                 'form-control-sm mpp-price-filter" data-f="seller" value="' +
                 this._escHtml(f.seller) + '" placeholder="Seller"/></td>' +
@@ -1981,8 +1984,20 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _priceRowHtml: function (r) {
             var checked = this.priceSel[r.product_id] ?
                 ' checked="checked"' : '';
-            var corrVal = (parseFloat(r.corrected) || 0) > 0 ?
-                r.corrected : '';
+            // Corrected input is entered per purchase (commercial)
+            // UoM (r.price_uom, e.g. meter for cable); the server
+            // stores it converted to per stock/line UoM.
+            var corrDisp = (r.corrected_display !== undefined &&
+                r.corrected_display !== null &&
+                r.corrected_display !== '') ?
+                r.corrected_display : r.corrected;
+            var corrVal = (parseFloat(corrDisp) || 0) > 0 ?
+                corrDisp : '';
+            var priceUom = r.price_uom || r.uom || '';
+            var uomNote = (r.last_uom && r.last_uom !== r.uom) ?
+                ' <span style="opacity:0.65;" title="Last ' +
+                'purchase unit">(last: ' +
+                this._escHtml(r.last_uom) + ')</span>' : '';
             var loc = (r.location || '').toLowerCase();
             var lastTxt = r.last_price ?
                 this._fmtNum(r.last_price, 4) +
@@ -2003,7 +2018,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var disTitle = isProduced ?
                 'Manufactured/kit products take no manual price ' +
                 '(cost rolls up from the components)' :
-                'Manual USD unit price';
+                'Manual USD unit price per ' + (priceUom || 'unit');
+            // Per-line-UoM equivalent shown when the input unit
+            // differs (e.g. entered per meter, stored per mm).
+            var corrHelp = '';
+            if (!isProduced &&
+                parseFloat(r.price_factor || 1) !== 1 &&
+                (parseFloat(r.corrected) || 0) > 0) {
+                corrHelp = '<div style="font-size:11px;opacity:0.7;">' +
+                    '= ' + this._fmtNum(r.corrected, 4) + ' USD/' +
+                    this._escHtml(r.uom || '') + '</div>';
+            }
             return '<tr class="item-row' +
                 (r.has_override ? ' mpp-row-manual' : '') +
                 '" data-pid="' + r.product_id + '">' +
@@ -2016,6 +2041,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 this._escHtml(this._plainName(r.code, r.name)) +
                 manualBadge + '</td>' +
                 '<td>' + this._priceTypeBadge(r.route) + '</td>' +
+                '<td style="white-space:nowrap;">' +
+                this._escHtml(r.uom || '') + uomNote + '</td>' +
                 '<td class="td-seller" title="' +
                 this._escHtml(r.seller || '') + '">' +
                 this._escHtml(r.seller || '') + '</td>' +
@@ -2026,7 +2053,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 'form-control-sm mpp-corr-input" data-pid="' +
                 r.product_id + '" value="' + corrVal + '" min="0" ' +
                 'step="0.0001" title="' + disTitle + '"' +
-                disAttr + '/></td>' +
+                disAttr + '/>' + corrHelp + '</td>' +
                 '<td><select class="form-control form-control-sm ' +
                 'mpp-loc-select" data-pid="' + r.product_id + '" ' +
                 'title="Purchase location (production site for ' +
@@ -2053,7 +2080,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 html += self._priceRowHtml(r);
             });
             if (!rows.length) {
-                html = '<tr><td colspan="10">' +
+                html = '<tr><td colspan="11">' +
                     '<div class="alert alert-info" style="margin:0.5rem;">' +
                     'No products match the filters.</div></td></tr>';
             }
@@ -2160,6 +2187,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     if (self.priceRows[i].product_id ===
                         (res && res.product_id)) {
                         self.priceRows[i].corrected = res.corrected || 0;
+                        self.priceRows[i].corrected_display =
+                            (res.corrected_display !== undefined &&
+                            res.corrected_display !== null) ?
+                            res.corrected_display :
+                            (res.corrected || 0);
+                        self.priceRows[i].price_uom = res.price_uom ||
+                            self.priceRows[i].price_uom;
+                        self.priceRows[i].price_factor =
+                            res.price_factor || 1;
                         self.priceRows[i].location = res.location || '';
                         self.priceRows[i].has_override =
                             (res.corrected || 0) > 0 ||

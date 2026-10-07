@@ -134,6 +134,35 @@ def _mpp_line_uom_factor(line):
         return 1.0
 
 
+def _mpp_stock_per_po_factor(env_sudo, stock_uom_id, po_uom_id):
+    """Stock-UoM units per one purchase-UoM unit (fail-safe 1.0).
+
+    Example: stock mm, purchase m -> 1000.0, so a 2 USD/m manual
+    price stores as 0.002 USD/mm (the per-line-UoM unit every cost
+    formula uses). Returns 1.0 when UoMs match, are missing, or
+    conversion fails.
+
+    @param env_sudo: sudo environment.
+    @param stock_uom_id: uom.uom id of the stock/line unit.
+    @param po_uom_id: uom.uom id of the purchase (commercial) unit.
+    @return: float factor.
+    """
+    if not stock_uom_id or not po_uom_id:
+        return 1.0
+    if stock_uom_id == po_uom_id:
+        return 1.0
+    try:
+        Uom = env_sudo['uom.uom']
+        stock = Uom.browse(stock_uom_id)
+        pou = Uom.browse(po_uom_id)
+        if not stock.exists() or not pou.exists():
+            return 1.0
+        return float(pou._compute_quantity(
+            1.0, stock, round=False)) or 1.0
+    except Exception:
+        return 1.0
+
+
 def _mpp_tr_stock_locs(env_sudo):
     """WHTR/Stock% internal locations (excluding NCR)."""
     locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
@@ -3522,7 +3551,7 @@ class MatiaProcurementPlan(models.Model):
         prod_info = {}
         for pr in Product.browse(pids).read(
                 ['default_code', 'name', 'route_ids', 'purchase_ok',
-                 'product_tmpl_id']):
+                 'product_tmpl_id', 'uom_id', 'uom_po_id']):
             prod_info[pr['id']] = pr
         kit_tmpls = _mpp_kit_tmpl_ids(
             env_sudo,
@@ -3556,6 +3585,7 @@ class MatiaProcurementPlan(models.Model):
             [('name', '=', 'USD')], limit=1)
         overrides = _mpp_price_overrides(env_sudo, pids)
         items = []
+        _po_factor_cache = {}
         for pid in pids:
             info = prod_info.get(pid, {})
             rnames = [route_names.get(rid, '')
@@ -3566,6 +3596,15 @@ class MatiaProcurementPlan(models.Model):
             if _tmpl and _tmpl[0] in kit_tmpls:
                 route = 'kit'
             line = line_by_pid.get(pid)
+            # Stock unit (line UoM wins) and commercial purchase unit.
+            # The corrected input is entered per purchase UoM (e.g. per
+            # meter for cable) and stored per stock/line UoM.
+            _pu = info.get('uom_id')
+            _ppu = info.get('uom_po_id') or _pu
+            stock_uid = _pu[0] if _pu else False
+            po_uid = _ppu[0] if _ppu else stock_uid
+            price_uom_txt = _mpp_uom_en(
+                _ppu[1] if _ppu and len(_ppu) > 1 else '')
             if line:
                 seller = line.seller_id.display_name \
                     if line.seller_id else ''
@@ -3574,6 +3613,13 @@ class MatiaProcurementPlan(models.Model):
                     if line.last_currency_id else ''
                 lusd = float(line.last_price_usd or 0.0)
                 ldate = self._mpp_month_year(line.last_date)
+                uom_txt = _mpp_uom_en(
+                    line.uom_id.name if line.uom_id else '')
+                if line.uom_id:
+                    stock_uid = line.uom_id.id
+                last_uom_txt = _mpp_uom_en(
+                    line.last_uom_id.name
+                    if line.last_uom_id else '')
             else:
                 lb = last_buy.get(pid, {})
                 _pp = lb.get('partner_id')
@@ -3587,9 +3633,21 @@ class MatiaProcurementPlan(models.Model):
                 lusd = float(vals.get('last_price_usd') or 0.0)
                 ldate = self._mpp_month_year(vals.get('last_date')) \
                     if vals.get('last_date') else ''
+                uom_txt = _mpp_uom_en(
+                    _pu[1] if _pu and len(_pu) > 1 else '')
+                _pou = lb.get('product_uom')
+                last_uom_txt = _mpp_uom_en(
+                    _pou[1] if _pou and len(_pou) > 1 else '')
             ovr = overrides.get(pid, {})
             corr = float(ovr.get('price') or 0.0)
             eff = corr if corr > 0 else lusd
+            _fkey = (stock_uid, po_uid)
+            if _fkey not in _po_factor_cache:
+                _po_factor_cache[_fkey] = _mpp_stock_per_po_factor(
+                    env_sudo, stock_uid, po_uid)
+            _pfactor = _po_factor_cache[_fkey] or 1.0
+            corr_disp = corr * _pfactor if corr and _pfactor \
+                else corr
             items.append({
                 'product_id': pid,
                 'code': info.get('default_code') or '',
@@ -3600,6 +3658,11 @@ class MatiaProcurementPlan(models.Model):
                     'make': 'Manufacture',
                     'kit': 'Kit'}.get(route, 'Unknown'),
                 'seller': seller,
+                'uom': uom_txt,
+                'last_uom': last_uom_txt,
+                'price_uom': price_uom_txt or uom_txt,
+                'price_factor': _pfactor,
+                'corrected_display': corr_disp,
                 'last_price': lp,
                 'last_currency': lcur,
                 'last_usd': lusd,
@@ -3623,10 +3686,16 @@ class MatiaProcurementPlan(models.Model):
         """Create or update one product override (global, all plans).
 
         @param product_id: product.product ID.
-        @param corrected_price_usd: manual USD price (>= 0; False
-            keeps the stored value).
+        @param corrected_price_usd: manual USD price per purchase
+            UoM (the commercial unit, e.g. per meter for cable;
+            >= 0; False keeps the stored value). Stored converted
+            to per stock/line UoM, the unit every cost formula
+            uses (per-line-UoM semantics unchanged).
         @param location: 'tr' / 'us' / False (False keeps stored).
-        @return: {'product_id': id, 'corrected': float, 'location': str}.
+        @return: {'product_id': id, 'corrected': float (stored, per
+            stock/line UoM), 'corrected_display': float (per
+            purchase UoM), 'price_uom': str, 'price_factor': float,
+            'location': str}.
         """
         # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo = _mpp_env_sudo(self)
@@ -3637,7 +3706,15 @@ class MatiaProcurementPlan(models.Model):
         prod = env_sudo['product.product'].browse(pid)
         if not prod.exists():
             raise UserError(_('Product not found.'))
+        _pu = prod.uom_id
+        _ppu = prod.uom_po_id or _pu
+        _pf = _mpp_stock_per_po_factor(
+            env_sudo, _pu.id if _pu else False,
+            _ppu.id if _ppu else False) or 1.0
+        _puom_txt = _mpp_uom_en(_ppu.name if _ppu else '') or \
+            _mpp_uom_en(_pu.name if _pu else '')
         vals = {}
+        _input_price = False
         if corrected_price_usd is not False and corrected_price_usd \
                 is not None and corrected_price_usd != '':
             try:
@@ -3647,7 +3724,9 @@ class MatiaProcurementPlan(models.Model):
             if price < 0:
                 raise UserError(
                     _('Corrected price cannot be negative.'))
-            vals['corrected_price_usd'] = price
+            _input_price = price
+            vals['corrected_price_usd'] = price / _pf if _pf \
+                else price
         if location is not False and location is not None:
             loc = (location or '').lower()
             if loc not in ('', 'tr', 'us'):
@@ -3676,8 +3755,15 @@ class MatiaProcurementPlan(models.Model):
         else:
             vals['product_id'] = pid
             rec = Ov.create(vals)
+        _stored = float(rec.corrected_price_usd or 0.0)
         return {'product_id': pid,
-                'corrected': float(rec.corrected_price_usd or 0.0),
+                'corrected': _stored,
+                'corrected_display': _input_price
+                if _input_price is not False
+                else (_stored * _pf if _stored and _pf
+                      else _stored),
+                'price_uom': _puom_txt,
+                'price_factor': _pf,
                 'location': rec.location or ''}
 
     @api.model
