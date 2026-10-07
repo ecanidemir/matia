@@ -16,6 +16,9 @@
                     <button class="btn btn-outline-light btn-sm mpp-btn-reload" title="Refresh Data">
                         <i class="fa fa-refresh mr-1"></i> Refresh
                     </button>
+                    <button class="btn btn-warning btn-sm mpp-btn-rebuild" title="Recalculate the whole plan from live data (routes, BOMs, stock, prices)">
+                        <i class="fa fa-calculator mr-1"></i> Rebuild
+                    </button>
                     <button class="btn btn-success btn-sm mpp-btn-excel" title="Export suppliers to Excel">
                         <i class="fa fa-file-excel-o mr-1"></i> Excel (suppliers)
                     </button>

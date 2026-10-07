@@ -16,6 +16,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         template: 'MatiaProcurementPlan.Dashboard',
         events: {
             'click .mpp-btn-reload': '_onReload',
+            'click .mpp-btn-rebuild': '_onRebuild',
             'click .mpp-nav-tab': '_onNavTab',
             'change .mpp-slot-select': '_onSlotChange',
             'click .mpp-btn-slot-save': '_onSlotSave',
@@ -317,6 +318,46 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }, function (err) {
                 self._notifyErr(err);
             });
+        },
+
+        // Rebuild recalculates the whole plan from LIVE master data
+        // (routes, BOMs, stock, prices, suppliers) using the current
+        // Needed numbers. Unlike Refresh (which only re-reads the
+        // stored plan lines), this recreates the lines, so any draft
+        // RFQ/MO links on this plan are lost -- hence the confirm.
+        _onRebuild: function () {
+            var self = this;
+            var pid = this._planId();
+            if (!pid) {
+                this.displayNotification({
+                    title: _t('Warning'),
+                    message: _t('The plan is still loading.'),
+                    type: 'warning',
+                });
+                return;
+            }
+            // Odoo 15: Dialog.confirm is callback-based
+            // (no promise); the rebuild runs in confirm_callback.
+            Dialog.confirm(this,
+                _t('Rebuild the whole plan from the current Needed numbers? Stock, prices and suppliers are recalculated from live data. Plan lines are recreated, so draft RFQ/MO links on this plan will be lost.'),
+                {
+                    title: _t('Rebuild plan'),
+                    confirmButtonText: _t('Rebuild'),
+                    confirm_callback: function () {
+                        self._rpcPlan('set_targets_and_rebuild',
+                            [pid, self.needMap]).then(function (res) {
+                            self._applySummary(res);
+                            self._renderTree();
+                            self.displayNotification({
+                                title: _t('Rebuilt'),
+                                message: _t('Plan recalculated from live data.'),
+                                type: 'success',
+                            });
+                        }, function (err) {
+                            self._notifyErr(err);
+                        });
+                    },
+                });
         },
 
         _needOf: function (pid) {
