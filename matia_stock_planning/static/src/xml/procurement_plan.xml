@@ -13,10 +13,10 @@
                     </div>
                 </div>
                 <div class="mpp-actions">
-                    <button class="btn btn-outline-light btn-sm mpp-btn-reload" title="Refresh Data">
+                    <button class="btn btn-outline-light btn-sm mpp-btn-reload" title="Reload the saved plan (discards unsaved Needed edits, no recalculation)">
                         <i class="fa fa-refresh mr-1"></i> Refresh
                     </button>
-                    <button class="btn btn-warning btn-sm mpp-btn-rebuild" title="Recalculate the whole plan from live data (routes, BOMs, stock, prices)">
+                    <button class="btn btn-warning btn-sm mpp-btn-rebuild" title="Save all Needed numbers and recalculate the whole plan from live data (routes, BOMs, stock, prices)">
                         <i class="fa fa-calculator mr-1"></i> Rebuild
                     </button>
                     <button class="btn btn-success btn-sm mpp-btn-excel" title="Export suppliers to Excel">
@@ -83,7 +83,7 @@
                     <span class="mpp-fill-label">Screws</span>
                 </div>
                 <button type="button" class="btn btn-secondary btn-sm mpp-btn-needfill-all"
-                    title="Set Needed to N for all four groups, then rebuild">
+                    title="Fill Needed with N locally for all four groups, then press Rebuild to apply">
                     <i class="fa fa-magic mr-1"></i>Apply
                 </button>
             </div>

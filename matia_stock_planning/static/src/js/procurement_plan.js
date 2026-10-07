@@ -27,7 +27,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-confirm-rfq': '_onConfirmRfq',
             'click .mpp-btn-create-mo': '_onCreateMo',
             'input .mpp-need': '_onNeedInput',
-            'change .mpp-need': '_onNeedChange',
+            'change .mpp-need': '_onNeedBlur',
             'input .mpp-tree-search': '_onTreeSearch',
             'click .msp-btn-expand-all': '_onExpandAll',
             'click .msp-btn-collapse-all': '_onCollapseAll',
@@ -53,8 +53,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.treeSearchDone = false;
             this.treeSearchLoading = false;
             this.treeSort = {key: 'planned', dir: -1};
-            // Editable Needed numbers per top product (persisted on plan).
+            // Editable Needed numbers per top product (persisted on plan
+            // only via Rebuild/Save; typing stays local until then).
             this.needMap = {};
+            this.dirtyNeeds = false;
             // Study slots 0-9 (persisted on the plan record).
             this.slots = [];
             this.activeSlot = 0;
@@ -184,6 +186,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 if ($input.length) $input.val('');
             }
             this.needMap = {};
+            this.dirtyNeeds = false;
             var targets = (summary && summary.targets) || {};
             var self = this;
             Object.keys(targets).forEach(function (k) {
@@ -224,7 +227,29 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             // DOM only when the widget is attached.
             if (this.$el) {
                 this._renderSlotBar();
+                this._updateRebuildBtn();
             }
+        },
+
+        // Rebuild button dirty state: unsaved Needed edits get a dot
+        // badge so the bulk-apply step is discoverable. No-op pre-mount.
+        _updateRebuildBtn: function () {
+            if (!this.$el) return;
+            var $btn = this.$('.mpp-btn-rebuild');
+            if (!$btn.length) return;
+            $btn.toggleClass('mpp-dirty', !!this.dirtyNeeds);
+            var base = 'Recalculate the whole plan from live data ' +
+                '(routes, BOMs, stock, prices) using the current ' +
+                'Needed numbers';
+            $btn.attr('title', this.dirtyNeeds ?
+                'Unsaved Needed changes - click to save all and rebuild. ' +
+                base + '.' :
+                base + '.');
+        },
+
+        _markNeedsDirty: function () {
+            this.dirtyNeeds = true;
+            this._updateRebuildBtn();
         },
 
         // Slot bar (header): study slots 0-9. Rebuilt from the cached
@@ -311,20 +336,38 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             doSave();
         },
 
+        // Refresh re-reads the SAVED plan (no recalculation, RFQ/MO
+        // links kept). It discards unsaved Needed edits, so a dirty
+        // screen asks for confirmation first. Use it to undo local
+        // edits or to pick up changes saved by someone else.
         _onReload: function () {
             var self = this;
-            this._fetchStartup().then(function () {
-                self._renderTree();
-            }, function (err) {
-                self._notifyErr(err);
-            });
+            var doReload = function () {
+                self._fetchStartup().then(function () {
+                    self._renderTree();
+                    self._updateRebuildBtn();
+                }, function (err) {
+                    self._notifyErr(err);
+                });
+            };
+            if (this.dirtyNeeds) {
+                Dialog.confirm(this,
+                    _t('Reload the saved plan? Unsaved Needed changes will be lost.'),
+                    {
+                        title: _t('Discard unsaved changes'),
+                        confirmButtonText: _t('Reload'),
+                        confirm_callback: doReload,
+                    });
+                return;
+            }
+            doReload();
         },
 
-        // Rebuild recalculates the whole plan from LIVE master data
-        // (routes, BOMs, stock, prices, suppliers) using the current
-        // Needed numbers. Unlike Refresh (which only re-reads the
-        // stored plan lines), this recreates the lines, so any draft
-        // RFQ/MO links on this plan are lost -- hence the confirm.
+        // Rebuild is the ONLY persist path for Needed numbers: it saves
+        // the whole needMap and recalculates the plan from LIVE master
+        // data (routes, BOMs, stock, prices, suppliers). Lines are
+        // recreated, so any draft RFQ/MO links on this plan are lost --
+        // hence the confirm.
         _onRebuild: function () {
             var self = this;
             var pid = this._planId();
@@ -348,6 +391,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             [pid, self.needMap, true]).then(function (res) {
                             self._applySummary(res);
                             self._renderTree();
+                            self._updateRebuildBtn();
                             self.displayNotification({
                                 title: _t('Rebuilt'),
                                 message: _t('Plan recalculated from live data.'),
@@ -366,14 +410,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Typing only updates the local map + the row's Planned cell
-        // (no re-render, so the input keeps focus). Persist happens on
-        // change (blur/enter) via _onNeedChange.
+        // (no re-render, so the input keeps focus). Nothing is sent to
+        // the server until Rebuild: edit as many rows as you like, then
+        // apply them all at once.
         _onNeedInput: function (ev) {
             var pid = parseInt(ev.currentTarget.dataset.pid, 10);
             if (!pid) return;
             var val = Math.max(0,
                 parseInt(ev.currentTarget.value, 10) || 0);
             this.needMap[pid] = val;
+            this._markNeedsDirty();
             var $input = this.$(ev.currentTarget);
             var avail = parseFloat(
                 ev.currentTarget.dataset.avail || '0') || 0;
@@ -397,30 +443,29 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
         },
 
-        // Persists ALL Needed numbers, then rebuilds the tree from the
-        // server (cascade nets change, so caches are dropped).
-        _onNeedChange: function () {
-            var self = this;
-            var pid = this._planId();
-            if (!pid) return Promise.resolve();
-            return this._rpcPlan('set_targets_and_rebuild',
-                [pid, this.needMap]).then(function (res) {
-                self._applySummary(res);
-                self._renderTree();
-            }, function (err) {
-                self._notifyErr(err);
-            });
+        // Blur/enter only normalizes the value into the local map.
+        // No server call here by design: the user edits as many rows
+        // as needed, then applies everything at once with Rebuild.
+        _onNeedBlur: function (ev) {
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            if (!pid) return;
+            var val = Math.max(0,
+                parseInt(ev.currentTarget.value, 10) || 0);
+            ev.currentTarget.value = val;
+            this.needMap[pid] = val;
+            this._markNeedsDirty();
         },
 
         // Fill bar (above the Plan tab): Needed = N (gross want) for
-        // every top in each group, then persist + rebuild. Each of the
-        // four inputs is read independently; an empty/invalid input
-        // leaves that group untouched. Stock is netted ONCE by the
-        // server cascade (net = demand - avail), so the fill must NOT
-        // pre-subtract avail here: that double-counted stock (every
-        // 0 < avail < N row ordered avail units short) and starved
-        // shared parts. Shared consumption by other parents pools
-        // into Planned on rebuild.
+        // every top in each group, applied LOCALLY (no server call).
+        // Press Rebuild afterwards to net stock and recalculate.
+        // Each of the four inputs is read independently; an
+        // empty/invalid input leaves that group untouched. Stock is
+        // netted ONCE by the server cascade (net = demand - avail), so
+        // the fill must NOT pre-subtract avail here: that
+        // double-counted stock (every 0 < avail < N row ordered avail
+        // units short) and starved shared parts. Shared consumption by
+        // other parents pools into Planned on rebuild.
         _onNeedFillAll: function () {
             var self = this;
             if (!this.summary || !this._planId()) {
@@ -457,14 +502,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
                 return;
             }
-            this._onNeedChange().then(function () {
-                self.displayNotification({
-                    title: _t('Filled'),
-                    message: filled.join(', ') +
-                        _t(' set as Needed for ') + count + ' ' +
-                        _t('parts (stock netted on rebuild).'),
-                    type: 'success',
-                });
+            this._markNeedsDirty();
+            this._renderTree();
+            self.displayNotification({
+                title: _t('Filled'),
+                message: filled.join(', ') +
+                    _t(' entered as Needed for ') + count + ' ' +
+                    _t('parts. Press Rebuild to apply.'),
+                type: 'success',
             });
         },
 
@@ -1131,7 +1176,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'data-pid="' + r.product_id + '" ' +
                     'data-avail="' + avail + '" ' +
                     'data-prod="' + prod + '" ' +
-                    'title="Wanted units, gross (stock and shared use net into Planned)" value="' +
+                    'title="Wanted units, gross (stock and shared use net into Planned on Rebuild)" value="' +
                     need + '"/>' :
                     '<span class="text-muted">—</span>') + '</td>' +
                 '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
@@ -1211,7 +1256,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'Capacity self-stock figure)') +
                 th('need', 'Needed', 'th-req',
                     'Your wanted qty, typed here (gross want; ' +
-                    'editable, saved on the plan). TR+US stock and ' +
+                    'editable, applied with Rebuild). TR+US stock and ' +
                     'shared use are netted into Planned.') +
                 th('planned', 'Planned', 'th-req',
                     'Planned = net units to actually build/procure: ' +
