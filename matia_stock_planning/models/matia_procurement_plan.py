@@ -584,6 +584,10 @@ def _mpp_find_kit_boms(env_sudo):
 _MPP_OVERRIDE_COMPANY = {'tr': _MPP_TR_COMPANY_ID,
                          'us': _MPP_US_COMPANY_ID}
 
+# Short company-code cache: TR/US roots are static, and the plan tree
+# asks for their labels once per row (a server restart clears it).
+_MPP_COMPANY_CODE_CACHE = {_MPP_TR_COMPANY_ID: 'TR'}
+
 
 def _mpp_price_overrides(env_sudo, pids=None):
     """Manual price/location overrides, keyed by product ID.
@@ -608,6 +612,21 @@ def _mpp_price_overrides(env_sudo, pids=None):
             'location': row.get('location') or False,
         }
     return res
+
+
+def _mpp_last_buy_scope(ovr_map):
+    """Per-product last-buy company scope from manual locations.
+
+    Products with a Prices location look at the latest purchase inside
+    that location's company only (TR->1, US->2); location-less products
+    are omitted and keep the global cross-company rule.
+    @param ovr_map _mpp_price_overrides() map ({pid: {'price',
+        'location'}}).
+    @return {pid: res.company ID} for rows with a location.
+    """
+    return {pid: _MPP_OVERRIDE_COMPANY[o.get('location')]
+            for pid, o in (ovr_map or {}).items()
+            if o.get('location') in _MPP_OVERRIDE_COMPANY}
 
 
 def _mpp_kit_tmpl_ids(env_sudo, tmpl_ids):
@@ -1565,12 +1584,15 @@ class MatiaProcurementPlan(models.Model):
             lambda l: l.route_type in ('buy', 'subcontract')
             and (l.gross_qty or 0) > 0)
         buy_pids = cost_lines.mapped('product_id').ids
-        # Last purchase per product across TR+USA: the latest order
-        # wins regardless of company (battery last bought from the USA
-        # shows the USA price/supplier/company).
+        # Last purchase per product: the latest order wins; products
+        # with a Prices location look inside that location's company
+        # only (battery last bought from the USA shows the USA
+        # price/supplier/company).
         # pid -> {partner_id, price_unit, currency_id, product_uom,
         #         order_id, buy_dt, company_id, company_name}
-        last_buy = self._mpp_last_buys(env_sudo, buy_pids)
+        _prev_ovr = _mpp_price_overrides(env_sudo, buy_pids)
+        last_buy = self._mpp_last_buys(
+            env_sudo, buy_pids, _mpp_last_buy_scope(_prev_ovr))
         # PO date (date_order) in one map; fallback to line date_planned.
         order_dates = {}
         for _lb in last_buy.values():
@@ -2044,24 +2066,57 @@ class MatiaProcurementPlan(models.Model):
             cid = int(company_id)
         except (TypeError, ValueError):
             return ''
-        if cid == _MPP_TR_COMPANY_ID:
-            return 'TR'
+        _cached = _MPP_COMPANY_CODE_CACHE.get(cid)
+        if _cached is not None:
+            return _cached
         comp = env_sudo['res.company'].browse(cid)
         if comp.exists():
             if (comp.currency_id.name or '').upper() == 'USD':
-                return 'USA'
-            return comp.name or ''
+                _label = 'USA'
+            else:
+                _label = comp.name or ''
+            _MPP_COMPANY_CODE_CACHE[cid] = _label
+            return _label
         return ''
 
-    @api.model
-    def _mpp_last_buys(self, env_sudo, pids):
-        """Latest purchase per product across TR+USA companies.
+    def _mpp_source_label(self, env_sudo, company_id, pid, ovr_map):
+        """Source badge text: last-buy company, else manual location.
 
-        The most recent PO (by order date) wins regardless of company,
-        so a battery last bought from the USA shows the USA price,
-        supplier and company. Cancelled orders are ignored.
+        The Prices location is written straight into the plan Source
+        column; a manual location wins only when no purchase exists
+        in that company yet.
+        @param env_sudo Sudo env.
+        @param company_id res.company ID of the last purchase (or
+            False when the product was never really bought).
+        @param pid product.product ID (manual-location fallback).
+        @param ovr_map _mpp_price_overrides() map (or {}).
+        @return (label, manual): label 'TR'/'USA'/... ('' when neither
+            a purchase nor a location exists); manual True when the
+            label comes from the Prices location.
+        """
+        if company_id:
+            return self._mpp_company_code(env_sudo, company_id), False
+        _loc = (ovr_map or {}).get(pid, {}).get('location')
+        _cid = _MPP_OVERRIDE_COMPANY.get(_loc) if _loc else False
+        if _cid:
+            return self._mpp_company_code(env_sudo, _cid), True
+        return '', False
+
+    @api.model
+    def _mpp_last_buys(self, env_sudo, pids, company_by_pid=None):
+        """Latest purchase per product, optionally scoped to one company.
+
+        Products with a manual purchase location (Prices tab) look at
+        the latest REAL purchase inside that location's company only
+        (TR=1, US=2); products without a location keep the global rule
+        (latest across TR+USA, e.g. a battery last bought from the USA
+        shows the USA price, supplier and company). Cancelled orders
+        are ignored.
         @param env_sudo Sudo env.
         @param pids Product IDs.
+        @param company_by_pid Optional {pid: res.company ID} scope
+            (see _mpp_last_buy_scope); pids missing here use the
+            global rule.
         @return {pid: {partner_id, price_unit, currency_id, product_uom,
             order_id, buy_dt, company_id, company_name}}; pids without
             any purchase are omitted.
@@ -2077,24 +2132,41 @@ class MatiaProcurementPlan(models.Model):
         # ONE batched fetch for all products (was: one search_read per
         # product). Same order, first 5 rows per product kept, so the
         # best-pick below sees exactly the old candidate sets.
+        # Location-scoped products add one bulk fetch per company
+        # (TR/US at most): same shape, filtered to that company's
+        # orders, so the location's firm decides the last purchase.
+        scope = company_by_pid or {}
+        _scoped = {}
+        for _pid, _cid in scope.items():
+            if _pid in pids and _cid:
+                _scoped.setdefault(_cid, []).append(_pid)
+        _groups = [([p for p in pids if p not in scope], [])]
+        for _cid, _cpids in _scoped.items():
+            _groups.append((_cpids,
+                            [('order_id.company_id', '=', _cid)]))
         by_pid = {}
-        for c in POLine.search_read([
-                ('product_id', 'in', pids),
-                ('order_id.state', '!=', 'cancel'),
-        ], ['product_id', 'partner_id', 'date_planned', 'price_unit',
-            'currency_id', 'product_uom', 'order_id'],
-                order='date_planned desc, id desc'):
-            _cp = c.get('product_id')
-            _cpid = _cp[0] if _cp else False
-            if not _cpid:
+        for _gpids, _extra in _groups:
+            if not _gpids:
                 continue
-            _pp = c.get('partner_id')
-            _ppid = _pp[0] if _pp else False
-            if _ppid and _ppid in own_partners:
-                continue
-            bucket = by_pid.setdefault(_cpid, [])
-            if len(bucket) < 5:
-                bucket.append(c)
+            for c in POLine.search_read([
+                    ('product_id', 'in', _gpids),
+                    ('order_id.state', '!=', 'cancel'),
+            ] + list(_extra),
+                    ['product_id', 'partner_id', 'date_planned',
+                     'price_unit', 'currency_id', 'product_uom',
+                     'order_id'],
+                    order='date_planned desc, id desc'):
+                _cp = c.get('product_id')
+                _cpid = _cp[0] if _cp else False
+                if not _cpid:
+                    continue
+                _pp = c.get('partner_id')
+                _ppid = _pp[0] if _pp else False
+                if _ppid and _ppid in own_partners:
+                    continue
+                bucket = by_pid.setdefault(_cpid, [])
+                if len(bucket) < 5:
+                    bucket.append(c)
         oids = list({
             c['order_id'][0] for _cl in by_pid.values()
             for c in _cl if c.get('order_id')})
@@ -2250,7 +2322,11 @@ class MatiaProcurementPlan(models.Model):
         for line in plan.line_ids:
             key = line.route_type or 'unknown'
             g = groups.setdefault(key, {'route': key, 'lines': [],
-                                       'cost': 0.0, 'count': 0})
+                                        'cost': 0.0, 'count': 0})
+            _src, _src_man = self._mpp_source_label(
+                env_sudo,
+                line.last_company_id.id if line.last_company_id else False,
+                line.product_id.id, _sum_ovr)
             val = {
                 'line_id': line.id,
                 'product_id': line.product_id.id,
@@ -2288,10 +2364,8 @@ class MatiaProcurementPlan(models.Model):
                         line.product_id.id, {}).get('price') or 0.0)
                 or float(line.last_price_usd or 0.0),
                 'last_date': self._mpp_month_year(line.last_date),
-                'last_company': self._mpp_company_code(
-                    env_sudo,
-                    line.last_company_id.id
-                    if line.last_company_id else False),
+                'last_company': _src,
+                'last_company_manual': _src_man,
                 'unit_usd': line.rolled_usd,
                 'rolled_usd': line.rolled_total_usd,
                 'rolled_try': line.rolled_try,
@@ -2317,6 +2391,10 @@ class MatiaProcurementPlan(models.Model):
                       'seller_name': line.seller_id.display_name
                        if line.seller_id else _('No supplier'),
                       'lines': [], 'cost': 0.0})
+            _s_src, _s_src_man = self._mpp_source_label(
+                env_sudo,
+                line.last_company_id.id if line.last_company_id else False,
+                line.product_id.id, _sum_ovr)
             s['lines'].append({
                 'product_id': line.product_id.id,
                 'code': line.product_id.default_code or '',
@@ -2331,10 +2409,8 @@ class MatiaProcurementPlan(models.Model):
                     line.last_uom_id.name if line.last_uom_id else ''),
                 'last_usd': line.last_price_usd,
                 'last_date': self._mpp_month_year(line.last_date),
-                'last_company': self._mpp_company_code(
-                    env_sudo,
-                    line.last_company_id.id
-                    if line.last_company_id else False),
+                'last_company': _s_src,
+                'last_company_manual': _s_src_man,
                 'unit_usd': line.rolled_usd,
                 'rolled_usd': line.rolled_total_usd,
                 'scratch_usd': line.scratch_unit_usd,
@@ -2688,6 +2764,11 @@ class MatiaProcurementPlan(models.Model):
                 # bottleneck child's sharing).
                 _pool = pool_map.get(pid, avail)
                 _pn = par_n.get(pid, 1)
+                _t_src, _t_src_man = self._mpp_source_label(
+                    env_sudo,
+                    line.last_company_id.id
+                    if line and line.last_company_id else False,
+                    pid, _tree_ovr)
                 items.append({
                     'product_id': pid,
                     'code': bl.product_id.default_code or '',
@@ -2731,9 +2812,8 @@ class MatiaProcurementPlan(models.Model):
                     'order_qty': line.order_qty if line else 0.0,
                     'seller': line.seller_id.display_name
                     if line and line.seller_id else '',
-                    'last_company': self._mpp_company_code(
-                        env_sudo, line.last_company_id.id)
-                    if line and line.last_company_id else '',
+                    'last_company': _t_src,
+                    'last_company_manual': _t_src_man,
                     'last_price': line.last_price if line else 0.0,
                     'last_currency':
                         line.last_currency_id.name
@@ -3013,9 +3093,11 @@ class MatiaProcurementPlan(models.Model):
                 rusd = float(line.rolled_usd or 0.0)
                 seller = line.seller_id.display_name \
                     if line.seller_id else ''
-                lcompany = self._mpp_company_code(
-                    env_sudo, line.last_company_id.id) \
-                    if line.last_company_id else ''
+                lcompany, _lcompany_man = self._mpp_source_label(
+                    env_sudo,
+                    line.last_company_id.id
+                    if line.last_company_id else False,
+                    pid, _ov_map)
             else:
                 lb = last_buy.get(pid, {})
                 lp = float(lb.get('price_unit') or 0.0)
@@ -3062,8 +3144,8 @@ class MatiaProcurementPlan(models.Model):
                 rtry, rusd = ltry * _factor, lusd * _factor
                 _lp = lb.get('partner_id')
                 seller = _lp[1] if _lp else ''
-                lcompany = self._mpp_company_code(
-                    env_sudo, lb.get('company_id'))
+                lcompany, _lcompany_man = self._mpp_source_label(
+                    env_sudo, lb.get('company_id'), pid, _ov_map)
             has_bom = cp.product_tmpl_id.id in bom_tmpls
             # Branch producible: this parent's allocated share of the
             # child's pool; legacy own-stock formula when the plan
@@ -3113,6 +3195,7 @@ class MatiaProcurementPlan(models.Model):
                 'share_note': use_notes.get(pid, ''),
                 'seller': seller,
                 'last_company': lcompany,
+                'last_company_manual': _lcompany_man,
                 'last_price': lp,
                 'last_currency': lcur,
                 'last_uom': luom,
@@ -3181,9 +3264,11 @@ class MatiaProcurementPlan(models.Model):
         missing = [c for c in child_ids if c not in snap]
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
-        # Latest purchase across TR+USA per missing child: the latest
-        # order wins regardless of company (same rule as the tree).
-        last_buy = self._mpp_last_buys(env_sudo, missing)
+        # Latest purchase per missing child (same rule as the tree);
+        # location-scoped like the supplier preview.
+        overrides = _mpp_price_overrides(env_sudo)
+        last_buy = self._mpp_last_buys(
+            env_sudo, missing, _mpp_last_buy_scope(overrides))
         # One query for child templates with a BOM (was: one search
         # per child in the loop below).
         child_tmpls = {bl.product_id.product_tmpl_id.id
@@ -3193,7 +3278,6 @@ class MatiaProcurementPlan(models.Model):
             for b in env_sudo['mrp.bom'].search(
                     [('product_tmpl_id', 'in', list(child_tmpls))]):
                 bom_tmpls.add(b.product_tmpl_id.id)
-        overrides = _mpp_price_overrides(env_sudo)
         items = self._mpp_sub_items(
             env_sudo, plan, prod.id, mult, bom, split, snap, last_buy,
             bom_tmpls, usd, (branch_map, share_map, use_notes),
@@ -3330,7 +3414,9 @@ class MatiaProcurementPlan(models.Model):
         missing = [c for c in all_pids if c not in snap]
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
-        last_buy = self._mpp_last_buys(env_sudo, missing)
+        _full_ovr = _mpp_price_overrides(env_sudo)
+        last_buy = self._mpp_last_buys(
+            env_sudo, missing, _mpp_last_buy_scope(_full_ovr))
         tmpl_of = {}
         if all_pids:
             for pr in env_sudo['product.product'].browse(
@@ -3346,7 +3432,7 @@ class MatiaProcurementPlan(models.Model):
                 bom_tmpls.add(b.product_tmpl_id.id)
         _pool_map, branch_map, share_map, _pool_driver, use_notes, \
             _par_n = _mpp_load_pools(plan.producible_json if plan else '')
-        overrides = _mpp_price_overrides(env_sudo)
+        overrides = _full_ovr
         # Phase 3: top-down build. A node's multiplier is its own net:
         # tops come from the client (server fallback below), children
         # reuse the net of their row in the already-built parent.
@@ -4069,14 +4155,15 @@ class MatiaProcurementPlan(models.Model):
             for line in plan.line_ids:
                 line_by_pid.setdefault(line.product_id.id, line)
         need_last = [p for p in pids if p not in line_by_pid]
-        last_buy = self._mpp_last_buys(env_sudo, need_last)
+        overrides = _mpp_price_overrides(env_sudo, pids)
+        last_buy = self._mpp_last_buys(
+            env_sudo, need_last, _mpp_last_buy_scope(overrides))
         order_dates = {}
         for _lb in last_buy.values():
             if _lb.get('order_id') and _lb.get('buy_dt') is not None:
                 order_dates[_lb['order_id']] = _lb['buy_dt']
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
-        overrides = _mpp_price_overrides(env_sudo, pids)
         items = []
         _po_factor_cache = {}
         for pid in pids:

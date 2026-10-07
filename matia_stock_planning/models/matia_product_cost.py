@@ -24,6 +24,7 @@ from .matia_procurement_plan import (
     _mpp_env_sudo,
     _mpp_find_kit_boms,
     _mpp_kit_tmpl_ids,
+    _mpp_last_buy_scope,
     _mpp_location_routes,
     _mpp_norm_bom_qty,
     _mpp_price_overrides,
@@ -175,12 +176,14 @@ class MatiaProductCost(models.AbstractModel):
             'effective_usd'}} and routes is {pid: route key}.
         """
         Mpp = env_sudo['matia.procurement.plan']
-        last_buy = Mpp._mpp_last_buys(env_sudo, list(pids or []))
+        overrides = _mpp_price_overrides(env_sudo, list(pids or []))
+        last_buy = Mpp._mpp_last_buys(
+            env_sudo, list(pids or []),
+            _mpp_last_buy_scope(overrides))
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
         company = env_sudo['res.company'].browse(_MPP_TR_COMPANY_ID)
         routes = _mpp_product_routes(env_sudo, list(pids or []))
-        overrides = _mpp_price_overrides(env_sudo, list(pids or []))
         Product = env_sudo['product.product']
         stock_uoms = {}
         for pr in Product.browse(

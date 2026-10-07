@@ -1116,12 +1116,20 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return html;
         },
 
-        // Source badge: TR (blue) / USA (orange) from the last PO's company.
+        // Source badge: TR (blue) / USA (orange) from the last PO's
+        // company, or the Prices manual location (marked with '*')
+        // when the product was never really bought in that company.
         _srcBadge: function (r) {
             var c = r.last_company || '';
             if (!c) return '<span class="text-muted">—</span>';
             var cls = c === 'USA' ? 'badge-warning' :
                 (c === 'TR' ? 'badge-primary' : 'badge-secondary');
+            if (r.last_company_manual) {
+                return '<span class="badge ' + cls +
+                    '" title="' +
+                    _t('Manual location (no purchase in this company yet)') +
+                    '">' + c + '*</span>';
+            }
             return '<span class="badge ' + cls + '">' + c + '</span>';
         },
 
