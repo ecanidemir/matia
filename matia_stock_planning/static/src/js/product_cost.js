@@ -1254,31 +1254,38 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 });
                 return;
             }
+            // Odoo 15: Dialog.confirm is callback-based
+            // (no promise); the reset runs in confirm_callback.
             Dialog.confirm(this,
                 'Copy the computed USD into Corrected for ' + ids.length +
                 ' product(s)? Existing corrected values are overwritten.',
                 {
                     title: 'Reset to USD',
                     confirmButtonText: 'Reset',
-                }).then(function () {
-                self._rpcCost('reset_prices_to_usd',
-                    [ids]).then(function (res) {
-                    self._fetchPrices();
-                    var msg = (res && res.updated ? res.updated : 0) +
-                        ' corrected price(s) set from computed USD.';
-                    if (res && res.skipped && res.skipped.length) {
-                        msg += ' Skipped (manufactured/kit): ' +
-                            res.skipped.join(', ');
-                    }
-                    self.displayNotification({
-                        title: 'Reset done',
-                        message: msg,
-                        type: 'success',
-                    });
-                }, function (err) {
-                    self._notifyErr(err);
+                    confirm_callback: function () {
+                        self._rpcCost('reset_prices_to_usd',
+                            [ids]).then(function (res) {
+                            self._fetchPrices();
+                            var msg = (res && res.updated ?
+                                res.updated : 0) +
+                                ' corrected price(s) set from ' +
+                                'computed USD.';
+                            if (res && res.skipped &&
+                                res.skipped.length) {
+                                msg += ' Skipped ' +
+                                    '(manufactured/kit): ' +
+                                    res.skipped.join(', ');
+                            }
+                            self.displayNotification({
+                                title: 'Reset done',
+                                message: msg,
+                                type: 'success',
+                            });
+                        }, function (err) {
+                            self._notifyErr(err);
+                        });
+                    },
                 });
-            });
         },
     });
 
