@@ -31,6 +31,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             'click .mpp-btn-price-us': '_onPriceBulkUs',
             'click .mpp-btn-price-clear': '_onPriceClear',
             'click .mpp-btn-price-reset': '_onPriceReset',
+            'click .mpp-btn-price-copy-std': '_onPriceCopyStd',
             'click .mpp-btn-price-save': '_onPriceSave',
             'click .mpp-th-price-sort': '_onPriceSort',
             'input .mpp-price-filter': '_onPriceFilter',
@@ -59,7 +60,8 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             this.priceLoaded = false;
             this.priceSel = {};
             this.priceFilters = {part: '', type: '', seller: '',
-                last: '', usd: '', date: '', corr: '', loc: ''};
+                last: '', usd: '', date: '', std: '', corr: '',
+                loc: ''};
             this.priceSort = {key: 'part', dir: 1};
         },
 
@@ -862,6 +864,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             if (k === 'last') return parseFloat(r.last_price) || 0;
             if (k === 'usd') return parseFloat(r.last_usd) || 0;
             if (k === 'date') return r.last_date || '';
+            if (k === 'std') {
+                return parseFloat(r.std_usd_display) || 0;
+            }
             if (k === 'corr') return parseFloat(r.corrected) || 0;
             if (k === 'loc') return r.location || '';
             return '';
@@ -896,6 +901,8 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                     .indexOf(usd) < 0) return false;
                 if (date && ((r.last_date || '').toLowerCase()
                     .indexOf(date) < 0)) return false;
+                if (f.std && String(r.std_usd_display || '')
+                    .indexOf(f.std) < 0) return false;
                 if (corr && String(r.corrected || '')
                     .indexOf(corr) < 0) return false;
                 if (f.loc === 'none') {
@@ -960,6 +967,11 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 '<th class="mpp-th-price-sort" data-col="date" ' +
                 'style="cursor:pointer;" title="Sort by last buy">' +
                 'Last Buy' + this._priceArrow('date') + '</th>' +
+                '<th class="mpp-th-price-sort" data-col="std" ' +
+                'style="cursor:pointer;" title="Sort by standard ' +
+                'price in USD (standard price converted at the ' +
+                'estimated rate day; * = latest-rate fallback)">' +
+                'Std USD' + this._priceArrow('std') + '</th>' +
                 '<th class="mpp-th-price-sort" data-col="corr" ' +
                 'style="cursor:pointer;" ' +
                 'title="Sort by corrected price">' +
@@ -994,6 +1006,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 '<td><input type="text" class="form-control ' +
                 'form-control-sm mpp-price-filter" data-f="date" value="' +
                 this._escHtml(f.date) + '" placeholder="Mon YYYY"/></td>' +
+                '<td><input type="text" class="form-control ' +
+                'form-control-sm mpp-price-filter" data-f="std" value="' +
+                this._escHtml(f.std) + '" placeholder="USD"/></td>' +
                 '<td><input type="text" class="form-control ' +
                 'form-control-sm mpp-price-filter" data-f="corr" value="' +
                 this._escHtml(f.corr) + '" placeholder="USD"/></td>' +
@@ -1035,6 +1050,31 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 (r.last_currency ? ' ' + r.last_currency : '') : '';
             var usdTxt = r.last_usd ?
                 this._fmtNum(r.last_usd, 4) : '';
+            // Standard-price fallback in USD, shown per the
+            // product's purchase UoM (same unit as Corrected, so
+            // Copy Std stores exactly this value). Subtitle is
+            // the rate day: last std change, or the latest rate
+            // when no valuation layer matched.
+            var stdTxt = (parseFloat(r.std_usd_display) || 0) > 0 ?
+                this._fmtNum(r.std_usd_display, 4) : '';
+            var stdTitle = 'Standard price converted to USD ' +
+                '(estimated rate day)';
+            if (stdTxt) {
+                stdTitle += r.std_rate_latest ?
+                    ' at the latest rate (' +
+                    (r.std_rate_date || '') + ')' :
+                    ' at the rate of the estimated last change day (' +
+                    (r.std_rate_date || '') + ')';
+            }
+            var stdCell = stdTxt ?
+                '<td style="white-space:nowrap;" title="' +
+                this._escHtml(stdTitle) + '">' + stdTxt +
+                (r.std_rate_date ? '<div style="font-size:11px;' +
+                    'opacity:0.7;">' +
+                    this._escHtml(r.std_rate_date) +
+                    (r.std_rate_latest ? ' *' : '') + '</div>' : '') +
+                '</td>' :
+                '<td title="' + this._escHtml(stdTitle) + '"></td>';
             var manualBadge = r.has_override ?
                 ' <span class="badge badge-warning" ' +
                 'title="Manual price/location stored in the database">' +
@@ -1081,6 +1121,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 lastUomNote + '</td>' +
                 '<td style="white-space:nowrap;">' + usdTxt + '</td>' +
                 '<td>' + this._escHtml(r.last_date || '') + '</td>' +
+                stdCell +
                 '<td style="white-space:nowrap;"><input type="number" class="form-control ' +
                 'form-control-sm mpp-corr-input" data-pid="' +
                 r.product_id + '" value="' + corrVal + '" min="0" ' +
@@ -1115,7 +1156,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 html += self._priceRowHtml(r);
             });
             if (!rows.length) {
-                html = '<tr><td colspan="10">' +
+                html = '<tr><td colspan="11">' +
                     '<div class="alert alert-info" style="margin:0.5rem;">' +
                     'No products match the filters.</div></td></tr>';
             }
@@ -1355,6 +1396,58 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                             }
                             self.displayNotification({
                                 title: 'Reset done',
+                                message: msg,
+                                type: 'success',
+                            });
+                        }, function (err) {
+                            self._notifyErr(err);
+                        });
+                    },
+                });
+        },
+
+        // Copy Std: fill Corrected from the standard-price USD
+        // for the checked rows (overwrites). For products with no
+        // last-buy price this is the fastest way to set a sane
+        // corrected value. Manufactured/kit rows and rows without
+        // a standard price are reported as skipped.
+        _onPriceCopyStd: function () {
+            var self = this;
+            var ids = this._priceSelIds();
+            if (!ids.length) {
+                this.displayNotification({
+                    title: 'Nothing selected',
+                    message: 'Check one or more rows first.',
+                    type: 'warning',
+                });
+                return;
+            }
+            // Odoo 15: Dialog.confirm is callback-based
+            // (no promise); the copy runs in confirm_callback.
+            Dialog.confirm(this,
+                'Copy the standard-price USD into Corrected for ' +
+                ids.length + ' product(s)? Existing corrected ' +
+                'values are overwritten.',
+                {
+                    title: 'Copy Std to Corrected',
+                    confirmButtonText: 'Copy',
+                    confirm_callback: function () {
+                        self._rpcCost('copy_std_to_corrected',
+                            [ids]).then(function (res) {
+                            self._fetchPrices();
+                            var msg = (res && res.updated ?
+                                res.updated : 0) +
+                                ' corrected price(s) set from ' +
+                                'standard-price USD.';
+                            if (res && res.skipped &&
+                                res.skipped.length) {
+                                msg += ' Skipped ' +
+                                    '(manufactured/kit or no ' +
+                                    'standard price): ' +
+                                    res.skipped.join(', ');
+                            }
+                            self.displayNotification({
+                                title: 'Copy done',
                                 message: msg,
                                 type: 'success',
                             });

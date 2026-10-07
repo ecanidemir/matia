@@ -273,6 +273,103 @@ class MatiaProductCost(models.AbstractModel):
         return price_map, routes
 
     @api.model
+    def _mpc_std_usd_map(self, env_sudo, pids):
+        """Standard-price fallback in USD, per stock UoM.
+
+        standard_price has no history table, and product write
+        dates are unreliable (variant write_date always mirrors
+        the last valuation layer; template write_date is stale),
+        so the day the standard price last changed is estimated
+        from stock valuation: the latest incoming
+        (quantity > 0) stock.valuation.layer whose unit_cost
+        matches standard_price within max(0.005, 1e-4 * value).
+        That unit_cost is converted to USD with the TR-company
+        USD rate of that day (base currency is TRY, so USD =
+        TRY * rate). Products with no matching layer fall back
+        to the latest overall TR USD rate (flagged).
+
+        @param env_sudo: sudo environment.
+        @param pids: product.product IDs.
+        @return: {pid: {'std_usd': float (per stock UoM),
+            'std_rate_date': str (month-year of the rate used),
+            'std_rate_latest': bool (True when the fallback
+            latest rate was used because no layer matched)}}.
+        """
+        out = {}
+        pids = [p for p in (pids or []) if p]
+        if not pids:
+            return out
+        Product = env_sudo['product.product']
+        stds = {}
+        for pr in Product.browse(pids).read(['standard_price']):
+            try:
+                stds[pr['id']] = float(
+                    pr.get('standard_price') or 0.0)
+            except (TypeError, ValueError):
+                stds[pr['id']] = 0.0
+        live = {pid: std for pid, std in stds.items() if std > 0}
+        if live:
+            layers = env_sudo['stock.valuation.layer'].search_read(
+                [('product_id', 'in', list(live)),
+                 ('quantity', '>', 0)],
+                ['product_id', 'unit_cost', 'create_date'],
+                order='product_id, create_date desc, id desc')
+        else:
+            layers = []
+        match_date = {}
+        for lay in layers:
+            _lp = lay.get('product_id')
+            pid = _lp[0] if _lp else False
+            if not pid or pid in match_date or pid not in live:
+                continue
+            try:
+                cost = float(lay.get('unit_cost') or 0.0)
+            except (TypeError, ValueError):
+                continue
+            std = live[pid]
+            if abs(cost - std) <= max(0.005, 1e-4 * abs(std)):
+                _cd = lay.get('create_date')
+                dt = fields.Datetime.from_string(_cd) \
+                    if isinstance(_cd, str) else _cd
+                if dt:
+                    match_date[pid] = dt.date()
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        rate_points = []
+        if usd:
+            for rr in env_sudo['res.currency.rate'].search_read(
+                    [('currency_id', '=', usd.id),
+                     ('company_id', '=', _MPP_TR_COMPANY_ID)],
+                    ['name', 'rate'], order='name desc'):
+                try:
+                    _nm = rr.get('name')
+                    rd = fields.Date.from_string(_nm) \
+                        if isinstance(_nm, str) else _nm
+                    rate_points.append(
+                        (rd, float(rr.get('rate') or 0.0)))
+                except (TypeError, ValueError):
+                    continue
+        rate_points.sort(key=lambda t: t[0], reverse=True)
+        for pid in pids:
+            std = stds.get(pid, 0.0)
+            if std <= 0 or not rate_points:
+                out[pid] = {'std_usd': 0.0, 'std_rate_date': '',
+                            'std_rate_latest': False}
+                continue
+            tgt = match_date.get(pid)
+            rate, rdate, latest = rate_points[0][1], \
+                rate_points[0][0], True
+            if tgt:
+                for (rd, rt) in rate_points:
+                    if rd <= tgt:
+                        rate, rdate, latest = rt, rd, False
+                        break
+            out[pid] = {'std_usd': std * rate,
+                        'std_rate_date': _mpc_month_year(rdate),
+                        'std_rate_latest': latest}
+        return out
+
+    @api.model
     def _mpc_unit_map(self, children, price_map):
         """Memoized bottom-up rolled unit USD per product."""
         memo = {}
@@ -449,7 +546,12 @@ class MatiaProductCost(models.AbstractModel):
         snapshot) and no plan record is created or required.
 
         @return: {'items': [...], 'count': int,
-            'override_count': int}.
+            'override_count': int}. Each item also carries the
+            standard-price fallback 'std_usd' (per stock UoM),
+            'std_usd_display' (per the product's own purchase
+            UoM), 'std_rate_date' (month-year of the USD rate
+            used) and 'std_rate_latest' (True when no valuation
+            layer matched and the latest rate was used).
         """
         # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo = _mpp_env_sudo(self)
@@ -480,6 +582,8 @@ class MatiaProductCost(models.AbstractModel):
         if not pids:
             return {'items': [], 'count': 0, 'override_count': 0}
         price_map, routes = self._mpc_price_map(env_sudo, pids)
+        std_map = self._mpc_std_usd_map(env_sudo, pids)
+        spf_cache = {}
         items = []
         for pid in pids:
             info = prod_info.get(pid, {})
@@ -499,6 +603,17 @@ class MatiaProductCost(models.AbstractModel):
             pfactor = float(pm.get('price_factor') or 1.0) or 1.0
             corr_disp = corr * pfactor if corr and pfactor \
                 else corr
+            # Standard-price fallback: shown per the product's own
+            # purchase UoM (the commercial unit save_price_override
+            # converts back from), so the displayed value is
+            # exactly what Copy Std stores.
+            std = std_map.get(pid, {})
+            std_usd = float(std.get('std_usd') or 0.0)
+            spf_key = (stock_uid, po_uid)
+            if spf_key not in spf_cache:
+                spf_cache[spf_key] = _mpp_stock_per_po_factor(
+                    env_sudo, stock_uid, po_uid) or 1.0
+            spfactor = spf_cache[spf_key]
             items.append({
                 'product_id': pid,
                 'code': info.get('default_code') or '',
@@ -516,6 +631,12 @@ class MatiaProductCost(models.AbstractModel):
                 'last_currency': pm.get('last_currency') or '',
                 'last_usd': lusd,
                 'last_date': pm.get('last_date') or '',
+                'std_usd': std_usd,
+                'std_usd_display': std_usd * spfactor
+                if std_usd else 0.0,
+                'std_rate_date': std.get('std_rate_date') or '',
+                'std_rate_latest': bool(
+                    std.get('std_rate_latest')),
                 'corrected': corr,
                 'location': pm.get('location') or '',
                 'effective_usd': eff,
@@ -580,5 +701,72 @@ class MatiaProductCost(models.AbstractModel):
             except Exception as exc:
                 _logger.warning(
                     'MPC reset skipped product %s: %s', pid, exc)
+                skipped.append(pr_code)
+        return {'updated': updated, 'skipped': skipped}
+
+    @api.model
+    def copy_std_to_corrected(self, product_ids=False):
+        """Copy the standard-price USD into corrected (multi-select).
+
+        Fills corrected from standard_price (converted to USD at
+        the rate of the day the standard price last changed, see
+        _mpc_std_usd_map) for products with no usable last-buy
+        price. Manufactured/kit products take no corrected price
+        and are reported as skipped (same guard as the
+        single-row save); products without a standard price are
+        skipped as well.
+
+        @param product_ids: product.product IDs to fill.
+        @return: {'updated': int, 'skipped': [codes]}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        env_sudo = _mpp_env_sudo(self)
+        pids = []
+        for _p in (product_ids or []):
+            try:
+                pids.append(int(_p))
+            except (TypeError, ValueError):
+                continue
+        if not pids:
+            raise UserError(_('No products selected.'))
+        _price_map, routes = self._mpc_price_map(env_sudo, pids)
+        std_map = self._mpc_std_usd_map(env_sudo, pids)
+        Mpp = env_sudo['matia.procurement.plan']
+        Product = env_sudo['product.product']
+        prod_uoms = {}
+        for pr in Product.browse(pids).read(['uom_id', 'uom_po_id']):
+            _su = pr.get('uom_id') or pr.get('uom_po_id')
+            _pu = pr.get('uom_po_id') or _su
+            prod_uoms[pr['id']] = (
+                _su[0] if _su else False, _pu[0] if _pu else False)
+        updated = 0
+        skipped = []
+        for pid in pids:
+            route = routes.get(pid, 'unknown')
+            pr = Product.browse(pid)
+            pr_code = pr.default_code or pr.name or str(pid)
+            if route in ('make', 'kit'):
+                skipped.append(pr_code)
+                continue
+            std_usd = float(
+                std_map.get(pid, {}).get('std_usd') or 0.0)
+            if std_usd <= 0:
+                # No standard price (or no USD rate): writing a
+                # 0.0 row would only pollute the table.
+                skipped.append(pr_code)
+                continue
+            _su, _pu = prod_uoms.get(pid, (False, False))
+            pfactor = _mpp_stock_per_po_factor(
+                env_sudo, _su, _pu) or 1.0
+            try:
+                # save_price_override expects the commercial
+                # (per purchase UoM) input and stores it per
+                # stock UoM; location=False keeps the stored one.
+                Mpp.save_price_override(
+                    pid, std_usd * pfactor, False)
+                updated += 1
+            except Exception as exc:
+                _logger.warning(
+                    'MPC std copy skipped product %s: %s', pid, exc)
                 skipped.append(pr_code)
         return {'updated': updated, 'skipped': skipped}
