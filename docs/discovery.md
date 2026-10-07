@@ -422,6 +422,22 @@
 - 15.0.2.4.0 oncesi plan satirlari parent'i 'buy' gosterir (ceviri bug'i mirasi): MPP-0004'te parent gross 46 / avail 4+0 / net-order 42 + seller ROLKO NA + rolled 23.95, cocuklar gross 46 / order 46 -> montajli + komponent CIFTE siparis. Fix sonrasi Recalculate sart: parent 'make' olur (seller/fiyat silinir, rolled = cocuk toplami = su an 0), cocuk talebi parent NET x kullanim olur.
 - Kural: hem alinip hem uretilen urunde kod her zaman uretimi secer (BOM varsa patlatilir, Manufacture varsa make); buy-vs-make karari manueldir, Prices'ta montajli son-fiyat sadece bilgi olarak yanina konmali.
 
+## M2C2HN06 Subcontract Gorunumu (2026-10-07, canli veri)
+
+- Urun: [M2C2HN06] Transfer Board Metal 6 Countersink (product/template 2198, Units, purchase_ok=False, sale_ok=False, company global). Template route [Manufacture(6), Resupply Subcontractor on Order(9)] DOGRUDAN template'te (kategori Manufactured routesuz).
+- BOM 1226: type normal (uretim), TR sirket, tek satir M3C2LN11 Laser x1. Yani BOM uretim, dogru.
+- Prices/Product Cost'ta Subcontract cikma sebebi: `_mpp_classify_route` onceligi Subcontract > Manufacture > Buy; cift rotali urun her zaman subcontract siniflanir.
+- Zincir: M3C2LN11 (laser) -> M2C2HN06 (countersink, normal) -> M3C2PB06 (painting, BOM 1341 type subcontract). Route 9 muhtemelen fason akis (boyama) icin bilerek konmus olabilir; T1RURB51/T1CBRN01 ornegiyle ayni sinif (komponent fason BOM'da kullaniliyor).
+- Kural: BOM tipi normal + urun route cift ise ekrandaki Subcontract etiketi veri kaynaklidir, kod degil; route 9 silinmeden etiket degismez. Silmeden once fasoncuya resupply kirilir mi teyit et (canli write, onay sart).
+
+## Route-vs-BOM-Tipi Tersine Siniflandirma (2026-10-07, canli veri, FIX BEKLIYOR)
+
+- Olay: M2C2HN06 (countersink, normal BOM 1226) Prices'ta Subcontract; M3C2PB06 (painting, subcontract BOM 1341, fasoncu LEHMANN 1028) Buy gorunuyor. Kullanici hakli: roller ters.
+- Olcu: aktif subcontract BOM 353; bunlarin 240 template'inde route 9 YOK (hepsi Buy gorunuyor). Route 9'lu 319 template'in 48'inde normal BOM var (hepsi Subcontract gorunuyor, uretim olmalilar).
+- Kok neden: `_mpp_classify_route` SADECE route'a bakar (Subcontract > Manufacture > Buy). Odoo 15 standardinda (`mrp_subcontracting` kurulu) bitmis fason urun rotasi Buy olur, `Resupply Subcontractor on Order` (9) KOMPONENTLERE konur. Yani VERI standarda uygun, kodun bakis acisi yanlis. Data-fix (route ekle/sil) YASAK - Odoo resupply akisini bozar.
+- Kod fix yonu (uygulanmadi, onay bekliyor): `_mpp_classify_route(route_names, purchase_ok, bom_types=None)` - aktif subcontract BOM varsa route'a bakmadan 'subcontract'; yoksa mevcut oncelik (M2C2HN06 -> Manufacture -> 'make'). `_mpp_product_routes` tek bulk `mrp.bom` search_read ile beslenir (N+1 yok); inline 2 siniflama noktasi (L~1295, L~3924) ayni imzaya gecer. Edge: normal+subcontract BOM'lu cift-kaynak urunde subcontract kazanir.
+- Operasyonel etki (bugunku yanlis sinifla): 48 uretim ara-urun net>0'da MO yerine RFQ/PO uretir (kritik); 240 fason bitmis urun PO'su dogru saticiya gider ama etiket/uretim-sekmesi yanlis.
+
 ## Subcontract Etiketi Ornegi (2026-10-06, T1RURB51 + T1CBRN01)
 
 - T1CBRN01 Cable 1.5mm2 (1382) + T1RURB51 Elasticated Column Band 50mm (1462): kendi BOM'u YOK, purchase_ok, template route [Buy(5), Resupply Subcontractor on Order(9)].
@@ -514,5 +530,19 @@ toplami 972.66 -> 130.34 (Product Cost ile ayni). odoo-reviewer: approve-with-ni
 (kabul edilmeyen: `or 1.0` modul konvansiyonu korundu; tooltip UoM suffix kapsam disi).
 Dogrulama: py_compile + scratch/simulate_rollup_fix.py. DEPLOY: Python degisikligi
 Git Deploy/restart gerektirir (mesai disi + backup); eski planlar Recalculate
-edilmeden duzelmez (cache). Pushed main 8d2cb4a.
+ edilmeden duzelmez (cache). Pushed main 8d2cb4a.
+CANLI TEYIT 2026-10-07 (staging 15.0.2.5.0, plan 26 Recalculate): E2CBAN03 rolled 130.341 = own 0 (make, last buy yok) + 35 cocuk edge qty x cocuk rolled toplami (edge 0.37 m / 1760 mm normalize ONAYLI). 130.34 birim maliyet needed/stoktan BAGIMSIZDIR; needed 100 (E2MBAN03) + stoklar sadece gross/net/order/est'i belirler: MB net 89 (US stok 11) -> E2CBAN03 gross 100, demand 89, net 84 (TR stok 5) -> est 130.341x84=10,948.64. UYARI: canli (matia.odoobulut.com) hala 15.0.1.0.0 ve procurement modelleri yok -> canliya henuz deploy edilmedi.
 FOLLOW-UP 2026-10-07: MPC de ayni helper'a gecti (matia_product_cost._mpc_explode 2 nokta: kit tops + children walk, zero-guard ile eski 0.0 semantigi korundu) -> tek donusum noktasi; davranis degisikligi yok (reviewer teyitli). Recalculate sonrasi capraz kontrol eklendi: _mpp_crosscheck_vs_cost plan rolled_usd vs Product Cost unit_map karsilastirir (tolerans abs>0.05 VE rel>%0.5, sifir-birimler atlanir, her hata yutulur); uyumsuzluk log + summary.cost_check + JS warning bildirimi. Bilinen benign fark: buy-rotali phantom top (planda own fiyatli, cost'ta sifir). DEPLOY: onceki fix ile ayni (Git Deploy/restart + Recalculate).
+
+## Product Cost Prices Urun Linki (2026-10-07, henuz deploy edilmedi)
+
+- Istek: Prices sekmesinde urun adina tiklaninca urun sayfasi yan sekmede acilsin.
+- Cozum (static-only): Tab 2 Part hucresi `<a class="mpp-prod-link" data-pid>` oldu; `click .mpp-prod-link` -> `_onOpenProduct` `window.open('/web#id=PID&model=product.product&view_type=form','_blank')` (preventDefault + stopPropagation; satir secimi/checkbox etkilenmez). Tab 1 Cost agacina DOKUNULMADI (oradaki tiklama sub-BOM acar). SCSS: `.mpp-prod-link:hover` underline (procurement_plan.scss price-table blogu).
+- Dogrulama: `node --check` OK; TR-karakter taramasi temiz (tek eslesme pre-existing UoM map). Deploy: static-only -> modul Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5. Commit/push YOK.
+
+## Production Plan Net-Cost Semantigi (2026-10-07, henuz deploy edilmedi, 15.0.2.6.0)
+
+- Kullanici karari: plan sayfasi sifirdan maliyet DEGIL gap gosterir. olled_usd = NET birim (
+et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-check scratch'e bagli). est = satir net toplami. Kit ozetleri + export toplami scratch bazinda (scratch_total_usd).
+- Paylasimli cocuk stoku oransal dusulur: pay(P->C) = net_cost(C) x contrib(P,C)/demand(C) (her ebeveyn sadece gap payini tasir; satir okunmadigi icin phantom/satirsiz cocuk seffaf akar; pool/producible maliyete girmez, display-only). Staging plan 26 replika (963/963 cascade, 427/427 yaprak): E2CBAN03 net 84 -> toplam 10,171.20 / birim 121.0857 (scratch 130.341); E2MBAN03 net 89 -> 48,305.60 / 542.7595.
+- Reviewer duzeltmeleri: _kits_from_stored scratch okur; legacy supplier filtresi ekranla ayni kapsama genisletildi (buy/subcontract/unknown); unknown route nakit toplama girmez (unknown_total_usd/unknown_count ayri, RFQ uretmez); _own_* unknown'u fiyatlar (MPC ile uyumlu). Deploy: Git Deploy + Upgrade/restart (mesai disi + backup) + plan Recalculate + E2CBAN03 sayilariyla teyit; sonrasi Ctrl+F5. Commit/push kullanici onayiyla.

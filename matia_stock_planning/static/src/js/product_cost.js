@@ -37,6 +37,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             'change .mpp-price-filter': '_onPriceFilter',
             'change .mpp-price-check': '_onPriceCheck',
             'change .mpp-price-check-all': '_onPriceCheckAll',
+            'click .mpp-prod-link': '_onOpenProduct',
         },
 
         init: function (parent, action) {
@@ -785,6 +786,16 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             this._fetchPrices();
         },
 
+        // Open the product.product form in a new browser tab.
+        _onOpenProduct: function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            if (!pid) return;
+            window.open('/web#id=' + pid +
+                '&model=product.product&view_type=form', '_blank');
+        },
+
         _escHtml: function (s) {
             return (s === undefined || s === null ? '' : String(s))
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -1056,10 +1067,12 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 'data-pid="' + r.product_id + '"' + checked + '/></td>' +
                 '<td class="td-product" title="' +
                 this._escHtml('[' + (r.code || '') + '] ' +
-                    this._plainName(r.code, r.name)) + '">[' +
+                    this._plainName(r.code, r.name)) + '">' +
+                '<a href="#" class="mpp-prod-link" data-pid="' +
+                r.product_id + '" title="Open product in new tab">[' +
                 this._escHtml(r.code || '') + '] ' +
                 this._escHtml(this._plainName(r.code, r.name)) +
-                manualBadge + '</td>' +
+                '</a>' + manualBadge + '</td>' +
                 '<td>' + this._priceTypeBadge(r.route) + '</td>' +
                 '<td class="td-seller" title="' +
                 this._escHtml(r.seller || '') + '">' +

@@ -631,25 +631,63 @@ def _mpp_kit_tmpl_ids(env_sudo, tmpl_ids):
             if r.get('product_tmpl_id')}
 
 
-def _mpp_classify_route(route_names, purchase_ok=False):
-    """One product's route key (Subcontract > Manufacture > Buy).
+def _mpp_subcontract_tmpl_ids(env_sudo, tmpl_ids):
+    """Templates owning at least one ACTIVE subcontract BOM (bulk).
 
-    Single source of truth for the Tab 3 Type column and the
-    override guards: manufactured products have no own purchase
-    price, so they never accept a corrected price or location.
+    Odoo 15 standard (`mrp_subcontracting`): the subcontracted
+    finished product itself carries only the Buy route, while the
+    `Resupply Subcontractor on Order` route sits on the COMPONENTS
+    sent to the subcontractor. Route-only classification therefore
+    inverts the two roles, so the BOM type wins (single bulk read,
+    no N+1).
+    @param env_sudo: sudo environment.
+    @param tmpl_ids: product.template IDs.
+    @return: set of template IDs with an active subcontract BOM.
+    """
+    tids = [t for t in (tmpl_ids or []) if t]
+    if not tids:
+        return set()
+    rows = env_sudo['mrp.bom'].search_read(
+        [('product_tmpl_id', 'in', tids),
+         ('active', '=', True),
+         ('type', '=', 'subcontract')],
+        ['product_tmpl_id'], limit=5000)
+    return {r['product_tmpl_id'][0] for r in (rows or [])
+            if r.get('product_tmpl_id')}
+
+
+def _mpp_classify_route(route_names, purchase_ok=False,
+                        has_subcontract_bom=False):
+    """One product's route key (Subcontract BOM > Manufacture >
+    Subcontract route > Buy).
+
+    Single source of truth for the Type column and the override
+    guards: manufactured products have no own purchase price, so
+    they never accept a corrected price (location stays allowed).
+    Manufacture outranks the resupply route on purpose: in Odoo 15
+    standard the `Resupply Subcontractor on Order` route sits on
+    COMPONENTS sent to the subcontractor (so a manufactured
+    component like M2C2HN06 carries it), while only the finished
+    fason product owns the subcontract BOM. A resupply route alone
+    never means "order this from the subcontractor".
     @param route_names: list of stock.location.route names, ALWAYS in
         source language (English): route names are translated
         (ir.translation), so callers must read them with
         lang='en_US' or Turkish users get 'Uretim'/'Fason' and every
         manufactured product falls through to 'unknown'/'buy'.
     @param purchase_ok: fallback when no route matches.
+    @param has_subcontract_bom: True when the template owns an
+        active subcontract BOM (see _mpp_subcontract_tmpl_ids);
+        wins over every route.
     @return: 'buy' / 'subcontract' / 'make' / 'unknown'.
     """
-    names = [n or '' for n in (route_names or [])]
-    if any('Subcontract' in n for n in names):
+    if has_subcontract_bom:
         return 'subcontract'
+    names = [n or '' for n in (route_names or [])]
     if any('Manufacture' in n for n in names):
         return 'make'
+    if any('Subcontract' in n for n in names):
+        return 'subcontract'
     if any('Buy' in n for n in names):
         return 'buy'
     return 'buy' if purchase_ok else 'unknown'
@@ -665,14 +703,23 @@ def _mpp_product_routes(env_sudo, pids):
     out = {}
     prods = env_sudo['product.product'].browse(
         [p for p in (pids or []) if p])
+    tmpl_of = {}
     for pr in prods:
         if not pr.exists():
+            continue
+        tmpl = pr.product_tmpl_id
+        tmpl_of[pr.id] = tmpl.id if tmpl else False
+    sub_tmpls = _mpp_subcontract_tmpl_ids(
+        env_sudo, list(set(tmpl_of.values())))
+    for pr in prods:
+        if pr.id not in tmpl_of:
             continue
         tmpl = pr.product_tmpl_id
         out[pr.id] = _mpp_classify_route(
             tmpl.route_ids.with_context(
                 lang='en_US').mapped('name'),
-            tmpl.purchase_ok)
+            tmpl.purchase_ok,
+            tmpl_of[pr.id] in sub_tmpls)
     return out
 
 
@@ -1276,6 +1323,12 @@ class MatiaProcurementPlan(models.Model):
                     lang='en_US').browse(
                     list(all_route_ids)).read(['name']):
                 route_names[r['id']] = r['name']
+        # Active subcontract BOM wins over routes (finished fason
+        # product carries Buy; resupply route sits on components).
+        _sub_tmpls = _mpp_subcontract_tmpl_ids(
+            env_sudo,
+            [pr.get('product_tmpl_id')[0] for pr in prod_info.values()
+             if pr.get('product_tmpl_id')])
 
         # Clear old lines, rewrite (preview is repeatable)
         plan.line_ids.unlink()
@@ -1293,15 +1346,10 @@ class MatiaProcurementPlan(models.Model):
             net_qty = int(math.ceil(netf)) if netf > 0 else 0
             rnames = [route_names.get(rid, '')
                       for rid in (info.get('route_ids') or [])]
-            if any('Subcontract' in (n or '') for n in rnames):
-                route = 'subcontract'
-            elif any('Manufacture' in (n or '') for n in rnames):
-                route = 'make'
-            elif any('Buy' in (n or '') for n in rnames):
-                route = 'buy'
-            else:
-                route = 'buy' if info.get(
-                    'purchase_ok') else 'unknown'
+            _tmpl = info.get('product_tmpl_id')
+            route = _mpp_classify_route(
+                rnames, info.get('purchase_ok'),
+                bool(_tmpl and _tmpl[0] in _sub_tmpls))
             uom = info.get('uom_id') or False
             lines.append({
                 'plan_id': plan.id,
@@ -3901,6 +3949,12 @@ class MatiaProcurementPlan(models.Model):
                     lang='en_US').browse(
                     list(all_route_ids)).read(['name']):
                 route_names[rdr['id']] = rdr['name']
+        # Same BOM-type priority as the line build: an active
+        # subcontract BOM wins over every route.
+        _sub_tmpls = _mpp_subcontract_tmpl_ids(
+            env_sudo,
+            [pr.get('product_tmpl_id')[0] for pr in prod_info.values()
+             if pr.get('product_tmpl_id')])
         # Sellers prefer the plan lines (already assigned snapshot);
         # otherwise the last real purchase wins.
         line_by_pid = {}
@@ -3922,9 +3976,10 @@ class MatiaProcurementPlan(models.Model):
             info = prod_info.get(pid, {})
             rnames = [route_names.get(rid, '')
                       for rid in (info.get('route_ids') or [])]
-            route = _mpp_classify_route(
-                rnames, info.get('purchase_ok'))
             _tmpl = info.get('product_tmpl_id')
+            route = _mpp_classify_route(
+                rnames, info.get('purchase_ok'),
+                bool(_tmpl and _tmpl[0] in _sub_tmpls))
             if _tmpl and _tmpl[0] in kit_tmpls:
                 route = 'kit'
             line = line_by_pid.get(pid)

@@ -379,6 +379,12 @@
         tbody tr.mpp-row-checked td {
             background-color: #eff6ff;
         }
+        .mpp-prod-link {
+            cursor: pointer;
+        }
+        .mpp-prod-link:hover {
+            text-decoration: underline;
+        }
         tbody tr.mpp-row-manual.mpp-row-checked td {
             background-color: #fef3c7;
         }
