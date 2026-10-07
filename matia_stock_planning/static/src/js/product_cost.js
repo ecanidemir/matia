@@ -320,7 +320,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                     ' title="Has Sub-Assembly BOM">BOM</span>' : '') +
                 '</td>' +
                 '<td class="td-bom-qty">' +
-                this._fmtNum(r.usage, 4) +
+                this._fmtQty(r.usage) +
                 (r.uom ? ' <small class="text-muted">' +
                     this._escHtml(r.uom) + '</small>' : '') + '</td>' +
                 '<td><span class="dev-badge">$' +
@@ -507,13 +507,14 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                     ' <span class="msp-level-badge msp-lvl-' + lvl +
                     '" title="BOM Level ' + level + '">L' + level +
                     '</span></td>' +
-                    '<td class="td-bom-qty">' +
-                    self._fmtNum(scaled, 4) +
+                    '<td class="td-bom-qty" title="Top: qty for 1 device set; per parent: qty in 1 parent unit">' +
+                    self._fmtQty(scaled) +
                     (it.uom ? ' <small class="text-muted">' +
                         self._escHtml(it.uom) + '</small>' : '') +
-                    '<div style="font-size:11px;opacity:0.7;">(' +
-                    self._fmtNum(it.usage_per_parent, 4) +
-                    ' x parent)</div></td>' +
+                    (Math.abs(scaled - (parseFloat(it.usage_per_parent) || 0)) < 1e-9 ? '' :
+                        '<div style="font-size:11px;opacity:0.7;">(' +
+                        self._fmtQty(it.usage_per_parent) +
+                        ' per parent)</div>') + '</td>' +
                     '<td><span class="dev-badge">$' +
                     self._fmtNum(ext, 2) + '</span>' +
                     '<div style="font-size:11px;opacity:0.7;">$' +
@@ -814,6 +815,24 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             return n.toLocaleString(undefined,
                 {minimumFractionDigits: dec || 0,
                  maximumFractionDigits: dec !== undefined ? dec : 2});
+        },
+
+        // Usage qty: integer -> no decimals ("1 Units"), fractional ->
+        // max 2 decimals ("1,50"). Keeps mm/gram readable without the
+        // old always-4-decimals noise ("1,0000").
+        _fmtQty: function (v) {
+            if (v === undefined || v === null || v === '') return '';
+            var n = parseFloat(v);
+            if (isNaN(n)) return v;
+            var r2 = Math.round(n * 100) / 100;
+            if (Math.abs(r2 - Math.round(r2)) < 1e-9) {
+                return Math.round(r2).toLocaleString(undefined,
+                    {minimumFractionDigits: 0,
+                     maximumFractionDigits: 0});
+            }
+            return r2.toLocaleString(undefined,
+                {minimumFractionDigits: 2,
+                 maximumFractionDigits: 2});
         },
 
         // UoM names come from the DB in Turkish (e.g. 'Adet'); the UI is
@@ -1503,21 +1522,42 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 }
                 return s;
             };
-            var lines = ['code;product_id;name;corrected_usd;' +
-                'price_uom;location'];
+            // Full visible info: everything the Prices tab shows.
+            // Only corrected_usd + location are import-relevant;
+            // the rest is info and ignored on import.
+            var lines = ['product_id;code;name;type;seller;' +
+                'last_price;last_currency;last_uom;last_usd;' +
+                'last_buy_date;std_usd;std_rate_date;' +
+                'corrected_usd;price_uom;location;manual'];
             rows.forEach(function (r) {
                 var corr = (r.corrected_display !== undefined &&
                     r.corrected_display !== null &&
                     r.corrected_display !== '') ?
                     r.corrected_display : r.corrected;
                 if (!corr) corr = '';
+                var lastTxt = r.last_price ?
+                    this._fmtNum(r.last_price, 4) : '';
+                var usdTxt = r.last_usd ?
+                    this._fmtNum(r.last_usd, 4) : '';
+                var stdTxt = (parseFloat(r.std_usd_display) || 0) > 0 ?
+                    this._fmtNum(r.std_usd_display, 4) : '';
                 lines.push([
-                    q(r.code || ''),
                     q(r.product_id || ''),
+                    q(r.code || ''),
                     q(this._plainName(r.code, r.name)),
+                    q(r.route_label || r.route || ''),
+                    q(r.seller || ''),
+                    q(lastTxt),
+                    q(r.last_currency || ''),
+                    q(r.last_uom || ''),
+                    q(usdTxt),
+                    q(r.last_date || ''),
+                    q(stdTxt),
+                    q(r.std_rate_date || ''),
                     q(corr),
                     q(r.price_uom || r.uom || ''),
                     q((r.location || '').toLowerCase()),
+                    q(r.has_override ? 'yes' : ''),
                 ].join(';'));
             }, this);
             var blob = new Blob(['\ufeff' + lines.join('\r\n')],
@@ -1592,6 +1632,12 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                                                     10) + ' more)' :
                                                 '');
                                     }
+                                    if (res && res.warnings &&
+                                        res.warnings.length) {
+                                        msg += ' Warnings: ' +
+                                            res.warnings.slice(0, 5)
+                                                .join(' ');
+                                    }
                                     if (res && res.errors &&
                                         res.errors.length) {
                                         msg += ' Errors: ' +
@@ -1623,7 +1669,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         // Minimal CSV parser for the Export format above: first
         // line is the header (semicolon or comma separated),
         // quoted fields with "" escapes supported. Returns
-        // [{code, product_id, corrected, location}].
+        // [{code, name, product_id, corrected, location}].
+        // product_id rides along as info only; the server matches
+        // by code (+name check) and ignores it.
         _parsePriceCsv: function (text) {
             var t = String(text || '').replace(/^\ufeff/, '');
             var lines = t.split(/\r?\n/).filter(function (ln) {
@@ -1669,6 +1717,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 return -1;
             };
             var iCode = ci('code', 'default_code'),
+                iName = ci('name', 'product_name'),
                 iPid = ci('product_id', 'id'),
                 iCorr = ci('corrected_usd', 'corrected',
                     'corrected_price_usd'),
@@ -1682,6 +1731,8 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 var cols = split(lines[n]);
                 var code = iCode >= 0 ?
                     (cols[iCode] || '').trim() : '';
+                var name = iName >= 0 ?
+                    (cols[iName] || '').trim() : '';
                 var pidRaw = iPid >= 0 ?
                     (cols[iPid] || '').trim() : '';
                 var corrRaw = iCorr >= 0 ?
@@ -1692,6 +1743,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 var pid = parseInt(pidRaw, 10);
                 rows.push({
                     code: code,
+                    name: name,
                     product_id: isNaN(pid) ? 0 : pid,
                     corrected: corrRaw,
                     location: locRaw,

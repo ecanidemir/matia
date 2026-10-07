@@ -890,18 +890,22 @@ class MatiaProductCost(models.AbstractModel):
     def import_price_overrides(self, rows=False):
         """Bulk upsert of manual prices/locations from a CSV import.
 
-        Each row is {'code': str, 'product_id': int, 'corrected':
-        float/str/False/None, 'location': str/False/None}. The
-        product is resolved by product_id first, then by
-        default_code. Empty corrected/location means "keep stored"
-        (same False semantics as save_price_override); rows with
-        both empty are skipped, not cleared. Manufactured/kit
-        price rejections and invalid values are collected as
-        per-row errors instead of aborting the batch.
+        Each row is {'code': str, 'name': str, 'corrected':
+        float/str/False/None, 'location': str/False/None} ('name'
+        optional; 'product_id' is accepted but ignored). The product
+        is resolved by default_code only: numeric IDs differ between
+        databases, so a staging export stays safe to import into
+        prod. When the row carries a name and it does not match the
+        database product name, the row is skipped with a warning.
+        Empty corrected/location means "keep stored" (same False
+        semantics as save_price_override); rows with both empty are
+        skipped, not cleared. Manufactured/kit price rejections and
+        invalid values are collected as per-row errors instead of
+        aborting the batch.
 
         @param rows: list of row dicts (max 2000).
         @return: {'updated': int, 'skipped': [codes],
-            'errors': [messages]}.
+            'warnings': [messages], 'errors': [messages]}.
         """
         # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo = _mpp_env_sudo(self)
@@ -914,27 +918,31 @@ class MatiaProductCost(models.AbstractModel):
         Product = env_sudo['product.product']
         updated = 0
         skipped = []
+        warnings = []
         errors = []
         for idx, row in enumerate(rows):
             if not isinstance(row, dict):
                 errors.append('Row %d: not a mapping.' % (idx + 1))
                 continue
-            pid = False
-            try:
-                if row.get('product_id'):
-                    pid = int(row.get('product_id'))
-            except (TypeError, ValueError):
-                pid = False
             code = (row.get('code') or '').strip() \
                 if isinstance(row.get('code'), str) else ''
-            prod = Product.browse(pid) \
-                if pid else Product.browse()
-            if not prod.exists() and code:
-                prod = Product.search(
-                    [('default_code', '=', code)], limit=1)
+            if not code:
+                errors.append('Row %d: no product code.' % (idx + 1))
+                continue
+            prod = Product.search(
+                [('default_code', '=', code)], limit=1)
             if not prod.exists():
                 errors.append('Row %d: product not found (%s).' % (
-                    idx + 1, code or pid or '?'))
+                    idx + 1, code))
+                continue
+            row_name = (row.get('name') or '').strip() \
+                if isinstance(row.get('name'), str) else ''
+            db_name = (prod.name or '').strip()
+            if row_name and row_name != db_name:
+                warnings.append(
+                    'Row %d [%s]: name mismatch, skipped '
+                    '(file "%s" vs database "%s").' % (
+                        idx + 1, code, row_name, db_name))
                 continue
             label = prod.default_code or prod.name or str(prod.id)
             raw_corr = row.get('corrected', '')
@@ -971,4 +979,4 @@ class MatiaProductCost(models.AbstractModel):
                     'MPC import skipped product %s: %s', prod.id, exc)
                 skipped.append(label)
         return {'updated': updated, 'skipped': skipped,
-                'errors': errors[:50]}
+                'warnings': warnings, 'errors': errors[:50]}
