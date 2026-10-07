@@ -345,7 +345,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     confirmButtonText: _t('Rebuild'),
                     confirm_callback: function () {
                         self._rpcPlan('set_targets_and_rebuild',
-                            [pid, self.needMap]).then(function (res) {
+                            [pid, self.needMap, true]).then(function (res) {
                             self._applySummary(res);
                             self._renderTree();
                             self.displayNotification({

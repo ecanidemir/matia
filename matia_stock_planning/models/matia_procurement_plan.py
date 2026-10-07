@@ -2599,12 +2599,16 @@ class MatiaProcurementPlan(models.Model):
         return res
 
     @api.model
-    def set_targets_and_rebuild(self, plan_id, targets):
+    def set_targets_and_rebuild(self, plan_id, targets, force=False):
         """Save Needed numbers on the plan and rebuild the tree.
 
         Only positive quantities are kept; missing rows mean 0.
         @param plan_id Plan to update.
         @param targets {product_id: qty} Needed numbers from the client.
+        @param force When True, skip the cached view even if the
+            targets are unchanged (the Rebuild button: recalculate
+            from live master data). RFQ/MO links on the lines are
+            lost, so the client confirms first.
         @return Same dict as get_tree_with_cost.
         """
         env_sudo = _mpp_env_sudo(self)
@@ -2621,10 +2625,10 @@ class MatiaProcurementPlan(models.Model):
             if _pid > 0 and _qty > 0:
                 clean[str(_pid)] = _qty
         plan.write({'target_json': json.dumps(clean)})
-        return self.get_tree_with_cost(plan.id)
+        return self.get_tree_with_cost(plan.id, force=bool(force))
 
     @api.model
-    def get_tree_with_cost(self, plan_id):
+    def get_tree_with_cost(self, plan_id, force=False):
         """Explode + net + suppliers, then return capacity-style groups.
 
         Groups are the 4 kit BOMs in Base/Outdoor/Seat/Screws order;
@@ -2632,6 +2636,9 @@ class MatiaProcurementPlan(models.Model):
         its saved Needed value (0 when not entered). Children load
         lazily via get_sub_bom_cost.
         @param plan_id Plan ID (see get_startup_tree).
+        @param force When True, skip the cached view and run the full
+            rebuild (used by the Rebuild button; callers that only
+            re-read stored lines leave it False).
         @return Summary dict plus 'tree_groups' and 'targets'.
         """
         env_sudo = _mpp_env_sudo(self)
@@ -2649,6 +2656,7 @@ class MatiaProcurementPlan(models.Model):
         # no re-netting). This also protects RFQ/MO links written on
         # the lines after the first build. Any target change (or a
         # plan built before built_target_json existed) rebuilds.
+        # force=True (Rebuild button) skips this branch on purpose.
         # Empty plan (startup before any Needed entry): skeleton
         # groups, no explosion.
         if not targets and not plan.line_ids:
@@ -2656,7 +2664,7 @@ class MatiaProcurementPlan(models.Model):
             summary['kits'] = []
             summary['scratch_total_usd'] = 0.0
             summary['scratch_total_try'] = 0.0
-        elif plan.line_ids and (plan.built_target_json or '') == (
+        elif not force and plan.line_ids and (plan.built_target_json or '') == (
                 plan.target_json or ''):
             summary = self._plan_summary(env_sudo, plan)
             kits = self._kits_from_stored(env_sudo, plan, {
