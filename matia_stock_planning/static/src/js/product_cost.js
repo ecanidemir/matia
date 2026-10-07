@@ -179,10 +179,13 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         },
 
         _costArrow: function (col) {
-            if (this.costSort.key !== col) return '';
-            return this.costSort.dir === 1 ?
-                ' <i class="fa fa-sort-asc"></i>' :
-                ' <i class="fa fa-sort-desc"></i>';
+            var cls = 'fa-sort';
+            if (this.costSort.key === col) {
+                cls = this.costSort.dir === 1 ?
+                    'fa-sort-asc' : 'fa-sort-desc';
+            }
+            return ' <i class="fa ml-1 ' + cls +
+                ' msp-sort-icon"></i>';
         },
 
         _onCostSort: function (ev) {
@@ -217,7 +220,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 html += '<div class="msp-kpi-card kpi-' + g.key + '">' +
                     '<div class="kpi-info">' +
                     '<div class="kpi-title">' +
-                    this._escHtml(g.title) + '</div>' +
+                    this._escHtml(g.label || g.title) + '</div>' +
                     '<div class="kpi-value">$' +
                     this._fmtNum(g.set_total, 2) + '</div>' +
                     '<div class="kpi-sub">' + g.items.length +
@@ -266,14 +269,31 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             return items;
         },
 
+        // Top-level row: same product-cell chrome as the Capacity
+        // page (dot icon, clickable name, BOM badge); only the metric
+        // cells are cost-specific.
         _costTopRowHtml: function (r, gkey) {
-            var toggle = r.has_bom ?
-                '<button class="btn btn-sm btn-link msp-btn-sub-bom" ' +
-                'data-pid="' + r.product_id + '" data-group="' + gkey +
-                '" data-chain="' + r.usage + '" data-path="" ' +
-                'title="Expand sub-BOM"><i class="fa fa-caret-right ' +
-                'msp-bom-arrow"></i></button>' :
-                '<span class="msp-no-bom-dot"></span>';
+            var hasKids = !!r.has_bom;
+            var toggle;
+            if (hasKids) {
+                toggle = '<button type="button" class="btn btn-sm ' +
+                    'btn-link msp-btn-sub-bom p-0 mr-1 text-primary" ' +
+                    'data-pid="' + r.product_id + '" data-group="' +
+                    gkey + '" data-chain="' + r.usage +
+                    '" data-path="" ' +
+                    'title="Click to view sub-assembly BOM ' +
+                    'components">' +
+                    '<i class="fa fa-caret-right msp-bom-arrow"></i>' +
+                    '</button>';
+            } else {
+                toggle = '<span class="msp-bom-spacer mr-1">' +
+                    '<i class="fa fa-circle msp-no-bom-dot"></i></span>';
+            }
+            var prodCls = hasKids ?
+                'cursor-pointer msp-clickable-prod' : '';
+            var prodTitle = hasKids ?
+                'Click to show BOM components' : '';
+            var plainName = this._plainName(r.code, r.name);
             var costNote = (parseFloat(r.unit_usd) || 0) > 0 &&
                 (parseFloat(r.usage) || 0) !== 1 ?
                 '<div style="font-size:11px;opacity:0.7;">$' +
@@ -281,15 +301,22 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             return '<tr class="item-row" data-node="' + r.product_id +
                 '" data-group="' + gkey + '" data-path="">' +
                 '<td class="td-product">' + toggle +
-                '<span class="prod-code">[' +
-                this._escHtml(r.code || '') + ']</span> ' +
-                '<span class="msp-clickable-prod prod-name" ' +
-                'data-pid="' + r.product_id + '" data-group="' + gkey +
-                '" data-chain="' + r.usage + '" data-path="">' +
-                this._escHtml(this._plainName(r.code, r.name)) +
-                '</span></td>' +
-                '<td>' + this._fmtNum(r.usage, 4) +
-                (r.uom ? ' ' + this._escHtml(r.uom) : '') + '</td>' +
+                (r.code ? '<span class="prod-code">[' +
+                    this._escHtml(r.code) + ']</span> ' : '') +
+                '<span class="prod-name ' + prodCls + '"' +
+                (hasKids ? ' data-pid="' + r.product_id +
+                    '" data-group="' + gkey + '" data-chain="' +
+                    r.usage + '" data-path=""' : '') +
+                (prodTitle ? ' title="' + prodTitle + '"' : '') +
+                '>' + this._escHtml(plainName) + '</span>' +
+                (hasKids ? ' <span class="badge badge-light ' +
+                    'text-muted border ml-1" style="font-size:0.65rem;"' +
+                    ' title="Has Sub-Assembly BOM">BOM</span>' : '') +
+                '</td>' +
+                '<td class="td-bom-qty">' +
+                this._fmtNum(r.usage, 4) +
+                (r.uom ? ' <small class="text-muted">' +
+                    this._escHtml(r.uom) + '</small>' : '') + '</td>' +
                 '<td><span class="dev-badge">$' +
                 this._fmtNum(r.ext_usd, 2) + '</span>' + costNote +
                 '</td></tr>';
@@ -299,33 +326,52 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             var self = this;
             var html = '<table class="msp-table mpc-cost-table">' +
                 '<thead><tr>' +
-                '<th class="msp-th-sortable" data-sort-col="part" ' +
-                'style="cursor:pointer;" title="Sort by part">Part' +
+                '<th class="th-product msp-th-sortable" ' +
+                'data-sort-col="part" ' +
+                'style="cursor:pointer;" title="Sort by part">' +
+                'Part Name &amp; Code' +
                 this._costArrow('part') + '</th>' +
-                '<th class="msp-th-sortable" data-sort-col="usage" ' +
-                'style="cursor:pointer;" title="Sort by usage">Usage Qty' +
+                '<th class="th-bom-qty msp-th-sortable" ' +
+                'data-sort-col="usage" ' +
+                'style="cursor:pointer;" title="Sort by usage">' +
+                'Usage Qty' +
                 this._costArrow('usage') + '</th>' +
                 '<th class="msp-th-sortable" data-sort-col="cost" ' +
                 'style="cursor:pointer;" title="Sort by cost">BOM Cost' +
                 this._costArrow('cost') + '</th>' +
                 '</tr></thead><tbody>';
+            var groupIcons = {
+                base: '<i class="fa fa-cube mr-1 text-primary"></i>',
+                outdoor: '<i class="fa fa-sun-o mr-1 ' +
+                    'text-success"></i>',
+                seat: '<i class="fa fa-wheelchair mr-1 ' +
+                    'text-warning"></i>',
+                screws: '<i class="fa fa-wrench mr-1" ' +
+                    'style="color:#64748b;"></i>',
+            };
             (this.costData.groups || []).forEach(function (g) {
-                var hidden = self.collapsedGroups[g.key] ?
-                    ' <span class="badge badge-secondary">hidden</span>' : '';
+                var hidden = !!self.collapsedGroups[g.key];
                 html += '<tr class="group-row group-' + g.key +
                     '" data-group="' + g.key + '">' +
-                    '<td colspan="3"><span class="group-title-badge">' +
-                    this._escHtml(g.title) +
-                    ' <span class="group-count">' + g.items.length +
-                    '</span></span> ' +
-                    '<span class="dev-badge">$' +
-                    this._fmtNum(g.set_total, 2) +
-                    ' / set</span>' + hidden +
-                    ' <button class="btn btn-sm btn-link ' +
-                    'msp-btn-toggle-group" data-group="' + g.key + '" ' +
-                    'title="Show/hide group"><i class="fa fa-eye"></i>' +
-                    '</button></td></tr>';
-                if (!self.collapsedGroups[g.key]) {
+                    '<td colspan="3"><div class="group-title-badge">' +
+                    (groupIcons[g.key] || '') +
+                    '<span>' + this._escHtml(g.title) + '</span>' +
+                    '<span class="group-count ml-2">(' + g.items.length +
+                    ' Parts)</span>' +
+                    '<span class="ml-auto text-muted" ' +
+                    'style="font-size:0.75rem;">$' +
+                    this._fmtNum(g.set_total, 2) + ' / set</span>' +
+                    ' <button type="button" class="btn btn-sm ' +
+                    'msp-btn-toggle-group ml-2 ' +
+                    (hidden ? 'msp-btn-group-show' :
+                        'msp-btn-group-hide') + '" data-group-key="' +
+                    g.key + '" title="' +
+                    (hidden ? 'Show this BOM group' :
+                        'Hide this BOM group') + '">' +
+                    (hidden ? '<i class="fa fa-eye mr-1"></i>Show' :
+                        '<i class="fa fa-eye-slash mr-1"></i>Hide') +
+                    '</button></div></td></tr>';
+                if (!hidden) {
                     self._costItemRows(g).forEach(function (r) {
                         html += self._costTopRowHtml(r, g.key);
                     });
@@ -413,35 +459,52 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 var scaled = (parseFloat(it.usage_per_parent) || 0) *
                     chain;
                 var ext = (parseFloat(it.unit_usd) || 0) * scaled;
-                var toggle = it.has_bom && !it.is_cycle ?
-                    '<button class="btn btn-sm btn-link ' +
-                    'msp-btn-sub-bom" data-pid="' + it.product_id +
-                    '" data-group="' + gkey + '" data-chain="' +
-                    scaled + '" data-path="' + childPath + '" ' +
-                    'title="Expand sub-BOM">' +
-                    '<i class="fa fa-caret-right msp-bom-arrow"></i>' +
-                    '</button>' :
-                    '<span class="msp-no-bom-dot"></span>';
+                var lvl = Math.min(level, 8);
+                var hasKids = !!it.has_bom && !it.is_cycle;
+                var toggle;
+                if (hasKids) {
+                    toggle = '<button type="button" class="btn btn-sm ' +
+                        'btn-link msp-btn-sub-bom p-0 mr-1 ' +
+                        'text-primary" data-pid="' + it.product_id +
+                        '" data-group="' + gkey + '" data-chain="' +
+                        scaled + '" data-path="' + childPath + '" ' +
+                        'title="Click to view sub-assembly BOM ' +
+                        'components">' +
+                        '<i class="fa fa-caret-right msp-bom-arrow">' +
+                        '</i></button>';
+                } else {
+                    toggle = '<span class="msp-bom-spacer mr-1">' +
+                        '<i class="fa fa-circle msp-no-bom-dot"></i>' +
+                        '</span>';
+                }
                 var cycle = it.is_cycle ?
                     ' <i class="fa fa-refresh msp-cycle-icon" ' +
                     'title="Cycle: already in this branch"></i>' : '';
+                var plainSub = self._plainName(it.code, it.name);
                 html += '<tr class="item-row sub-bom-row sub-level-' +
-                    Math.min(level, 8) + '" data-node="' +
+                    lvl + '" data-node="' +
                     it.product_id + '" data-parent="' + pid +
                     '" data-path="' + childPath + '" data-level="' +
                     level + '" data-group="' + gkey + '">' +
                     '<td class="td-product td-sub-product">' + toggle +
-                    '<span class="sub-tree-icon">\u2514</span> ' +
-                    '<span class="prod-code sub-prod-code">[' +
-                    self._escHtml(it.code || '') + ']</span> ' +
-                    '<span class="msp-level-badge msp-lvl-' +
-                    Math.min(level, 8) + '">L' + level + '</span> ' +
+                    '<i class="fa fa-level-up fa-rotate-90 ' +
+                    'sub-tree-icon mr-2 text-primary"></i>' +
+                    (it.code ? '<span class="prod-code ' +
+                        'sub-prod-code">[' +
+                        self._escHtml(it.code) + ']</span> ' : '') +
                     '<span class="prod-name">' +
-                    self._escHtml(
-                        self._plainName(it.code, it.name)) +
-                    '</span>' + cycle + '</td>' +
-                    '<td>' + self._fmtNum(scaled, 4) +
-                    (it.uom ? ' ' + self._escHtml(it.uom) : '') +
+                    self._escHtml(plainSub) + '</span>' + cycle +
+                    (hasKids ? ' <span class="badge badge-light ' +
+                        'text-muted border ml-1" ' +
+                        'style="font-size:0.65rem;" title="Has ' +
+                        'Sub-Assembly BOM">BOM</span>' : '') +
+                    ' <span class="msp-level-badge msp-lvl-' + lvl +
+                    '" title="BOM Level ' + level + '">L' + level +
+                    '</span></td>' +
+                    '<td class="td-bom-qty">' +
+                    self._fmtNum(scaled, 4) +
+                    (it.uom ? ' <small class="text-muted">' +
+                        self._escHtml(it.uom) + '</small>' : '') +
                     '<div style="font-size:11px;opacity:0.7;">(' +
                     self._fmtNum(it.usage_per_parent, 4) +
                     ' x parent)</div></td>' +
@@ -487,7 +550,8 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         },
 
         _onGroupToggle: function (ev) {
-            var gkey = ev.currentTarget.dataset.group;
+            var gkey = ev.currentTarget.dataset.groupKey ||
+                ev.currentTarget.dataset.group;
             if (!gkey) return;
             this.collapsedGroups[gkey] = !this.collapsedGroups[gkey];
             this._renderCostTree();

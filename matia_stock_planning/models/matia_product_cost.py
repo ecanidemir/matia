@@ -323,6 +323,14 @@ class MatiaProductCost(models.AbstractModel):
                            for e in entries})
         price_map, _routes = self._mpc_price_map(env_sudo, all_pids)
         unit_map = self._mpc_unit_map(children, price_map)
+        kit_names = {}
+        for kit in kits:
+            try:
+                kit_names[kit['key']] = kit['bom'].display_name or ''
+            except Exception:
+                kit_names[kit['key']] = ''
+        group_labels = {'base': 'Base', 'outdoor': 'Outdoor',
+                        'seat': 'Seat', 'screws': 'Screws'}
         groups = []
         totals = {}
         count = 0
@@ -349,9 +357,13 @@ class MatiaProductCost(models.AbstractModel):
             items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
             set_total = round(set_total, 2)
             totals[cfg['key']] = set_total
+            kit_name = kit_names.get(cfg['key']) or cfg['title']
             groups.append({
                 'key': cfg['key'],
-                'title': cfg['title'],
+                'title': '%s (%s)' % (
+                    kit_name, group_labels.get(cfg['key'], '')),
+                'label': '%s Parts' % group_labels.get(
+                    cfg['key'], ''),
                 'items': items,
                 'set_total': set_total,
             })
