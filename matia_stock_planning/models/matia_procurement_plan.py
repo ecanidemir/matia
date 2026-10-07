@@ -833,12 +833,14 @@ class MatiaProcurementPlan(models.Model):
     # ------------------------------------------------------------------
     @api.model
     def _mpp_crosscheck_vs_cost(self, env_sudo, plan):
-        """Cross-check plan rolled unit costs vs the Product Cost page.
+        """Cross-check plan scratch unit costs vs the Product Cost page.
 
         Recomputes bottom-up unit USD with the Product Cost code path
         (``matia.product.cost`` explode + price map + unit map) and
-        compares it against this plan's stored ``rolled_usd`` per
-        kit-top product. Both sides share the same price inputs and
+        compares it against this plan's stored ``scratch_unit_usd``
+        per kit-top product (the stock-ignoring base; the ``rolled_*``
+        fields now carry the stock-netted gap cost). Both sides share
+        the same price inputs and
         the same normalized-edge conversion, so any material gap
         means the two pages diverged again (the E2CBAN03 class bug).
 
@@ -879,7 +881,7 @@ class MatiaProcurementPlan(models.Model):
                 line = line_by_pid.get(pid)
                 if not line:
                     continue
-                plan_u = float(line.rolled_usd or 0.0)
+                plan_u = float(line.scratch_unit_usd or 0.0)
                 cost_u = float(unit_map.get(pid) or 0.0)
                 if not plan_u or not cost_u:
                     continue
@@ -1547,8 +1549,8 @@ class MatiaProcurementPlan(models.Model):
         rollup = self._compute_rollup(env_sudo, plan)
         summary = self._plan_summary(env_sudo, plan)
         summary['kits'] = rollup['kits']
-        summary['rolled_total_usd'] = rollup['total']
-        summary['rolled_total_try'] = rollup.get('total_try', 0.0)
+        summary['scratch_total_usd'] = rollup['total']
+        summary['scratch_total_try'] = rollup.get('total_try', 0.0)
         return summary
 
     @api.model
@@ -1597,15 +1599,153 @@ class MatiaProcurementPlan(models.Model):
                 'total_try': grand_try}
 
     @api.model
-    def _compute_rollup(self, env_sudo, plan):
-        """Bottom-up rolled USD + TRY cost per unit.
+    def _mpp_net_costs(self, env_sudo, plan, children, line_by_pid,
+                       own_usd, own_try):
+        """Bottom-up NET (stock-netted gap) costs per plan line.
 
-        Each leaf purchase price (last price of buy/subcontract
-        lines) is multiplied by its usage qty and summed upward to the
-        top products and kits. USD uses the historical USD rate of the
-        last buy date; TRY uses the historical TRY rate of the same
-        date. No operation costing: make/phantom nodes contribute only
-        their children's cost.
+        Rebuilds the demand/net cascade from the stored edges, entry
+        targets and line avails with the same rules as
+        action_explode_and_net (phantom nodes pass demand through,
+        others deduct own TR+US avail), then settles costs
+        children-first. A shared child's stock is deducted per usage:
+        its total net cost is split across parents proportional to
+        gross contribution, net_cost(P) = order x own_eff(P) + SUM
+        over children C of net_cost(C) x contrib(P,C)/demand(C).
+        Each parent therefore carries only its gap share (stock-covered
+        material is never charged); the shares of one child always sum
+        to exactly its net cost. No plan-line reads except the own
+        line, so lineless/phantom children flow transparently.
+        Level-0 pools never enter (display only).
+
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record.
+        @param children: {parent pid: {child pid: qty}} (child stock UoM).
+        @param line_by_pid: {pid: plan line}.
+        @param own_usd: callable(pid) -> own USD per line UoM.
+        @param own_try: callable(pid) -> own TRY per line UoM.
+        @return: ({pid: net USD total}, {pid: net TRY total}).
+        """
+        try:
+            targets = json.loads(plan.target_json or '{}')
+        except ValueError:
+            targets = {}
+        want = {}
+        for k, v in (targets or {}).items():
+            try:
+                pid, qty = int(k), float(v or 0)
+            except (TypeError, ValueError):
+                continue
+            if qty > 0:
+                want[pid] = want.get(pid, 0.0) + qty
+        avail_map = {}
+        for pid, line in line_by_pid.items():
+            avail_map[pid] = float(line.avail_tr or 0.0) + float(
+                line.avail_us or 0.0)
+        all_pids = set(line_by_pid) | set(children)
+        for ch in children.values():
+            all_pids.update(ch)
+        # Phantom (kit) pass-through needs BOM types (bulk reads only).
+        btype = {}
+        try:
+            tmpl_of = {}
+            for pr in env_sudo['product.product'].browse(
+                    list(all_pids)).read(['product_tmpl_id']):
+                tmpl_of[pr['id']] = pr['product_tmpl_id'][0]
+            bom_cache = {}
+            for b in env_sudo['mrp.bom'].search(
+                    [('product_tmpl_id', 'in', list(set(
+                        tmpl_of.values())))]):
+                key = b.product_tmpl_id.id
+                if key not in bom_cache or b.product_id:
+                    bom_cache[key] = b
+            for pid in all_pids:
+                b = bom_cache.get(tmpl_of.get(pid))
+                if b:
+                    btype[pid] = b.type
+        except Exception as exc:
+            _logger.warning(
+                'MPP net cost: BOM types unread, phantom rule skipped: '
+                '%s', exc)
+        demand = {pid: 0.0 for pid in all_pids}
+        for pid, qty in want.items():
+            if pid in demand:
+                demand[pid] += qty
+        indeg = {pid: 0 for pid in all_pids}
+        for pp, ch in children.items():
+            if pp not in indeg:
+                continue
+            for cc in ch:
+                if cc in indeg:
+                    indeg[cc] += 1
+        queue = [pid for pid in all_pids if indeg[pid] == 0]
+        topo = []
+        while queue:
+            p = queue.pop(0)
+            topo.append(p)
+            for c in children.get(p, {}):
+                if c not in indeg:
+                    continue
+                indeg[c] -= 1
+                if indeg[c] == 0:
+                    queue.append(c)
+        for p in all_pids:  # cycle leftovers go last
+            if p not in topo:
+                topo.append(p)
+        net_map, contrib = {}, {}
+        for p in topo:
+            d = demand.get(p, 0.0)
+            if btype.get(p) == 'phantom':
+                n = d
+            else:
+                n = d - avail_map.get(p, 0.0)
+                if n < 0:
+                    n = 0.0
+            net_map[p] = n
+            for c, q in children.get(p, {}).items():
+                if c in demand:
+                    try:
+                        add = n * float(q or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    demand[c] += add
+                    contrib[(p, c)] = contrib.get((p, c), 0.0) + add
+        net_u, net_t = {}, {}
+        for p in reversed(topo):
+            line = line_by_pid.get(p)
+            order = float(line.order_qty or 0.0) if line else 0.0
+            try:
+                own_u = order * float(own_usd(p) or 0.0)
+            except Exception:
+                own_u = 0.0
+            try:
+                own_t = order * float(own_try(p) or 0.0)
+            except Exception:
+                own_t = 0.0
+            sub_u, sub_t = 0.0, 0.0
+            for c in children.get(p, {}):
+                dmd = demand.get(c, 0.0)
+                if dmd > 0:
+                    w = contrib.get((p, c), 0.0) / dmd
+                    sub_u += w * net_u.get(c, 0.0)
+                    sub_t += w * net_t.get(c, 0.0)
+            net_u[p] = own_u + sub_u
+            net_t[p] = own_t + sub_t
+        return net_u, net_t
+
+    @api.model
+    def _compute_rollup(self, env_sudo, plan):
+        """Bottom-up NET + scratch USD/TRY costs.
+
+        Two cost bases per line: scratch (zero-from-scratch unit =
+        own last-buy price x usage summed upward, stock ignored,
+        matches the Product Cost page) and net (stock-netted gap cost
+        via _mpp_net_costs: own order value plus contrib-weighted
+        child net shares). Each leaf purchase price (last price of
+        buy/subcontract/unknown lines, manual override wins except on
+        make) feeds both bases. USD uses the historical USD rate of
+        the last buy date; TRY uses the historical TRY rate of the
+        same date. No operation costing: make/phantom nodes contribute
+        only their children's cost.
         """
         try:
             edges = json.loads(plan.edge_json or '{}')
@@ -1628,7 +1768,8 @@ class MatiaProcurementPlan(models.Model):
 
         memo_usd = {}
         memo_try = {}
-        visiting = set()
+        visiting_usd = set()
+        visiting_try = set()
 
         def _own_usd(pid):
             _ov = _roll_ovr.get(pid, {})
@@ -1638,7 +1779,8 @@ class MatiaProcurementPlan(models.Model):
             if float(_ov.get('price') or 0.0) > 0 and (
                     not line or line.route_type != 'make'):
                 return float(_ov['price'])
-            if line and line.route_type in ('buy', 'subcontract'):
+            if line and line.route_type in (
+                    'buy', 'subcontract', 'unknown'):
                 return float(line.last_price_usd or 0.0) * \
                     _mpp_line_uom_factor(line)
             return 0.0
@@ -1650,7 +1792,8 @@ class MatiaProcurementPlan(models.Model):
                     not line or line.route_type != 'make'):
                 return self._mpp_override_try(
                     env_sudo, plan, float(_ov['price']))
-            if not line or line.route_type not in ('buy', 'subcontract'):
+            if not line or line.route_type not in (
+                    'buy', 'subcontract', 'unknown'):
                 return 0.0
             price = float(line.last_price or 0.0) * \
                 _mpp_line_uom_factor(line)
@@ -1675,37 +1818,54 @@ class MatiaProcurementPlan(models.Model):
         def _unit_usd(pid):
             if pid in memo_usd:
                 return memo_usd[pid]
-            if pid in visiting:
+            if pid in visiting_usd:
                 return 0.0  # cycle guard
-            visiting.add(pid)
+            visiting_usd.add(pid)
             total = _own_usd(pid)
             for c, q in children.get(pid, {}).items():
                 total += _unit_usd(c) * (q or 0.0)
-            visiting.discard(pid)
+            visiting_usd.discard(pid)
             memo_usd[pid] = total
             return total
 
         def _unit_try(pid):
             if pid in memo_try:
                 return memo_try[pid]
-            if pid in visiting:
+            if pid in visiting_try:
                 return 0.0  # cycle guard
-            visiting.add(pid)
+            visiting_try.add(pid)
             total = _own_try(pid)
             for c, q in children.get(pid, {}).items():
                 total += _unit_try(c) * (q or 0.0)
-            visiting.discard(pid)
+            visiting_try.discard(pid)
             memo_try[pid] = total
             return total
 
+        # Net (stock-netted gap) costs, bottom-up over the rebuilt
+        # cascade (same netting rules as action_explode_and_net;
+        # shared children's stock is deducted per usage via the
+        # proportional contrib/demand split). Pool/producible never
+        # enters the cost (display only). rolled_* stores the NET
+        # figures; scratch_* keeps the zero-from-scratch units above.
+        net_u, net_t = self._mpp_net_costs(
+            env_sudo, plan, children, line_by_pid, _own_usd, _own_try)
         for pid, line in line_by_pid.items():
             unit_u = _unit_usd(pid)
             unit_t = _unit_try(pid)
+            nqty = float(line.net_qty or 0.0)
+            ncu = net_u.get(pid, 0.0)
+            nct = net_t.get(pid, 0.0)
             self._mpp_write_if_changed(line, {
-                'rolled_usd': unit_u,
-                'rolled_total_usd': unit_u * float(line.gross_qty or 0.0),
-                'rolled_try': unit_t,
-                'rolled_total_try': unit_t * float(line.gross_qty or 0.0),
+                'scratch_unit_usd': unit_u,
+                'scratch_total_usd':
+                    unit_u * float(line.gross_qty or 0.0),
+                'scratch_unit_try': unit_t,
+                'scratch_total_try':
+                    unit_t * float(line.gross_qty or 0.0),
+                'rolled_usd': (ncu / nqty) if nqty > 0 else 0.0,
+                'rolled_total_usd': ncu,
+                'rolled_try': (nct / nqty) if nqty > 0 else 0.0,
+                'rolled_total_try': nct,
             })
 
         # Kit totals from entry quantities (members only, no double count:
@@ -1826,7 +1986,7 @@ class MatiaProcurementPlan(models.Model):
 
     @api.model
     def _kits_from_stored(self, env_sudo, plan, targets):
-        """Kit totals from the stored rolled line values (no writes).
+        """Kit totals from the stored scratch line values (no writes).
 
         Same shape as _compute_rollup's return, but the per-unit costs
         come from the lines written by the last full build instead of
@@ -1841,8 +2001,8 @@ class MatiaProcurementPlan(models.Model):
         for line in plan.line_ids:
             unit_by_pid.setdefault(
                 line.product_id.id,
-                (float(line.rolled_usd or 0.0),
-                 float(line.rolled_try or 0.0)))
+                (float(line.scratch_unit_usd or 0.0),
+                 float(line.scratch_unit_try or 0.0)))
         return self._aggregate_kits(
             env_sudo, targets,
             lambda pid: unit_by_pid.get(pid, (0.0, 0.0))[0],
@@ -1981,16 +2141,21 @@ class MatiaProcurementPlan(models.Model):
                 'rolled_usd': line.rolled_total_usd,
                 'rolled_try': line.rolled_try,
                 'rolled_total_try': line.rolled_total_try,
+                'scratch_usd': line.scratch_unit_usd,
+                'scratch_total_usd': line.scratch_total_usd,
                 'warn': line.min_qty_warn or '',
                 'note': line.note or '',
             }
             g['lines'].append(val)
             g['cost'] += line.subtotal or 0.0
             g['count'] += 1
-        # Supplier breakdown (buy group)
+        # Supplier breakdown (same scope as Tab 2: every ordered
+        # buy/subcontract/unknown line, with or without a seller).
         suppliers = {}
         for line in plan.line_ids.filtered(
-                lambda l: l.route_type == 'buy' and l.order_qty > 0):
+                lambda l: (l.order_qty or 0) > 0
+                and (l.route_type or 'unknown') in (
+                    'buy', 'subcontract', 'unknown')):
             sid = line.seller_id.id if line.seller_id else 0
             s = suppliers.setdefault(
                 sid, {'seller_id': sid,
@@ -2017,6 +2182,8 @@ class MatiaProcurementPlan(models.Model):
                     if line.last_company_id else False),
                 'unit_usd': line.rolled_usd,
                 'rolled_usd': line.rolled_total_usd,
+                'scratch_usd': line.scratch_unit_usd,
+                'scratch_total_usd': line.scratch_total_usd,
                 'warn': line.min_qty_warn or '',
             })
             s['cost'] += line.subtotal or 0.0
@@ -2256,16 +2423,16 @@ class MatiaProcurementPlan(models.Model):
         if not targets and not plan.line_ids:
             summary = self._plan_summary(env_sudo, plan)
             summary['kits'] = []
-            summary['rolled_total_usd'] = 0.0
-            summary['rolled_total_try'] = 0.0
+            summary['scratch_total_usd'] = 0.0
+            summary['scratch_total_try'] = 0.0
         elif plan.line_ids and (plan.built_target_json or '') == (
                 plan.target_json or ''):
             summary = self._plan_summary(env_sudo, plan)
             kits = self._kits_from_stored(env_sudo, plan, {
                 str(k): v for k, v in targets.items()})
             summary['kits'] = kits['kits']
-            summary['rolled_total_usd'] = kits['total']
-            summary['rolled_total_try'] = kits['total_try']
+            summary['scratch_total_usd'] = kits['total']
+            summary['scratch_total_try'] = kits['total_try']
         else:
             summary = self.action_explode_and_net(plan.id)
             summary = self.action_assign_suppliers(plan.id)
@@ -2435,6 +2602,10 @@ class MatiaProcurementPlan(models.Model):
                     'rolled_usd': line.rolled_usd if line else 0.0,
                     'rolled_total_usd':
                         line.rolled_total_usd if line else 0.0,
+                    'scratch_usd':
+                        line.scratch_unit_usd if line else 0.0,
+                    'scratch_total_usd':
+                        line.scratch_total_usd if line else 0.0,
                     'subtotal': line.subtotal if line else 0.0,
                     'incoming_info': line.incoming_info if line else 0.0,
                     'open_mo_info': line.open_mo_info if line else 0.0,
@@ -2795,6 +2966,12 @@ class MatiaProcurementPlan(models.Model):
                 'last_date': ldate,
                 'rolled_try': rtry,
                 'rolled_usd': rusd,
+                # Lineless rows have no stored scratch cost; the own
+                # unit is the best available figure (exact for leaves,
+                # partial for assemblies whose children are unknown).
+                'scratch_usd': line.scratch_unit_usd if line else rusd,
+                'scratch_total_usd':
+                    line.scratch_total_usd if line else 0.0,
                 'corrected_usd': _corr,
                 'eff_usd': _corr if _corr > 0 else lusd,
             }
@@ -3247,16 +3424,18 @@ class MatiaProcurementPlan(models.Model):
 
         Totals are PO-value estimates: own last-buy USD (line-UoM
         normalized) x order_qty -- the same basis the draft RFQs use
-        (see _rfq_groups subtotal). Rolled goods value (own + children)
-        is shown per line for information only: summing rolled over all
-        lines would double count assemblies together with their parts
-        (e.g. a buy assembly and its components would both contribute
-        the components' cost).
+        (see _rfq_groups subtotal). Net gap value (own + net child
+        shares) is shown per line for information only: summing net
+        over all lines would double count assemblies together with
+        their parts (e.g. a buy assembly and its components would
+        both contribute the components' cost).
         @param plan_id Plan ID.
         @return Dict with suppliers, supplier_count, grand_total_usd
-            (PO value), grand_rolled_usd (info), unsourced/unpriced
-            counters, production rows (make/subcontract with linked
-            docs), rfq/mo counts and lists.
+            (buy/subcontract PO value only), grand_rolled_usd (info),
+            unsourced/unpriced counters, unknown_total_usd /
+            unknown_count (listed, never in the cash total),
+            production rows (make/subcontract with linked docs),
+            rfq/mo counts and lists.
         """
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
@@ -3265,6 +3444,8 @@ class MatiaProcurementPlan(models.Model):
         suppliers = {}
         unsourced = 0
         unpriced = 0
+        unknown_total = 0.0
+        unknown_count = 0
         _sup_ovr = _mpp_price_overrides(env_sudo)
         for line in plan.line_ids.filtered(
                 lambda l: (l.order_qty or 0) > 0
@@ -3307,7 +3488,16 @@ class MatiaProcurementPlan(models.Model):
                     _mpp_line_uom_factor(line)
             _ptotal = round(_own * _qty, 2)
             _rolled = float(line.rolled_usd or 0.0)
-            s['total_usd'] += _ptotal
+            # Unknown-route lines are listed for visibility but stay
+            # out of the cash totals: they are not RFQ-eligible (no
+            # Buy route and not purchaseable), so their PO value is
+            # reported separately, never inside grand_total_usd.
+            _is_unk = (line.route_type or 'unknown') == 'unknown'
+            if _is_unk:
+                unknown_total += _ptotal
+                unknown_count += 1
+            else:
+                s['total_usd'] += _ptotal
             s['rolled_total_usd'] += round(_rolled * _qty, 2)
             _no_price = _own <= 0
             if _no_price:
@@ -3448,6 +3638,8 @@ class MatiaProcurementPlan(models.Model):
             'grand_rolled_usd': round(grand_rolled, 2),
             'unsourced_count': unsourced,
             'unpriced_count': unpriced,
+            'unknown_total_usd': round(unknown_total, 2),
+            'unknown_count': unknown_count,
             'production': production,
             'rfq_count': len(plan.purchase_order_ids),
             'mo_count': len(plan.mo_ids),
@@ -4028,18 +4220,33 @@ class MatiaProcurementPlanLine(models.Model):
              'for this line is created in this company.')
     rolled_usd = fields.Float(
         digits=(16, 4),
-        help='Rolled-up USD unit cost: own last-buy USD price plus '
-             'children rolled costs (no operation costing).')
+        help='NET USD unit cost: stock-netted gap cost per net unit '
+             '(net_cost / net_qty, 0 when net is 0). Own order value '
+             'plus net-cost shares of children (no operation costing).')
     rolled_total_usd = fields.Float(
         digits=(16, 2),
-        help='Rolled USD unit cost x gross qty.')
+        help='Total NET USD gap cost for this row (net units only; '
+             'stock-covered material is excluded).')
     rolled_try = fields.Float(
         digits=(16, 4),
-        help='Rolled-up TRY unit cost: own last-buy price in TRY '
-             '(at last buy date rate) plus children rolled costs.')
+        help='NET TRY unit cost: stock-netted gap cost per net unit.')
     rolled_total_try = fields.Float(
         digits=(16, 2),
-        help='Rolled TRY unit cost x gross qty.')
+        help='Total NET TRY gap cost for this row.')
+    scratch_unit_usd = fields.Float(
+        digits=(16, 4),
+        help='Zero-from-scratch USD unit cost: own last-buy USD price '
+             'plus children scratch costs, ignoring stock (matches the '
+             'Product Cost page).')
+    scratch_total_usd = fields.Float(
+        digits=(16, 2),
+        help='Scratch USD unit cost x gross qty.')
+    scratch_unit_try = fields.Float(
+        digits=(16, 4),
+        help='Zero-from-scratch TRY unit cost (ignoring stock).')
+    scratch_total_try = fields.Float(
+        digits=(16, 2),
+        help='Scratch TRY unit cost x gross qty.')
     min_qty_warn = fields.Char()
     note = fields.Text()
     mo_id = fields.Many2one(

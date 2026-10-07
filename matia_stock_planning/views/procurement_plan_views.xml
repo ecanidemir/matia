@@ -54,8 +54,10 @@
                                     <field name="last_currency_id"/>
                                     <field name="last_price_usd"/>
                                     <field name="last_date"/>
-                                    <field name="rolled_usd"/>
-                                    <field name="rolled_total_usd"/>
+                                    <field name="rolled_usd" string="Net USD"/>
+                                    <field name="rolled_total_usd" string="Net Total USD"/>
+                                    <field name="scratch_unit_usd" string="Scratch USD"/>
+                                    <field name="scratch_total_usd" string="Scratch Total USD"/>
                                     <field name="unit_price"/>
                                     <field name="subtotal"/>
                                 </tree>

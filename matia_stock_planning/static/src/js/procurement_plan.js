@@ -214,7 +214,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 }).join(', ');
                 this.displayNotification({
                     title: _t('Cost mismatch'),
-                    message: _t('Plan rolled cost differs from ' +
+                    message: _t('Plan scratch cost differs from ' +
                         'Product Cost for: ') + bad,
                     type: 'warning',
                 });
@@ -957,17 +957,21 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (level !== 0 || !openQ || !(openQ.pool > 0)) return '';
             var unit = parseFloat(r.rolled_usd) || 0;
             if (!(unit > 0)) return '';
+            // Full-want figures use the scratch (zero-from-scratch)
+            // unit; the shown Est. is the net gap cost (net unit x
+            // net qty, stock-covered material excluded).
+            var scr = parseFloat(r.scratch_usd) || unit;
             var own = this._availTotal(r);
             var asm = Math.max(0, openQ.pool - own);
             var t = 'Full want: ' + this._fmtNum(openQ.gross, 0) +
-                ' x ' + this._fmtNum(unit, 2) + ' = ' +
-                this._fmtNum(openQ.gross * unit, 2) +
+                ' x ' + this._fmtNum(scr, 2) + ' = ' +
+                this._fmtNum(openQ.gross * scr, 2) +
                 '; covered by ' + this._fmtNum(openQ.pool, 0) +
                 ' pooled stock (' + this._fmtNum(own, 0) +
                 ' on-hand + ' + this._fmtNum(asm, 0) +
                 ' assemblable) = ' +
-                this._fmtNum(openQ.pool * unit, 2) +
-                '. Shown: net qty x unit (no operation/MO cost).';
+                this._fmtNum(openQ.pool * scr, 2) +
+                '. Shown: net gap cost (no operation/MO cost).';
             return ' title="' + t + '"';
         },
 
@@ -1102,6 +1106,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td class="text-center">' + (r.last_date || '') + '</td>' +
                 '<td class="text-right">' + this._fmtNum(r.rolled_usd, 2) +
                 '</td>' +
+                '<td class="text-right" title="Zero-from-scratch unit ' +
+                'cost (matches Product Cost)">' +
+                this._fmtNum(r.scratch_usd, 2) + '</td>' +
                 '<td class="text-right"' +
                 this._estTitle(r, level, openQ) + '><strong>' +
                 this._fmtNum(this._estUsd(r), 2) + '</strong></td>' +
@@ -1166,20 +1173,25 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'so keep it at the gross-build figure. Example: ' +
                     '60 Needed, pool 9 (6 stock + 3 assemblable) = ' +
                     '51 net purchase, Planned stays 54 for the MO ' +
-                    '(badge shows "build 54 / buy 51"). Rolled USD ' +
+                    '(badge shows "build 54 / buy 51"). Net USD ' +
                     'carries no operation/MO cost.') +
                 th(null, 'Seller', '', 'Last supplier') +
                 th(null, 'Source', '', 'Company of the last buy') +
                 th(null, 'Last Price', '', 'Last purchase price') +
                 th(null, 'USD', '', 'Last price converted to USD') +
                 th(null, 'Last Buy', '', 'Date of the last buy') +
-                th(null, 'Rolled USD', '',
-                    'Rolled-up UNIT cost in USD (children included, ' +
-                    'per unit; NO operation/MO cost). Tree Est. = ' +
-                    'unit x gross-build qty.') +
+                th(null, 'Net USD', '',
+                    'NET unit cost in USD: stock-netted gap cost per ' +
+                    'net unit (own order value + net child shares; ' +
+                    'NO operation/MO cost). Tree Est. = unit x ' +
+                    'net qty.') +
+                th(null, 'Scratch USD', '',
+                    'Zero-from-scratch UNIT cost in USD (children ' +
+                    'included, stock ignored; matches Product Cost).') +
                 th('est', 'Est. USD', '',
-                    'Estimated cost: rolled unit USD x order qty ' +
-                    '(tops) / net qty (subs). Operation/MO cost ' +
+                    'Estimated gap cost: net unit USD x order qty ' +
+                    '(tops) / net qty (subs). Stock-covered ' +
+                    'material is excluded. Operation/MO cost ' +
                     'not included.') +
                 '</tr></thead>';
             return html;
@@ -1220,7 +1232,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
                 items = self._sortItems(items.slice());
                 html += '<tr class="group-row group-' + g.key +
-                    '" data-group="' + g.key + '"><td colspan="14">' +
+                    '" data-group="' + g.key + '"><td colspan="15">' +
                     '<div class="group-title-badge">' +
                     '<i class="fa ' + self._groupIcon(g.key) + ' mr-1"></i>' +
                     '<span>' + g.title + '</span>' +
@@ -1245,7 +1257,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 }
             });
             if (searching && !visibleTotal && !this.treeSearchLoading) {
-                html += '<tr><td colspan="14">' +
+                html += '<tr><td colspan="15">' +
                     '<div class="alert alert-info">No parts match ' +
                     '&ldquo;' + this.treeSearch +
                     '&rdquo; in any BOM.</div></td></tr>';
@@ -1291,6 +1303,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         last: self._fmtLast(r),
                         usd: r.last_usd || '', date: r.last_date || '',
                         rolled_usd: r.rolled_usd || '',
+                        scratch_usd: r.scratch_usd || '',
                         est_usd: self._estUsd(r),
                         breakdown: r.top_breakdown || '',
                     });
@@ -1343,7 +1356,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 groups: groups,
                 total: this.summary.total_cost,
                 kits: this.summary.kits || [],
-                rolled_total: this.summary.rolled_total_usd || 0,
+                scratch_total: this.summary.scratch_total_usd || 0,
             });
         },
 
@@ -1354,7 +1367,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 mode: 'tree',
                 tree_rows: this._collectExportRows(),
                 kits: this.summary.kits || [],
-                rolled_total: this.summary.rolled_total_usd || 0,
+                scratch_total: this.summary.scratch_total_usd || 0,
             });
         },
 
@@ -1377,13 +1390,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<i class="fa fa-truck"></i></div></div>' +
                 '<div class="msp-kpi-card kpi-outdoor"><div class="kpi-info">' +
                 '<div class="kpi-title">Est. Total USD</div>' +
-                '<div class="kpi-value" style="color:#059669;" title="Rolled goods value (own + children): ' +
+                '<div class="kpi-value" style="color:#059669;" title="Net gap value (own + net child shares): ' +
                 this._fmtNum(s.grand_rolled_usd || 0, 2) + ' USD">' +
                 this._fmtNum(s.grand_total_usd, 2) + '</div>' +
                 '<div class="kpi-sub">PO-value estimate' +
-                ((s.unsourced_count || s.unpriced_count) ?
+                ((s.unsourced_count || s.unpriced_count ||
+                        s.unknown_count) ?
                     ' (' + (s.unsourced_count || 0) + ' no supplier, ' +
-                    (s.unpriced_count || 0) + ' no price)' : '') +
+                    (s.unpriced_count || 0) + ' no price, ' +
+                    (s.unknown_count || 0) + ' unknown route)' : '') +
                 '</div></div>' +
                 '<div class="kpi-icon" style="color:#059669;">' +
                 '<i class="fa fa-dollar"></i></div></div>' +
@@ -1540,11 +1555,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     (ln.route || '') + '</span></td>' +
                     '<td class="td-stock">PO est <strong>' +
                     self._fmtNum(ln.total_usd, 2) + ' USD</strong>' +
-                    '<small class="text-muted d-block" style="font-weight:400;">Rolled ' +
+                    '<small class="text-muted d-block" style="font-weight:400;">Net ' +
                     self._fmtNum(ln.rolled_usd, 2) + ' USD x ' +
                     self._fmtNum(ln.order_qty, 0) + ' = ' +
                     self._fmtNum(ln.rolled_total_usd, 2) +
-                    ' (goods value)</small>' +
+                    ' (net gap cost)</small>' +
                     (ln.last_price ?
                         '<small class="text-muted d-block" style="font-weight:400;">Last: ' +
                         self._fmtNum(ln.last_price, 2) + ' ' +

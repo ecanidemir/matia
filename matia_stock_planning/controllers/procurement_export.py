@@ -37,15 +37,15 @@ class MatiaProcurementPlanController(http.Controller):
             return request.not_found()
         plan_name = data.get('plan_name', 'Plan')
         kits = data.get('kits', [])
-        rolled_total = data.get('rolled_total', 0)
+        scratch_total = data.get('scratch_total', 0)
         if data.get('mode') == 'tree':
-            return self._export_tree(data, plan_name, kits, rolled_total)
+            return self._export_tree(data, plan_name, kits, scratch_total)
         groups = data.get('groups', [])
         total = data.get('total', 0)
 
         if not xlsxwriter:
             lines = ['\ufeff' + 'Supplier Preview - %s' % plan_name]
-            lines.append('Rolled total (USD): %s' % rolled_total)
+            lines.append('Scratch total (USD): %s' % scratch_total)
             for kit in kits:
                 lines.append('Kit: %s | %s | %s' % (
                     kit.get('name', ''), kit.get('count', 0),
@@ -85,7 +85,7 @@ class MatiaProcurementPlanController(http.Controller):
         row += 1
         ws.write(row, 0, 'Total: %.2f' % (total or 0))
         row += 1
-        ws.write(row, 0, 'Rolled total (USD): %s' % rolled_total)
+        ws.write(row, 0, 'Scratch total (USD): %s' % scratch_total)
         row += 1
         for kit in kits:
             ws.write(row, 0, 'Kit: %s (%s) - %s' % (
@@ -98,9 +98,9 @@ class MatiaProcurementPlanController(http.Controller):
                 grp.get('title', ''), grp.get('cost', 0)), header_fmt)
             row += 1
             ws.write_row(row, 0, ['Code', 'Product', 'Order', 'Last Price',
-                                  'USD', 'Last Buy', 'Unit USD',
-                                  'Rolled USD', 'Subtotal'],
-                         header_fmt)
+                                   'USD', 'Last Buy', 'Net Unit USD',
+                                   'Net Total USD', 'Subtotal'],
+                          header_fmt)
             row += 1
             for itm in grp.get('items', []):
                 ws.write(row, 0, itm.get('code', ''), text_fmt)
@@ -127,21 +127,22 @@ class MatiaProcurementPlanController(http.Controller):
                  'attachment; filename=%s' % filename),
             ])
 
-    def _export_tree(self, data, plan_name, kits, rolled_total):
+    def _export_tree(self, data, plan_name, kits, scratch_total):
         """Capacity-style indented tree export (visible rows only).
 
         Columns mirror the Plan tab: TR / US unreserved, Producible
-        (TR+US), editable Needed, net Planned. Est. USD = rolled_usd x
-        order/net.
+        (TR+US), editable Needed, net Planned. Net USD = stock-netted
+        gap unit, Scratch USD = zero-from-scratch unit (Product Cost
+        base), Est. USD = net unit x order/net.
         """
         rows = data.get('tree_rows', [])
         headers = ['Part Code', 'Part Name', 'Usage', 'TR', 'US',
                    'Producible', 'Needed', 'Planned', 'Seller',
-                   'Source', 'Last Price', 'USD', 'Last Buy', 'Rolled USD',
-                   'Est. USD', 'Per-top']
+                   'Source', 'Last Price', 'USD', 'Last Buy', 'Net USD',
+                   'Scratch USD', 'Est. USD', 'Per-top']
         if not xlsxwriter:
             lines = ['\ufeff' + 'Tree - %s' % plan_name]
-            lines.append('Rolled total USD: %s' % rolled_total)
+            lines.append('Scratch total USD: %s' % scratch_total)
             lines.append(';'.join(headers))
             for r in rows:
                 if r.get('is_header'):
@@ -158,7 +159,9 @@ class MatiaProcurementPlanController(http.Controller):
                     str(r.get('planned', '')), str(r.get('seller', '')),
                     str(r.get('source', '')), str(r.get('last', '')),
                     str(r.get('usd', '')), str(r.get('date', '')),
-                    str(r.get('rolled_usd', '')), str(r.get('est_usd', '')),
+                    str(r.get('rolled_usd', '')),
+                    str(r.get('scratch_usd', '')),
+                    str(r.get('est_usd', '')),
                     str(r.get('breakdown', ''))]))
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Tree_%s.csv' % datetime.now().strftime('%Y%m%d_%H%M')
@@ -183,7 +186,7 @@ class MatiaProcurementPlanController(http.Controller):
         row = 0
         ws.write(row, 0, 'Tree - %s' % plan_name, title_fmt)
         row += 1
-        ws.write(row, 0, 'Rolled total USD: %s' % rolled_total)
+        ws.write(row, 0, 'Scratch total USD: %s' % scratch_total)
         row += 2
         ws.write_row(row, 0, headers, header_fmt)
         row += 1
@@ -210,8 +213,9 @@ class MatiaProcurementPlanController(http.Controller):
             ws.write(row, 11, r.get('usd', '') or 0, num_fmt)
             ws.write(row, 12, r.get('date', ''), fmt)
             ws.write(row, 13, r.get('rolled_usd', '') or 0, num_fmt)
-            ws.write(row, 14, r.get('est_usd', '') or 0, num_fmt)
-            ws.write(row, 15, r.get('breakdown', ''), fmt)
+            ws.write(row, 14, r.get('scratch_usd', '') or 0, num_fmt)
+            ws.write(row, 15, r.get('est_usd', '') or 0, num_fmt)
+            ws.write(row, 16, r.get('breakdown', ''), fmt)
             row += 1
         workbook.close()
         output.seek(0)
