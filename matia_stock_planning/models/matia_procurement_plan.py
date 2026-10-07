@@ -731,6 +731,105 @@ def _mpp_product_routes(env_sudo, pids):
     return out
 
 
+def _mpp_company_bom_types(env_sudo, tmpl_ids, company_id):
+    """Active BOM types per template visible to one company (bulk).
+
+    Visibility mirrors Odoo sharing: company-less BOMs are
+    shared, otherwise only the owning company's BOMs count.
+    Fail-fast like _mpp_subcontract_tmpl_ids (a silent empty
+    map would misclassify subcontract/make products as buy).
+
+    @param env_sudo: sudo environment.
+    @param tmpl_ids: product.template IDs.
+    @param company_id: res.company ID (TR=1, US=2).
+    @return: {tmpl_id: set(types)} e.g. {'normal',
+        'subcontract'}.
+    """
+    tids = [t for t in (tmpl_ids or []) if t]
+    out = {}
+    if not tids or not company_id:
+        return out
+    for i in range(0, len(tids), 200):
+        rows = env_sudo['mrp.bom'].search_read(
+            [('product_tmpl_id', 'in', tids[i:i + 200]),
+             ('active', '=', True),
+             ('company_id', 'in', [False, company_id])],
+            ['product_tmpl_id', 'type'])
+        for r in rows or []:
+            _pt = r.get('product_tmpl_id')
+            if _pt:
+                out.setdefault(_pt[0], set()).add(r.get('type'))
+    return out
+
+
+def _mpp_company_seller_tmpls(env_sudo, tmpl_ids, company_id):
+    """Templates with a seller line visible to one company (bulk).
+
+    @param env_sudo: sudo environment.
+    @param tmpl_ids: product.template IDs.
+    @param company_id: res.company ID (TR=1, US=2).
+    @return: set of template IDs having a company-visible
+        product.supplierinfo line.
+    """
+    tids = [t for t in (tmpl_ids or []) if t]
+    out = set()
+    if not tids or not company_id:
+        return out
+    for i in range(0, len(tids), 200):
+        rows = env_sudo['product.supplierinfo'].search_read(
+            [('product_tmpl_id', 'in', tids[i:i + 200]),
+             ('company_id', 'in', [False, company_id])],
+            ['product_tmpl_id'])
+        out.update(r['product_tmpl_id'][0] for r in (rows or [])
+                   if r.get('product_tmpl_id'))
+    return out
+
+
+def _mpp_location_routes(env_sudo, tmpl_ids, location):
+    """Per-location route overrides for templates (bulk).
+
+    Only when a location is set: company-visible evidence
+    decides (visible subcontract BOM -> subcontract; visible
+    normal BOM + Manufacture route -> make; visible seller +
+    Buy route/purchase_ok -> buy). Templates with no
+    company-visible evidence return NO entry: callers keep the
+    global _mpp_product_routes classification. Kit (phantom
+    BOM) stays global and is decided by the caller.
+
+    @param env_sudo: sudo environment.
+    @param tmpl_ids: product.template IDs.
+    @param location: 'tr' / 'us' (anything else -> {}).
+    @return: {tmpl_id: route} (only overridden templates).
+    """
+    company_id = _MPP_OVERRIDE_COMPANY.get(
+        (location or '').lower())
+    tids = [t for t in (tmpl_ids or []) if t]
+    if not company_id or not tids:
+        return {}
+    bom_types = _mpp_company_bom_types(env_sudo, tids, company_id)
+    seller_tmpls = _mpp_company_seller_tmpls(
+        env_sudo, tids, company_id)
+    out = {}
+    for tmpl in env_sudo['product.template'].browse(tids):
+        if not tmpl.exists():
+            continue
+        names = tmpl.route_ids.with_context(
+            lang='en_US').mapped('name') or []
+        types = bom_types.get(tmpl.id, set())
+        if 'subcontract' in types:
+            out[tmpl.id] = 'subcontract'
+            continue
+        if 'normal' in types and any(
+                'Manufacture' in (n or '') for n in names):
+            out[tmpl.id] = 'make'
+            continue
+        if tmpl.id in seller_tmpls and (
+                any('Buy' in (n or '') for n in names)
+                or tmpl.purchase_ok):
+            out[tmpl.id] = 'buy'
+    return out
+
+
 class MatiaProcurementPlan(models.Model):
     _name = 'matia.procurement.plan'
     _description = 'Matia Bulk Procurement/Production Preview Plan'
@@ -4129,22 +4228,36 @@ class MatiaProcurementPlan(models.Model):
             vals['location'] = loc or False
         if not vals:
             raise UserError(_('Nothing to save.'))
+        Ov = env_sudo['matia.procurement.price.override']
+        rec = Ov.search([('product_id', '=', pid)], limit=1)
         # Manufactured and kit products have no own purchase price
         # (their cost is the sum of the components), so a corrected
         # price is rejected. Location stays allowed: it marks the
-        # production site (TR/US) for reporting.
+        # production site (TR/US) for reporting. Classification
+        # follows the effective location: the location being saved,
+        # else the stored one (a TR-made product bought in the US
+        # classifies as buy there).
         _route = _mpp_product_routes(env_sudo, [pid]).get(pid)
         _tmpl = prod.product_tmpl_id
         if _tmpl and _tmpl.id in _mpp_kit_tmpl_ids(env_sudo, [_tmpl.id]):
             _route = 'kit'
+        elif _tmpl:
+            _loc_code = None
+            if location not in (False, None):
+                _loc_code = (location or '').lower() or None
+            elif rec:
+                _loc_code = (rec.location or '').lower() or None
+            if _loc_code in ('tr', 'us'):
+                _loc_route = _mpp_location_routes(
+                    env_sudo, [_tmpl.id], _loc_code).get(_tmpl.id)
+                if _loc_route:
+                    _route = _loc_route
         if vals.get('corrected_price_usd') and _route in ('make', 'kit'):
             raise UserError(_(
                 'Manufactured/kit products have no purchase price: '
                 'corrected price cannot be set (their cost rolls up '
                 'from the components). Location can still be set as '
                 'the production site.'))
-        Ov = env_sudo['matia.procurement.price.override']
-        rec = Ov.search([('product_id', '=', pid)], limit=1)
         if rec:
             rec.write(vals)
         else:

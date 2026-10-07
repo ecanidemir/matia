@@ -901,8 +901,14 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                     .indexOf(usd) < 0) return false;
                 if (date && ((r.last_date || '').toLowerCase()
                     .indexOf(date) < 0)) return false;
-                if (f.std && String(r.std_usd_display || '')
-                    .indexOf(f.std) < 0) return false;
+                if (f.std) {
+                    var stdHay = String(r.std_usd_display || '');
+                    if (r.std_needs_location) {
+                        stdHay += ' location needed';
+                    }
+                    if (stdHay.toLowerCase()
+                        .indexOf(f.std.toLowerCase()) < 0) return false;
+                }
                 if (corr && String(r.corrected || '')
                     .indexOf(corr) < 0) return false;
                 if (f.loc === 'none') {
@@ -1050,31 +1056,41 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 (r.last_currency ? ' ' + r.last_currency : '') : '';
             var usdTxt = r.last_usd ?
                 this._fmtNum(r.last_usd, 4) : '';
-            // Standard-price fallback in USD, shown per the
+            // Location-aware standard USD, shown per the
             // product's purchase UoM (same unit as Corrected, so
-            // Copy Std stores exactly this value). Subtitle is
-            // the rate day: last std change, or the latest rate
-            // when no valuation layer matched.
+            // Copy Std stores exactly this value). US side is the
+            // latest US-company receipt cost (already USD, no FX);
+            // TR side is standard_price (TRY) at the estimated
+            // last-change day rate. Without a location the cell
+            // shows a placeholder instead of a value.
+            var stdLoc = (r.location || '').toLowerCase();
             var stdTxt = (parseFloat(r.std_usd_display) || 0) > 0 ?
                 this._fmtNum(r.std_usd_display, 4) : '';
-            var stdTitle = 'Standard price converted to USD ' +
-                '(estimated rate day)';
+            var stdTitle = stdLoc === 'us' ?
+                'Latest US receipt cost in USD (no rate conversion)' :
+                'TR standard price in USD (estimated rate day)';
             if (stdTxt) {
-                stdTitle += r.std_rate_latest ?
-                    ' at the latest rate (' +
-                    (r.std_rate_date || '') + ')' :
-                    ' at the rate of the estimated last change day (' +
-                    (r.std_rate_date || '') + ')';
+                stdTitle += ' (' + (r.std_rate_date || '') + ')' +
+                    (r.std_rate_latest ? ' *latest rate' : '');
             }
-            var stdCell = stdTxt ?
-                '<td style="white-space:nowrap;" title="' +
-                this._escHtml(stdTitle) + '">' + stdTxt +
-                (r.std_rate_date ? '<div style="font-size:11px;' +
-                    'opacity:0.7;">' +
-                    this._escHtml(r.std_rate_date) +
-                    (r.std_rate_latest ? ' *' : '') + '</div>' : '') +
-                '</td>' :
-                '<td title="' + this._escHtml(stdTitle) + '"></td>';
+            var stdCell;
+            if (r.std_needs_location) {
+                stdCell = '<td title="Set a location (TR/US) to ' +
+                    'see the standard USD"><span style="font-size:' +
+                    '11px;opacity:0.65;">location needed</span></td>';
+            } else {
+                stdCell = stdTxt ?
+                    '<td style="white-space:nowrap;" title="' +
+                    this._escHtml(stdTitle) + '">' + stdTxt +
+                    (r.std_rate_date ? '<div style="font-size:11px;' +
+                        'opacity:0.7;">' +
+                        this._escHtml(r.std_rate_date) +
+                        (r.std_rate_latest ? ' *' : '') +
+                        '</div>' : '') +
+                    '</td>' :
+                    '<td title="' + this._escHtml(stdTitle) +
+                    '"></td>';
+            }
             var manualBadge = r.has_override ?
                 ' <span class="badge badge-warning" ' +
                 'title="Manual price/location stored in the database">' +
