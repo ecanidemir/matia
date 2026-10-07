@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Matia TekRMD Stock & Capacity Planning',
-    'version': '15.0.2.4.0',
+    'version': '15.0.2.5.0',
     'category': 'Inventory/Inventory',
     'summary': 'Device Production Capacity & Stock Analysis based on TekRMD BOMs',
     'description': """
@@ -35,6 +35,8 @@ across TR and USA warehouse locations to calculate:
         'views/procurement_plan_views.xml',
         'views/procurement_plan_rfq_views.xml',
         'views/procurement_plan_menus.xml',
+        'views/product_cost_views.xml',
+        'views/product_cost_menus.xml',
     ],
     'assets': {
         'web.assets_backend': [
@@ -42,10 +44,12 @@ across TR and USA warehouse locations to calculate:
             'matia_stock_planning/static/src/js/stock_planning.js',
             'matia_stock_planning/static/src/scss/procurement_plan.scss',
             'matia_stock_planning/static/src/js/procurement_plan.js',
+            'matia_stock_planning/static/src/js/product_cost.js',
         ],
         'web.assets_qweb': [
             'matia_stock_planning/static/src/xml/stock_planning.xml',
             'matia_stock_planning/static/src/xml/procurement_plan.xml',
+            'matia_stock_planning/static/src/xml/product_cost.xml',
         ],
     },
     'installable': True,

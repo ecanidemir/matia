@@ -438,3 +438,34 @@
 - T1CBRN01 corrected etkisi (kod izi, ampirik dogrulama deploy sonrasi): miktarlar (gross/net/order) ASLA degismez; subtotal hep 0 (subcontract'a subtotal yazilmaz); seller yoksa unit_price 0 + 'No supplier'. Degisen: T2SCNN01 rolled_usd += 260 x saklanan-per-mm (2 USD/m girilirse +0.52 USD/minder), supplier PO toplami (order>0 subcontract satirlar dahil, own x order), RFQ taslak fiyati (seller atanirsa; PO satir UoM = mm, ticari olarak m'ye cevrilmesi manuel). Beklenen delta formulu: minder basi = kullanim_mm x girilen_USD_per_m / 1000.
 - Dogrulama: py_compile OK, node --check OK, eklenen satirlarda non-ASCII 0 (dosyadaki TR karakterler pre-existing header). Deploy: Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); sonrasi Ctrl+F5. Commit/push YOK.
 - UI revizyonu (2026-10-07, henuz commitlenmedi): UoM kolonu kaldirildi (10 kolon). Giris birimi corrected input'un yaninda "per X" yazar (per m / per unit / per kg; X = price_uom). Son-alim birimi farkliysa Last Price hucresinde "/X" gorunur (orn. "0.5700 TRY/m" E1CBRN09). E1CBRN26 ornegi: son alim yok, stok mm + satinalma m -> input "per m" bekler (metre fiyati girilir). Reviewer: sayi tutarliligi + escHtml + alan uyumu OK, kritik bulgu yok.
+
+## Product Cost Sayfasi (2026-10-07, henuz deploy edilmedi)
+
+- Yeni admin-only menu 'Product Cost' (Capacity app, sequence 30, base.group_system).
+  Tek client action'da 2 sekme: 1. Cost (canli bottom-up rolled USD, 1-cihaz seti)
+  + 3 combo kutusu (base vidalari icerir: full, base+outdoor, base+seat); 2. Prices
+  (plan sayfasindan TASINDI - plan sayfasinda artik Prices sekmesi yok).
+- Server: yeni AbstractModel `matia.product.cost` (models/matia_product_cost.py).
+  Metodlar: get_cost_tree / get_sub_bom_cost / get_prices / reset_prices_to_usd.
+  Hepsi @api.model, ensure_one YOK (JS model-style cagirir). Plan kaydi OLUSTURMAZ
+  (get_price_overview plan_id=False iken latest plan bulur + yoksa draft OLUSTURUR,
+  bu yuzden yeni sayfa onu kullanmaz; override/last-buy her zaman canli okunur).
+- Ayni modulun helper'lari import edilir: _mpp_find_kit_boms, _mpp_price_overrides,
+  _mpp_product_routes, _mpp_kit_tmpl_ids, _mpp_uom_en, _mpp_stock_per_po_factor,
+  _mpp_env_sudo (+ _MPP_MAX_LEVEL, _MPP_TR_COMPANY_ID). Para cevriminde sirket = TR(1).
+- Kaydetme ayni global tabloya gider (matia.procurement.price.override): tek satir
+  Save -> plan modelindeki save_price_override; toplu TR/US -> bulk_set_location;
+  Clear -> clear_price_overrides (hepsi zaten global, plan dosyasi degismedi).
+  Reset (yeni): secili satirlarin computed USD'sini corrected'a kopyalar (overwrite,
+  confirm'li); make/kit + fiyati 0 olanlar skipped listesinde raporlanir.
+- Client: static/src/js/product_cost.js + xml/product_cost.xml (tag
+  matia_product_cost.dashboard). SCSS kapsam paylasilir: stock_planning.scss +
+  procurement_plan.scss kokune `.o_matia_product_cost` eklendi (msp-/mpp- class
+  reuse; combo kutulari icin kucuk mpc- blogu procurement_plan.scss sonunda).
+- Excel: yeni route /matia_product_cost/export_xlsx (controllers/product_cost_export.py,
+  admin-only, grup + acilmis sub-BOM satirlari, combo ozeti).
+- ACL: access_matia_product_cost_admin (model_matia_product_cost, base.group_system).
+  Manifest 15.0.2.5.0. Dogrulama: py_compile OK, node --check OK (2 dosya), XML parse
+  OK, plan JS/XML'de Prices kalintisi yok (grep temiz).
+- Deploy: Python var -> odoobulut Git Deploy + Upgrade/restart (mesai disi + backup);
+  sonrasi Ctrl+F5. Commit/push YOK (istenmedi).

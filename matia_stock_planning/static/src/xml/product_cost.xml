@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="MatiaProductCost.Dashboard">
+        <div class="o_matia_product_cost">
+
+            <!-- 1. Header Bar (capacity template: icon + title area + icon actions) -->
+            <div class="msp-header">
+                <div class="msp-title-area">
+                    <i class="fa fa-usd"></i>
+                    <div>
+                        <h2>Product Cost</h2>
+                        <p>Admin only. Live bottom-up cost per 1-device set; corrected prices win over the last purchase.</p>
+                    </div>
+                </div>
+                <div class="msp-actions">
+                    <button class="btn btn-outline-light btn-sm msp-btn-refresh" title="Recompute everything live">
+                        <i class="fa fa-refresh mr-1"></i> Recalculate
+                    </button>
+                    <button class="btn btn-success btn-sm msp-btn-excel" title="Export the cost tree to Excel">
+                        <i class="fa fa-file-excel-o mr-1"></i> Excel
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. Step navigation -->
+            <ul class="nav nav-tabs mpp-nav-tabs">
+                <li class="nav-item">
+                    <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">
+                        <i class="fa fa-sitemap mr-1"></i>1. Cost
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link mpp-nav-tab" data-tab="2">
+                        <i class="fa fa-usd mr-1"></i>2. Prices
+                    </a>
+                </li>
+            </ul>
+
+            <!-- TAB 1: cost tree -->
+            <div class="mpp-pane" data-pane="1">
+                <div class="msp-kpi-grid mpc-kpi-grid mt-2"/>
+                <div class="mpc-combo-row mt-2"/>
+                <div class="msp-table-card mt-2">
+                    <div class="msp-table-search">
+                        <div class="search-input-box">
+                            <i class="fa fa-search"></i>
+                            <input type="text" class="mpc-tree-search" placeholder="Search part code or name (all BOMs)..."/>
+                        </div>
+                        <div class="table-legend">
+                            <span style="font-weight:700; color:#0f172a;">
+                                <i class="fa fa-usd mr-1"></i> BOM Cost (rolled USD, per 1-device set)
+                            </span>
+                            <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
+                        </div>
+                        <div class="msp-tool-buttons">
+                            <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs">
+                                <i class="fa fa-plus-square-o mr-1"></i> Expand All BOMs
+                            </button>
+                            <button class="btn btn-secondary btn-sm msp-btn-collapse-all" title="Collapse all sub-assembly BOMs">
+                                <i class="fa fa-minus-square-o mr-1"></i> Collapse All BOMs
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-responsive mpc-tree-body"/>
+                </div>
+            </div>
+
+            <!-- TAB 2: global prices (moved out of the Production Plan page) -->
+            <div class="mpp-pane d-none" data-pane="2">
+                <div class="msp-table-card mt-2">
+                    <div class="msp-table-search">
+                        <div class="table-legend">
+                            <span style="font-weight:700; color:#0f172a;">
+                                <i class="fa fa-usd mr-1"></i> Prices (manual overrides)
+                            </span>
+                            <span class="text-muted" style="font-size:0.7rem;">Every product in the 4 groups, no quantities. Corrected USD replaces the last-buy price in rolled costs, supplier totals and draft RFQs.</span>
+                        </div>
+                        <div class="msp-tool-buttons">
+                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-reload" title="Reload the price list">
+                                <i class="fa fa-refresh mr-1"></i> Reload
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-tr" title="Set purchase location TR for the checked rows">
+                                Set TR (<span class="mpp-price-selcount">0</span>)
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-us" title="Set purchase location US for the checked rows">
+                                Set US (<span class="mpp-price-selcount">0</span>)
+                            </button>
+                            <button class="btn btn-outline-secondary btn-sm mpp-btn-price-clear" title="Delete the overrides of the checked rows">
+                                <i class="fa fa-eraser mr-1"></i> Clear
+                            </button>
+                            <button class="btn btn-outline-warning btn-sm mpp-btn-price-reset" title="Copy the computed USD into Corrected for the checked rows (overwrites)">
+                                <i class="fa fa-copy mr-1"></i> Reset to USD (<span class="mpp-price-selcount">0</span>)
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-responsive mpp-price-body"/>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

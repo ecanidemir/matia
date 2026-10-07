@@ -50,11 +50,6 @@
                         <i class="fa fa-truck mr-1"></i>2. Suppliers &amp; Production
                     </a>
                 </li>
-                <li class="nav-item">
-                    <a href="#" class="nav-link mpp-nav-tab" data-tab="3">
-                        <i class="fa fa-usd mr-1"></i>3. Prices
-                    </a>
-                </li>
             </ul>
 
             <!-- TAB FILL BAR: one N per kit group + single Apply.
@@ -143,35 +138,6 @@
                         </div>
                     </div>
                     <div class="mpp-prod-body"/>
-                </div>
-            </div>
-
-            <!-- TAB 3: manual prices (quantity-free, global per product) -->
-            <div class="mpp-pane d-none" data-pane="3">
-                <div class="msp-table-card mt-2">
-                    <div class="msp-table-search">
-                        <div class="table-legend">
-                            <span style="font-weight:700; color:#0f172a;">
-                                <i class="fa fa-usd mr-1"></i> Prices (manual overrides)
-                            </span>
-                            <span class="text-muted" style="font-size:0.7rem;">Every product in the 4 groups, no quantities. Corrected USD replaces the last-buy price in rolled costs, supplier totals and draft RFQs.</span>
-                        </div>
-                        <div class="msp-tool-buttons">
-                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-reload" title="Reload the price list">
-                                <i class="fa fa-refresh mr-1"></i> Reload
-                            </button>
-                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-tr" title="Set purchase location TR for the checked rows">
-                                Set TR (<span class="mpp-price-selcount">0</span>)
-                            </button>
-                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-us" title="Set purchase location US for the checked rows">
-                                Set US (<span class="mpp-price-selcount">0</span>)
-                            </button>
-                            <button class="btn btn-outline-secondary btn-sm mpp-btn-price-clear" title="Delete the overrides of the checked rows">
-                                <i class="fa fa-eraser mr-1"></i> Clear
-                            </button>
-                        </div>
-                    </div>
-                    <div class="table-responsive mpp-price-body"/>
                 </div>
             </div>
         </div>

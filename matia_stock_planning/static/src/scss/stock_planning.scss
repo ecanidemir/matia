@@ -34,7 +34,8 @@
  * dashboard roots. Capacity-only blocks (.msp-header, .msp-controls-card,
  * .msp-dynamic-chips-bar) simply match nothing under procurement. */
 .o_matia_stock_planning,
-.o_matia_procurement_plan {
+.o_matia_procurement_plan,
+.o_matia_product_cost {
     display: flex;
     flex-direction: column;
     /* Desktop: fill the action panel height and scroll internally */
