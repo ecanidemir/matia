@@ -147,8 +147,12 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         // ---------------- tab 1: cost tree ----------------
         _fetchCost: function () {
             var self = this;
-            this.$('.mpc-tree-body').html(
-                '<div class="alert alert-info">Loading...</div>');
+            // No DOM here: willStart calls this before the widget is
+            // rendered (this.$el undefined); _renderCost paints Loading.
+            if (this.$el) {
+                this.$('.mpc-tree-body').html(
+                    '<div class="alert alert-info">Loading...</div>');
+            }
             this._rpcCost('get_cost_tree', []).then(function (res) {
                 self.costData = res || {groups: [], combos: {}};
                 self.costLoaded = true;
@@ -690,8 +694,10 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         // price in rolled costs, supplier totals and draft RFQs.
         _fetchPrices: function () {
             var self = this;
-            this.$('.mpp-price-body').html(
-                '<div class="alert alert-info">Loading...</div>');
+            if (this.$el) {
+                this.$('.mpp-price-body').html(
+                    '<div class="alert alert-info">Loading...</div>');
+            }
             this._rpcCost('get_prices', []).then(function (res) {
                 self.priceRows = (res && res.items) || [];
                 self.priceCount = (res && res.count) ||
