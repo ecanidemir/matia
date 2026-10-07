@@ -427,16 +427,19 @@
 - Urun: [M2C2HN06] Transfer Board Metal 6 Countersink (product/template 2198, Units, purchase_ok=False, sale_ok=False, company global). Template route [Manufacture(6), Resupply Subcontractor on Order(9)] DOGRUDAN template'te (kategori Manufactured routesuz).
 - BOM 1226: type normal (uretim), TR sirket, tek satir M3C2LN11 Laser x1. Yani BOM uretim, dogru.
 - Prices/Product Cost'ta Subcontract cikma sebebi: `_mpp_classify_route` onceligi Subcontract > Manufacture > Buy; cift rotali urun her zaman subcontract siniflanir.
-- Zincir: M3C2LN11 (laser) -> M2C2HN06 (countersink, normal) -> M3C2PB06 (painting, BOM 1341 type subcontract). Route 9 muhtemelen fason akis (boyama) icin bilerek konmus olabilir; T1RURB51/T1CBRN01 ornegiyle ayni sinif (komponent fason BOM'da kullaniliyor).
-- Kural: BOM tipi normal + urun route cift ise ekrandaki Subcontract etiketi veri kaynaklidir, kod degil; route 9 silinmeden etiket degismez. Silmeden once fasoncuya resupply kirilir mi teyit et (canli write, onay sart).
+- Zincir: M3C2LN11 (laser) -> M2C2HN06 (countersink, normal) -> M3C2PB06 (painting, BOM 1341 type subcontract). Route 9 fason akis (boyama) icin bilerek konmus olabilir; T1RURB51/T1CBRN01 ornegiyle ayni sinif (komponent fason BOM'da kullaniliyor).
+- COZULDU 2026-10-07 (kod fix, henuz deploy edilmedi): `_mpp_classify_route` artik BOM-tipine bakiyor (asagidaki Route-vs-BOM girdisi). Route 9'a DOKUNULMADI (resupply akisi korunur); M2C2HN06 artik 'make'.
 
-## Route-vs-BOM-Tipi Tersine Siniflandirma (2026-10-07, canli veri, FIX BEKLIYOR)
+## Route-vs-BOM-Tipi Tersine Siniflandirma (2026-10-07, canli veri, FIX UYGULANDI - deploy bekliyor)
 
 - Olay: M2C2HN06 (countersink, normal BOM 1226) Prices'ta Subcontract; M3C2PB06 (painting, subcontract BOM 1341, fasoncu LEHMANN 1028) Buy gorunuyor. Kullanici hakli: roller ters.
 - Olcu: aktif subcontract BOM 353; bunlarin 240 template'inde route 9 YOK (hepsi Buy gorunuyor). Route 9'lu 319 template'in 48'inde normal BOM var (hepsi Subcontract gorunuyor, uretim olmalilar).
 - Kok neden: `_mpp_classify_route` SADECE route'a bakar (Subcontract > Manufacture > Buy). Odoo 15 standardinda (`mrp_subcontracting` kurulu) bitmis fason urun rotasi Buy olur, `Resupply Subcontractor on Order` (9) KOMPONENTLERE konur. Yani VERI standarda uygun, kodun bakis acisi yanlis. Data-fix (route ekle/sil) YASAK - Odoo resupply akisini bozar.
-- Kod fix yonu (uygulanmadi, onay bekliyor): `_mpp_classify_route(route_names, purchase_ok, bom_types=None)` - aktif subcontract BOM varsa route'a bakmadan 'subcontract'; yoksa mevcut oncelik (M2C2HN06 -> Manufacture -> 'make'). `_mpp_product_routes` tek bulk `mrp.bom` search_read ile beslenir (N+1 yok); inline 2 siniflama noktasi (L~1295, L~3924) ayni imzaya gecer. Edge: normal+subcontract BOM'lu cift-kaynak urunde subcontract kazanir.
-- Operasyonel etki (bugunku yanlis sinifla): 48 uretim ara-urun net>0'da MO yerine RFQ/PO uretir (kritik); 240 fason bitmis urun PO'su dogru saticiya gider ama etiket/uretim-sekmesi yanlis.
+- Fix (matia_procurement_plan.py, commit/push YOK): yeni bulk helper `_mpp_subcontract_tmpl_ids` (200-chunk search_read, N+1 yok; bilerek fail-fast - sessiz bos donus yanlis PO uretir, docstring'de yazili); `_mpp_classify_route(route_names, purchase_ok, has_subcontract_bom=False)` oncelik: subcontract BOM > Manufacture > Subcontract-route > Buy (Manufacture bilerek resupply route'unu ezer - testte yakalandi). `_mpp_product_routes` + line-build + price-overview ayni helper'a baglandi; kit kurali degismedi. Test scratch/test_classify_route.py 10/10 + py_compile OK. odoo-reviewer: Odoo 15 API temiz, mantik onayli (2 bulgu duzeltildi: chunk + fail-fast gerekcesi).
+- Plan sayfasi etkisi (Recalculate sonrasi; eski planlar eski etiketi tasir): miktarlar (gross/net/order/stok) DEG Tayfa patlatma BOM-tipine bagli, route degil.
+  - 48 uretim ara-urunu (orn. M2C2HN06) subcontract->make: artik RFQ/PO URETILMEZ, MO olusturma gelir (normal BOM var); tedarikci ozeti grand_total_usd bunlarin PO degerince DUSER; rolled = cocuk toplami (own 0); varsa manuel duzeltme fiyati make satirinda yok sayilir.
+  - 240 fason bitmis urun (orn. M3C2PB06) buy->subcontract: RFQ ayni satici + ayni fiyattan gider (toplamlar DEG Tayfa PO onayi artik standart fason teslim + MO zincirini tetikler (istenen); satir subtotal 0 olur (buy-only), agac Est USD gosterir; uretim sekmesinde yeni subcontract satiri belirir.
+- DEPLOY: Git Deploy + servis restart (mesai disi + backup) + plan Recalculate + M2C2HN06/M3C2PB06 etiketiyle teyit.
 
 ## Subcontract Etiketi Ornegi (2026-10-06, T1RURB51 + T1CBRN01)
 

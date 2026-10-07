@@ -638,8 +638,13 @@ def _mpp_subcontract_tmpl_ids(env_sudo, tmpl_ids):
     finished product itself carries only the Buy route, while the
     `Resupply Subcontractor on Order` route sits on the COMPONENTS
     sent to the subcontractor. Route-only classification therefore
-    inverts the two roles, so the BOM type wins (single bulk read,
-    no N+1).
+    inverts the two roles, so the BOM type wins (bulk read in
+    200-chunks, no N+1).
+    Deliberately fail-fast (no try/except): a silent empty set
+    would misclassify subcontract products as buy/make and drive
+    wrong fulfillment (PO instead of subcontract chain), while a
+    visible error is retried. mrp.bom always exists here
+    (manifest depends on mrp).
     @param env_sudo: sudo environment.
     @param tmpl_ids: product.template IDs.
     @return: set of template IDs with an active subcontract BOM.
@@ -647,13 +652,16 @@ def _mpp_subcontract_tmpl_ids(env_sudo, tmpl_ids):
     tids = [t for t in (tmpl_ids or []) if t]
     if not tids:
         return set()
-    rows = env_sudo['mrp.bom'].search_read(
-        [('product_tmpl_id', 'in', tids),
-         ('active', '=', True),
-         ('type', '=', 'subcontract')],
-        ['product_tmpl_id'], limit=5000)
-    return {r['product_tmpl_id'][0] for r in (rows or [])
-            if r.get('product_tmpl_id')}
+    out = set()
+    for i in range(0, len(tids), 200):
+        rows = env_sudo['mrp.bom'].search_read(
+            [('product_tmpl_id', 'in', tids[i:i + 200]),
+             ('active', '=', True),
+             ('type', '=', 'subcontract')],
+            ['product_tmpl_id'])
+        out.update(r['product_tmpl_id'][0] for r in (rows or [])
+                   if r.get('product_tmpl_id'))
+    return out
 
 
 def _mpp_classify_route(route_names, purchase_ok=False,
