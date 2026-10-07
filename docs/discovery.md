@@ -469,3 +469,49 @@
   OK, plan JS/XML'de Prices kalintisi yok (grep temiz).
 - Deploy: Python var -> odoobulut Git Deploy + Upgrade/restart (mesai disi + backup);
   sonrasi Ctrl+F5. Commit/push YOK (istenmedi).
+
+## Plan Rolled UoM normalizasyon hatasi (2026-10-07, E2CBAN03)
+
+- Olay: Production plan E2CBAN03 rolled 972.66 USD, Product Cost ayni urun 130.34 USD.
+  Bagimsiz XML-RPC okuma + canli `matia.product.cost/get_sub_bom_cost` (staging, modül
+  15.0.2.5.0): Cost toplami 130.33 (ekran 130.34 ile ayni) -> **Product Cost DOGRU,
+  plan YANLIS** (fark 842.32).
+- Kok neden: BOM 1200 satiri 2317 (E1CBRN03 Cable UP) `370 mm` ama urunun stok/line/PO
+  UoM'i `m`. Plan `edge_json` ham 370.0 saklar, `_compute_rollup` bunu metre fiyati
+  2.28 USD ile carpar -> 843.60 (dogrusu 0.37 x 2.28 = 0.84). +842.76 sisirme.
+  Ayni sinifin tersi E1CBRW01: BOM `1.76 m`, stok/line `mm` -> plan 1.76 mm sayar
+  (0.0005), dogrusu 1760 mm (0.44). Net fark 842.32 = 972.66 - 130.34 birebir.
+- `_mpc_explode` (product cost) BOM qty'yi stok UoM'una cevirir, o yuzden dogru.
+  Plan patlatmasi cevirmez (sadece fiyat tarafi `_mpp_line_uom_factor` ile cevrilir).
+- Fix yonu: (1) kod - plan explosion'da edge qty'yi line/stok UoM'una normalize et
+  (`_mpc_explode` deseni); (2) veri - 2317 satiri `0.37 m`, E1CBRW01 satiri `1760 mm`
+  olarak duzelt (muhendislik teyidiyle; uretimi etkiler); (3) mevcut planlar
+  Recalculate edilmeden duzelmez (22/24/25/26 hepsi 972.6578 sakliyor).
+- Teyit + tam tarama (2026-10-07, staging salt-okunur, `scratch/teyit_uom_lines.py` +
+  `scratch/audit_bom_uom.py` -> `scratch/audit_bom_uom_report.json`):
+  E1CBRN03 stok/PO UoM `m` (PO/24-00237: 150 m @ 2.13 USD/m; MO tuketimleri m ve mm
+  karisik, Odoo MO satir UoM'unda tuketip stoga cevirir - dogru desen), E1CBRW01 stok
+  `mm`/PO `m` (PO 200 m, giris hareketi 200000 mm; MO tuketimleri cogunlukla mm).
+  BOM satirlari fiziksel dogru (muhendis pratik birimle girmis), hata %100 plan
+  patlatmasinda. Capraz kontrol: 972.66 - 842.76 + 0.44 = 130.34 Product Cost ile
+  kurusuna uyar.
+- Ayni sinif TUM aktif BOM'larda 10 satir (511 BOM / 1551 satir tarandi, farkli
+  kategori 0): E1CBRN03/E2CBAN03 (1000x, ~843 USD), E1CBRW01/E2CBAN03 (0.001x,
+  ~0.44 eksik), T1HLRB51 x3 (Knee/Seat Cushion, ~101-185 USD), T1HSRB50 x4 (Velcro
+  setleri, ~20-96 USD), N1PGRN02/Packaging (fiyat yok, etkisi 0). Dar nokta:
+  `matia_procurement_plan.py` patlatma L869-875 (phantom) + L883-891 (normal) ham
+  `bl.product_qty` saklar; satir uom_id her zaman stok UoM (L1181-1197),
+  `_compute_rollup` (L1472+) qty x satir-UoM fiyati carpar. Ayni ham qty net cascade,
+  pool/branch, exact allocation, edge_json, gross/net/order_qty ve RFQ/MO uretimini
+  besler (E1CBRN03'e 370 m siparis riski). Fiyat tarafi saglam (rolled per-line-UoM,
+  digits (16,4)). Plan: `plans/production_plan_edge_qty_normalization.md`.
+
+## FIX Production Plan UoM normalizasyonu (2026-10-07)
+`_mpp_norm_bom_qty(bl)` helper + 5 cagri (patlatma phantom/normal, _mpp_need_per_top
+x2, _mpp_sub_items); lineless faktor PO->stok UoM'a cevrildu, satir uom etiketi stok
+UoM, edge_json help guncellendi. BOM verisi degismedi. Simulasyon: E2CBAN03 plan
+toplami 972.66 -> 130.34 (Product Cost ile ayni). odoo-reviewer: approve-with-nits
+(kabul edilmeyen: `or 1.0` modul konvansiyonu korundu; tooltip UoM suffix kapsam disi).
+Dogrulama: py_compile + scratch/simulate_rollup_fix.py. DEPLOY: Python degisikligi
+Git Deploy/restart gerektirir (mesai disi + backup); eski planlar Recalculate
+edilmeden duzelmez (cache). Commit/push YOK (onay bekleniyor).

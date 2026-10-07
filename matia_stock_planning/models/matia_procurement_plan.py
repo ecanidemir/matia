@@ -163,6 +163,48 @@ def _mpp_stock_per_po_factor(env_sudo, stock_uom_id, po_uom_id):
         return 1.0
 
 
+def _mpp_norm_bom_qty(bl):
+    """BOM-line qty expressed in the child's stock UoM (fail-safe raw).
+
+    Explosion edges, drill-down quantities and per-top contributions
+    must all be in the child's stock UoM, because plan lines carry the
+    stock UoM and every cost formula (_compute_rollup via
+    _mpp_line_uom_factor) works per line UoM. Without this, a line like
+    370 mm on a metre-stocked product explodes as 370 m. Mirrors the
+    conversion already used in matia_product_cost.
+
+    @param bl: mrp.bom.line record.
+    @return: float qty in the child stock UoM; the raw BOM qty whenever
+        a UoM is missing, the categories are inconvertible, or the
+        conversion fails (fail-safe: old behaviour + warning).
+    """
+    try:
+        raw = float(bl.product_qty or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    try:
+        line_uom = bl.product_uom_id
+        stock_uom = bl.product_id.uom_id
+        if not line_uom or not stock_uom:
+            return raw
+        if line_uom.id == stock_uom.id:
+            return raw
+        if line_uom.category_id.id != stock_uom.category_id.id:
+            _logger.warning(
+                'MPP UoM: inconvertible BOM line %s (%s -> %s); '
+                'using raw qty %s',
+                getattr(bl, 'id', '?'), line_uom.name,
+                stock_uom.name, raw)
+            return raw
+        return line_uom._compute_quantity(
+            raw, stock_uom, round=False) or raw
+    except Exception as exc:
+        _logger.warning(
+            'MPP UoM: normalizing BOM line %s failed: %s; using raw qty',
+            getattr(bl, 'id', '?'), exc)
+        return raw
+
+
 def _mpp_tr_stock_locs(env_sudo):
     """WHTR/Stock% internal locations (excluding NCR)."""
     locs = env_sudo['stock.location'].search([('usage', '=', 'internal')])
@@ -662,7 +704,8 @@ class MatiaProcurementPlan(models.Model):
         help='JSON: {product_id: qty} - Screen 1 entries.')
     edge_json = fields.Text(
         help='JSON: {parent_id: {child_id: qty}} - BOM edges for '
-             'rolled-up cost (Screen 2 output).')
+             'rolled-up cost (Screen 2 output). Qty is normalized to '
+             'the child stock UoM (see _mpp_norm_bom_qty).')
     built_target_json = fields.Text(
         help='Copy of target_json the lines were built from. '
              'get_tree_with_cost skips the full rebuild when it '
@@ -816,7 +859,8 @@ class MatiaProcurementPlan(models.Model):
         bom_cache = {}  # tmpl_id -> bom record
         need = {}       # pid -> gross
         meta = {}       # pid -> {'level':min, 'paths':set, 'route':..}
-        edges = {}      # parent pid -> {child pid: qty per parent unit}
+        edges = {}      # parent pid -> {child pid: qty per parent unit,
+                        #  in the CHILD's stock UoM (normalized)}
         btype = {}      # pid -> bom type ('phantom' passes demand through)
         stack = [(pid, float(qty), 0, 'root')
                  for pid, qty in targets.items()]
@@ -868,10 +912,13 @@ class MatiaProcurementPlan(models.Model):
                 btype[pid] = 'phantom'
                 edge = edges.setdefault(pid, {})
                 for bl in bom.bom_line_ids:
-                    edge.setdefault(bl.product_id.id,
-                                    float(bl.product_qty or 1.0))
+                    # Edge qty in the CHILD's stock UoM (not the raw
+                    # BOM-line qty): lines and all cost math are per
+                    # line UoM.
+                    _eqty = _mpp_norm_bom_qty(bl)
+                    edge.setdefault(bl.product_id.id, _eqty)
                     stack.append((bl.product_id.id,
-                                  mult * float(bl.product_qty or 1.0),
+                                  mult * _eqty,
                                   level, path))
                 continue
             # normal / subcontract: record need + explode below
@@ -884,10 +931,13 @@ class MatiaProcurementPlan(models.Model):
                 child_path = '%s>%s' % (path, pid)
                 if bl.product_id.id in child_path.split('>'):
                     continue  # cycle protection
+                # Edge qty in the CHILD's stock UoM (see phantom
+                # branch above).
+                _eqty = _mpp_norm_bom_qty(bl)
                 edges.setdefault(pid, {}).setdefault(
-                    bl.product_id.id, float(bl.product_qty or 1.0))
+                    bl.product_id.id, _eqty)
                 stack.append((bl.product_id.id,
-                              mult * float(bl.product_qty or 1.0),
+                              mult * _eqty,
                               level + 1, child_path))
 
         if not need:
@@ -2426,7 +2476,9 @@ class MatiaProcurementPlan(models.Model):
     def _mpp_need_per_top(self, env_sudo, plan):
         """Re-explode targets tracking per-top contribution.
 
-        @return {part_pid: {top_pid: gross_qty}}.
+        @param env_sudo Sudo env.
+        @param plan matia.procurement.plan record (target_json source).
+        @return {part_pid: {top_pid: gross_qty}} (qty in part stock UoM).
         """
         try:
             targets = json.loads(plan.target_json or '{}')
@@ -2474,14 +2526,14 @@ class MatiaProcurementPlan(models.Model):
             if bom.type == 'phantom':
                 for bl in bom.bom_line_ids:
                     stack.append((bl.product_id.id,
-                                  mult * float(bl.product_qty or 1.0),
+                                  mult * _mpp_norm_bom_qty(bl),
                                   top, level))
                 continue
             contrib.setdefault(pid, {}).setdefault(top, 0.0)
             contrib[pid][top] += mult
             for bl in bom.bom_line_ids:
                 stack.append((bl.product_id.id,
-                              mult * float(bl.product_qty or 1.0),
+                              mult * _mpp_norm_bom_qty(bl),
                               top, level + 1))
         return contrib
 
@@ -2539,7 +2591,9 @@ class MatiaProcurementPlan(models.Model):
             oh_u = max(0.0, _t[2] or 0.0)
             rs_u = max(0.0, _t[3] or 0.0)
             avail = max(0.0, oh - rs) + max(0.0, oh_u - rs_u)
-            bqty = float(bl.product_qty or 1.0)
+            # Usage per parent unit in the CHILD's stock UoM (same unit
+            # as plan lines and rolled costs), not the raw BOM-line qty.
+            bqty = _mpp_norm_bom_qty(bl)
             line = snap_by_pid.get(pid)
             if line:
                 lp = float(line.last_price or 0.0)
@@ -2585,14 +2639,16 @@ class MatiaProcurementPlan(models.Model):
                             'product id %s on %s, cost shown as 0.0: %s',
                             pid, buy_date, exc)
                 ldate = self._mpp_month_year(buy_date) if buy_date else ''
-                # Rolled unit cost is per BOM UoM: convert the PO-UoM
-                # snapshot before display (same rule as _compute_rollup).
+                # Rolled unit cost is per stock UoM (same unit as
+                # rolled_usd on plan lines): convert the PO-UoM
+                # snapshot to the child's stock UoM.
                 _factor = 1.0
                 try:
-                    if pou and bl.product_uom_id and \
-                            pou[0] != bl.product_uom_id.id:
+                    _stock_uom = cp.uom_id
+                    if pou and _stock_uom and \
+                            pou[0] != _stock_uom.id:
                         _pou_rec = env_sudo['uom.uom'].browse(pou[0])
-                        _factor = bl.product_uom_id._compute_quantity(
+                        _factor = _stock_uom._compute_quantity(
                             1.0, _pou_rec, round=False) or 1.0
                 except Exception as exc:
                     _logger.warning(
@@ -2614,7 +2670,7 @@ class MatiaProcurementPlan(models.Model):
                     if bqty > 0 and avail > 0 else 0
             _sh = share_map.get((parent_pid, pid), (100.0, 1))
             # Manual USD override wins for lineless rows (same rule
-            # as the overview: corrected is per-BOM-UoM, factor 1.0).
+            # as the overview: corrected is per stock UoM, factor 1.0).
             _ov = _ov_map.get(pid, {})
             _corr = float(_ov.get('price') or 0.0)
             if _corr > 0 and not line:
@@ -2631,9 +2687,14 @@ class MatiaProcurementPlan(models.Model):
                 # avail (same cascade rule as the explosion).
                 'planned': bqty * mult,
                 'net': max(0.0, bqty * mult - avail),
+                # Qty unit = child stock UoM (matches normalized bom_qty
+                # and per-line-UoM rolled costs above); the BOM-line UoM
+                # is only the data-entry unit on the BOM.
                 'uom': _mpp_uom_en(
-                    bl.product_uom_id.name
-                    if bl.product_uom_id else ''),
+                    cp.uom_id.name
+                    if cp.uom_id else (
+                        bl.product_uom_id.name
+                        if bl.product_uom_id else '')),
                 'has_bom': has_bom,
                 'stock_tr': oh,
                 'reserved_tr': rs,
@@ -2673,8 +2734,9 @@ class MatiaProcurementPlan(models.Model):
         @param product_id Parent product ID.
         @param parent_qty Parent multiplier (usage per top unit).
         @param plan_id Optional plan (uses its line snapshots first).
-        @return {'items': [...]}, each with bom_qty, avail, last
-            price/TRY/USD + short date, rolled TRY/USD unit, has_bom.
+        @return {'items': [...]}, each with bom_qty (in the child
+            stock UoM), avail, last price/TRY/USD + short date, rolled
+            TRY/USD unit, has_bom.
         """
         env_sudo = _mpp_env_sudo(self)
         prod = env_sudo['product.product'].browse(int(product_id))
