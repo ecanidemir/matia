@@ -1917,8 +1917,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<th class="mpp-th-price-sort" data-col="type" ' +
                 'style="cursor:pointer;" title="Sort by type">' +
                 'Type' + this._priceArrow('type') + '</th>' +
-                '<th title="Stock unit (line UoM); last purchase ' +
-                'unit in brackets when different">UoM</th>' +
                 '<th class="mpp-th-price-sort" data-col="seller" ' +
                 'style="cursor:pointer;" title="Sort by seller">' +
                 'Seller' + this._priceArrow('seller') + '</th>' +
@@ -1952,7 +1950,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     ['make', 'Manufacture'], ['kit', 'Kit'],
                     ['unknown', 'Unknown']]) +
                 '</select></td>' +
-                '<td></td>' +
                 '<td><input type="text" class="form-control ' +
                 'form-control-sm mpp-price-filter" data-f="seller" value="' +
                 this._escHtml(f.seller) + '" placeholder="Seller"/></td>' +
@@ -1994,10 +1991,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var corrVal = (parseFloat(corrDisp) || 0) > 0 ?
                 corrDisp : '';
             var priceUom = r.price_uom || r.uom || '';
-            var uomNote = (r.last_uom && r.last_uom !== r.uom) ?
+            // No UoM column: the last-buy unit rides on the Last
+            // Price cell (e.g. "0.5700 TRY/m") when it differs from
+            // the line UoM.
+            var lastUomNote = (r.last_uom && r.last_uom !== r.uom) ?
                 ' <span style="opacity:0.65;" title="Last ' +
-                'purchase unit">(last: ' +
-                this._escHtml(r.last_uom) + ')</span>' : '';
+                'purchase unit">/' +
+                this._escHtml(this._uomEn(r.last_uom)) + '</span>' : '';
             var loc = (r.location || '').toLowerCase();
             var lastTxt = r.last_price ?
                 this._fmtNum(r.last_price, 4) +
@@ -2041,19 +2041,21 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 this._escHtml(this._plainName(r.code, r.name)) +
                 manualBadge + '</td>' +
                 '<td>' + this._priceTypeBadge(r.route) + '</td>' +
-                '<td style="white-space:nowrap;">' +
-                this._escHtml(r.uom || '') + uomNote + '</td>' +
                 '<td class="td-seller" title="' +
                 this._escHtml(r.seller || '') + '">' +
                 this._escHtml(r.seller || '') + '</td>' +
-                '<td style="white-space:nowrap;">' + lastTxt + '</td>' +
+                '<td style="white-space:nowrap;">' + lastTxt +
+                lastUomNote + '</td>' +
                 '<td style="white-space:nowrap;">' + usdTxt + '</td>' +
                 '<td>' + this._escHtml(r.last_date || '') + '</td>' +
                 '<td><input type="number" class="form-control ' +
                 'form-control-sm mpp-corr-input" data-pid="' +
                 r.product_id + '" value="' + corrVal + '" min="0" ' +
                 'step="0.0001" title="' + disTitle + '"' +
-                disAttr + '/>' + corrHelp + '</td>' +
+                disAttr + '/> <span style="font-size:11px;opacity:0.75;" ' +
+                'title="Enter the price per this unit">per ' +
+                this._escHtml(priceUom || 'unit') + '</span>' +
+                corrHelp + '</td>' +
                 '<td><select class="form-control form-control-sm ' +
                 'mpp-loc-select" data-pid="' + r.product_id + '" ' +
                 'title="Purchase location (production site for ' +
@@ -2080,7 +2082,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 html += self._priceRowHtml(r);
             });
             if (!rows.length) {
-                html = '<tr><td colspan="11">' +
+                html = '<tr><td colspan="10">' +
                     '<div class="alert alert-info" style="margin:0.5rem;">' +
                     'No products match the filters.</div></td></tr>';
             }
