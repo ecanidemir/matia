@@ -32,6 +32,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             'click .mpp-btn-price-clear': '_onPriceClear',
             'click .mpp-btn-price-reset': '_onPriceReset',
             'click .mpp-btn-price-copy-std': '_onPriceCopyStd',
+            'click .mpp-btn-price-export': '_onPriceExport',
+            'click .mpp-btn-price-import': '_onPriceImport',
+            'change .mpp-price-import-file': '_onPriceImportFile',
             'click .mpp-btn-price-save': '_onPriceSave',
             'click .mpp-th-price-sort': '_onPriceSort',
             'input .mpp-price-filter': '_onPriceFilter',
@@ -1472,6 +1475,229 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                         });
                     },
                 });
+        },
+
+        // Export the filtered price rows to CSV (roundtrip with
+        // Import). Columns: code (key), product_id (fallback key),
+        // name (info only), corrected_usd (per price_uom, the unit
+        // the Corrected input uses), price_uom (info only),
+        // location (tr/us/empty). Empty cells on import keep the
+        // stored values. Semicolon-separated (TR Excel opens it
+        // directly); the importer also accepts commas.
+        _onPriceExport: function () {
+            var rows = this._priceFiltered();
+            if (!rows.length) {
+                this.displayNotification({
+                    title: 'Nothing to export',
+                    message: 'No products match the filters.',
+                    type: 'warning',
+                });
+                return;
+            }
+            var q = function (v) {
+                var s = (v === undefined || v === null) ?
+                    '' : String(v);
+                if (s.indexOf(';') >= 0 || s.indexOf('"') >= 0 ||
+                        s.indexOf('\n') >= 0) {
+                    return '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+            };
+            var lines = ['code;product_id;name;corrected_usd;' +
+                'price_uom;location'];
+            rows.forEach(function (r) {
+                var corr = (r.corrected_display !== undefined &&
+                    r.corrected_display !== null &&
+                    r.corrected_display !== '') ?
+                    r.corrected_display : r.corrected;
+                if (!corr) corr = '';
+                lines.push([
+                    q(r.code || ''),
+                    q(r.product_id || ''),
+                    q(this._plainName(r.code, r.name)),
+                    q(corr),
+                    q(r.price_uom || r.uom || ''),
+                    q((r.location || '').toLowerCase()),
+                ].join(';'));
+            }, this);
+            var blob = new Blob(['\ufeff' + lines.join('\r\n')],
+                {type: 'text/csv;charset=utf-8'});
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            var d = new Date();
+            var pad = function (n) {
+                return (n < 10 ? '0' : '') + n;
+            };
+            a.download = 'Prices_' + d.getFullYear() +
+                pad(d.getMonth() + 1) + pad(d.getDate()) + '_' +
+                pad(d.getHours()) + pad(d.getMinutes()) + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function () {
+                URL.revokeObjectURL(a.href);
+                a.remove();
+            }, 1000);
+        },
+
+        _onPriceImport: function () {
+            var input = this.$('.mpp-price-import-file');
+            if (!input.length) return;
+            input.val('');
+            input.click();
+        },
+
+        _onPriceImportFile: function (ev) {
+            var self = this;
+            var file = ev.currentTarget.files &&
+                ev.currentTarget.files[0];
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function () {
+                try {
+                    var parsed = self._parsePriceCsv(
+                        reader.result || '');
+                    if (!parsed.length) {
+                        self.displayNotification({
+                            title: 'Empty file',
+                            message: 'No data rows found in the CSV.',
+                            type: 'warning',
+                        });
+                        return;
+                    }
+                    Dialog.confirm(self,
+                        'Update ' + parsed.length + ' product(s) ' +
+                        'from this file? Empty cells keep the ' +
+                        'stored values.',
+                        {
+                            title: 'Import Prices',
+                            confirmButtonText: 'Import',
+                            confirm_callback: function () {
+                                self._rpcCost(
+                                    'import_price_overrides',
+                                    [parsed]).then(function (res) {
+                                    self._fetchPrices();
+                                    var msg = (res && res.updated ?
+                                        res.updated : 0) +
+                                        ' product(s) updated.';
+                                    if (res && res.skipped &&
+                                        res.skipped.length) {
+                                        msg += ' Skipped (no ' +
+                                            'change or no ' +
+                                            'purchase price): ' +
+                                            res.skipped.slice(0, 10)
+                                                .join(', ') +
+                                            (res.skipped.length > 10 ?
+                                                ' (+' +
+                                                (res.skipped.length -
+                                                    10) + ' more)' :
+                                                '');
+                                    }
+                                    if (res && res.errors &&
+                                        res.errors.length) {
+                                        msg += ' Errors: ' +
+                                            res.errors.slice(0, 5)
+                                                .join(' ');
+                                    }
+                                    self.displayNotification({
+                                        title: 'Import done',
+                                        message: msg,
+                                        type: 'success',
+                                    });
+                                }, function (err) {
+                                    self._notifyErr(err);
+                                });
+                            },
+                        });
+                } catch (e) {
+                    self.displayNotification({
+                        title: 'Invalid file',
+                        message: (e && e.message) || 'Parse failed.',
+                        type: 'danger',
+                    });
+                }
+            };
+            reader.readAsText(file, 'utf-8');
+            ev.currentTarget.value = '';
+        },
+
+        // Minimal CSV parser for the Export format above: first
+        // line is the header (semicolon or comma separated),
+        // quoted fields with "" escapes supported. Returns
+        // [{code, product_id, corrected, location}].
+        _parsePriceCsv: function (text) {
+            var t = String(text || '').replace(/^\ufeff/, '');
+            var lines = t.split(/\r?\n/).filter(function (ln) {
+                return ln.trim() !== '';
+            });
+            if (lines.length < 2) return [];
+            var delim = lines[0].indexOf(';') >= 0 ? ';' : ',';
+            var split = function (ln) {
+                var out = [], cur = '', inQ = false;
+                for (var i = 0; i < ln.length; i++) {
+                    var c = ln[i];
+                    if (inQ) {
+                        if (c === '"') {
+                            if (ln[i + 1] === '"') {
+                                cur += '"';
+                                i++;
+                            } else {
+                                inQ = false;
+                            }
+                        } else {
+                            cur += c;
+                        }
+                    } else if (c === '"') {
+                        inQ = true;
+                    } else if (c === delim) {
+                        out.push(cur);
+                        cur = '';
+                    } else {
+                        cur += c;
+                    }
+                }
+                out.push(cur);
+                return out;
+            };
+            var head = split(lines[0]).map(function (h) {
+                return h.trim().toLowerCase();
+            });
+            var ci = function () {
+                for (var k = 0; k < arguments.length; k++) {
+                    var ix = head.indexOf(arguments[k]);
+                    if (ix >= 0) return ix;
+                }
+                return -1;
+            };
+            var iCode = ci('code', 'default_code'),
+                iPid = ci('product_id', 'id'),
+                iCorr = ci('corrected_usd', 'corrected',
+                    'corrected_price_usd'),
+                iLoc = ci('location', 'loc');
+            if (iCode < 0 && iPid < 0) {
+                throw new Error(
+                    'No code/product_id column found.');
+            }
+            var rows = [];
+            for (var n = 1; n < lines.length; n++) {
+                var cols = split(lines[n]);
+                var code = iCode >= 0 ?
+                    (cols[iCode] || '').trim() : '';
+                var pidRaw = iPid >= 0 ?
+                    (cols[iPid] || '').trim() : '';
+                var corrRaw = iCorr >= 0 ?
+                    (cols[iCorr] || '').trim() : '';
+                var locRaw = iLoc >= 0 ?
+                    (cols[iLoc] || '').trim().toLowerCase() : '';
+                if (!code && !pidRaw) continue;
+                var pid = parseInt(pidRaw, 10);
+                rows.push({
+                    code: code,
+                    product_id: isNaN(pid) ? 0 : pid,
+                    corrected: corrRaw,
+                    location: locRaw,
+                });
+            }
+            return rows;
         },
     });
 

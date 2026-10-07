@@ -94,6 +94,13 @@
                             <button class="btn btn-outline-warning btn-sm mpp-btn-price-copy-std" title="Copy the standard-price USD into Corrected for the checked rows (overwrites)">
                                 <i class="fa fa-copy mr-1"></i> Copy Std (<span class="mpp-price-selcount">0</span>)
                             </button>
+                            <button class="btn btn-outline-success btn-sm mpp-btn-price-export" title="Export the filtered rows to CSV (code, corrected USD, location)">
+                                <i class="fa fa-download mr-1"></i> Export
+                            </button>
+                            <button class="btn btn-outline-success btn-sm mpp-btn-price-import" title="Import an edited CSV back (empty cells keep stored values)">
+                                <i class="fa fa-upload mr-1"></i> Import
+                            </button>
+                            <input type="file" class="mpp-price-import-file d-none" accept=".csv"/>
                         </div>
                     </div>
                     <div class="table-responsive mpp-price-body"/>

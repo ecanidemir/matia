@@ -885,3 +885,90 @@ class MatiaProductCost(models.AbstractModel):
                     'MPC std copy skipped product %s: %s', pid, exc)
                 skipped.append(pr_code)
         return {'updated': updated, 'skipped': skipped}
+
+    @api.model
+    def import_price_overrides(self, rows=False):
+        """Bulk upsert of manual prices/locations from a CSV import.
+
+        Each row is {'code': str, 'product_id': int, 'corrected':
+        float/str/False/None, 'location': str/False/None}. The
+        product is resolved by product_id first, then by
+        default_code. Empty corrected/location means "keep stored"
+        (same False semantics as save_price_override); rows with
+        both empty are skipped, not cleared. Manufactured/kit
+        price rejections and invalid values are collected as
+        per-row errors instead of aborting the batch.
+
+        @param rows: list of row dicts (max 2000).
+        @return: {'updated': int, 'skipped': [codes],
+            'errors': [messages]}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        env_sudo = _mpp_env_sudo(self)
+        rows = list(rows or [])
+        if not rows:
+            raise UserError(_('No rows to import.'))
+        if len(rows) > 2000:
+            raise UserError(_('Too many rows (max 2000).'))
+        Mpp = env_sudo['matia.procurement.plan']
+        Product = env_sudo['product.product']
+        updated = 0
+        skipped = []
+        errors = []
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                errors.append('Row %d: not a mapping.' % (idx + 1))
+                continue
+            pid = False
+            try:
+                if row.get('product_id'):
+                    pid = int(row.get('product_id'))
+            except (TypeError, ValueError):
+                pid = False
+            code = (row.get('code') or '').strip() \
+                if isinstance(row.get('code'), str) else ''
+            prod = Product.browse(pid) \
+                if pid else Product.browse()
+            if not prod.exists() and code:
+                prod = Product.search(
+                    [('default_code', '=', code)], limit=1)
+            if not prod.exists():
+                errors.append('Row %d: product not found (%s).' % (
+                    idx + 1, code or pid or '?'))
+                continue
+            label = prod.default_code or prod.name or str(prod.id)
+            raw_corr = row.get('corrected', '')
+            corr = False
+            if raw_corr is not False and raw_corr is not None \
+                    and str(raw_corr).strip() != '':
+                try:
+                    corr = float(str(raw_corr).strip().replace(',', '.'))
+                except (TypeError, ValueError):
+                    errors.append('Row %d [%s]: invalid price.' % (
+                        idx + 1, label))
+                    continue
+                if corr < 0:
+                    errors.append('Row %d [%s]: negative price.' % (
+                        idx + 1, label))
+                    continue
+            raw_loc = row.get('location', '')
+            loc = False
+            if raw_loc is not False and raw_loc is not None \
+                    and str(raw_loc).strip() != '':
+                loc = str(raw_loc).strip().lower()
+                if loc not in ('tr', 'us'):
+                    errors.append('Row %d [%s]: invalid location.' % (
+                        idx + 1, label))
+                    continue
+            if corr is False and loc is False:
+                skipped.append(label)
+                continue
+            try:
+                Mpp.save_price_override(prod.id, corr, loc)
+                updated += 1
+            except Exception as exc:
+                _logger.warning(
+                    'MPC import skipped product %s: %s', prod.id, exc)
+                skipped.append(label)
+        return {'updated': updated, 'skipped': skipped,
+                'errors': errors[:50]}
