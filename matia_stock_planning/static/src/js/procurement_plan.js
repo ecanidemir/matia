@@ -203,6 +203,22 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     summary.active_slot !== false) {
                 this.activeSlot = summary.active_slot;
             }
+            // Cross-check vs the Product Cost page (server-computed on
+            // every real rebuild; absent on cached views). Show only
+            // when mounted: _applySummary also runs pre-mount.
+            var cc = (summary && summary.cost_check) || {};
+            if (cc.mismatches && cc.mismatches.length && this.$el) {
+                var bad = cc.mismatches.map(function (m) {
+                    return (m.code || ('#' + m.product_id)) +
+                        ' (' + m.plan_usd + ' vs ' + m.cost_usd + ')';
+                }).join(', ');
+                this.displayNotification({
+                    title: _t('Cost mismatch'),
+                    message: _t('Plan rolled cost differs from ' +
+                        'Product Cost for: ') + bad,
+                    type: 'warning',
+                });
+            }
             // NOTE: willStart runs before mount (no $el yet) - touch the
             // DOM only when the widget is attached.
             if (this.$el) {

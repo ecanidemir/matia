@@ -170,8 +170,8 @@ def _mpp_norm_bom_qty(bl):
     must all be in the child's stock UoM, because plan lines carry the
     stock UoM and every cost formula (_compute_rollup via
     _mpp_line_uom_factor) works per line UoM. Without this, a line like
-    370 mm on a metre-stocked product explodes as 370 m. Mirrors the
-    conversion already used in matia_product_cost.
+    370 mm on a metre-stocked product explodes as 370 m. Single
+    conversion point, shared with matia_product_cost._mpc_explode.
 
     @param bl: mrp.bom.line record.
     @return: float qty in the child stock UoM; the raw BOM qty whenever
@@ -832,6 +832,78 @@ class MatiaProcurementPlan(models.Model):
     # Screen 2: explosion + TR netting (read-only sources, writes plan lines)
     # ------------------------------------------------------------------
     @api.model
+    def _mpp_crosscheck_vs_cost(self, env_sudo, plan):
+        """Cross-check plan rolled unit costs vs the Product Cost page.
+
+        Recomputes bottom-up unit USD with the Product Cost code path
+        (``matia.product.cost`` explode + price map + unit map) and
+        compares it against this plan's stored ``rolled_usd`` per
+        kit-top product. Both sides share the same price inputs and
+        the same normalized-edge conversion, so any material gap
+        means the two pages diverged again (the E2CBAN03 class bug).
+
+        Fail-safe: any error returns an empty mismatch list, so a
+        broken check can never block a recalculate.
+
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record (lines already
+            rolled by _compute_rollup).
+        @return: {'checked': int, 'mismatches': [{'code', 'plan_usd',
+            'cost_usd'}]}. Zero-unit lines are skipped (no-price
+            products, not divergence). Known benign gap: a
+            phantom-BOM top with a buy route is owned-priced on the
+            plan side but zeroed on the cost side (kit-template
+            rule) — such a warning is expected, not a bug.
+        """
+        try:
+            Mpc = env_sudo['matia.product.cost']
+            _kits, tops, children, _info = Mpc._mpc_explode(env_sudo)
+            top_pids = [e['pid'] for entries in tops.values()
+                        for e in entries]
+            if not top_pids:
+                return {'checked': 0, 'mismatches': []}
+            all_pids = sorted(set(children.keys()) |
+                              {c for edges in children.values()
+                               for c in edges} | set(top_pids))
+            price_map, _routes = Mpc._mpc_price_map(env_sudo, all_pids)
+            unit_map = Mpc._mpc_unit_map(children, price_map)
+            line_by_pid = {}
+            for line in plan.line_ids:
+                line_by_pid.setdefault(line.product_id.id, line)
+            codes = {}
+            for pr in env_sudo['product.product'].browse(
+                    top_pids).read(['default_code']):
+                codes[pr['id']] = pr.get('default_code') or ''
+            out = []
+            for pid in top_pids:
+                line = line_by_pid.get(pid)
+                if not line:
+                    continue
+                plan_u = float(line.rolled_usd or 0.0)
+                cost_u = float(unit_map.get(pid) or 0.0)
+                if not plan_u or not cost_u:
+                    continue
+                diff = abs(plan_u - cost_u)
+                if diff > 0.05 and \
+                        diff / max(abs(cost_u), 1e-9) > 0.005:
+                    out.append({
+                        'product_id': pid,
+                        'code': codes.get(pid) or '',
+                        'plan_usd': round(plan_u, 4),
+                        'cost_usd': round(cost_u, 4),
+                    })
+                    _logger.warning(
+                        'MPP cost cross-check: %s plan=%s vs '
+                        'product-cost=%s',
+                        codes.get(pid) or pid, plan_u, cost_u)
+            return {'checked': len(top_pids), 'mismatches': out}
+        except Exception as exc:
+            _logger.warning(
+                'MPP cost cross-check skipped: %s', exc,
+                exc_info=True)
+            return {'checked': 0, 'mismatches': []}
+
+    @api.model
     def action_explode_and_net(self, plan_id):
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
@@ -1264,7 +1336,13 @@ class MatiaProcurementPlan(models.Model):
         })
         plan.state = 'calculated'
         plan.built_target_json = plan.target_json
-        return self._plan_summary(env_sudo, plan)
+        summary = self._plan_summary(env_sudo, plan)
+        # Independent re-check with the Product Cost code path; the
+        # JS shows a warning when the two pages disagree (fail-safe:
+        # never blocks the recalculate).
+        summary['cost_check'] = self._mpp_crosscheck_vs_cost(
+            env_sudo, plan)
+        return summary
 
     # ------------------------------------------------------------------
     # Screen 3: supplier assignment + cost preview (writes: plan lines only)

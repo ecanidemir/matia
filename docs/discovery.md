@@ -514,4 +514,5 @@ toplami 972.66 -> 130.34 (Product Cost ile ayni). odoo-reviewer: approve-with-ni
 (kabul edilmeyen: `or 1.0` modul konvansiyonu korundu; tooltip UoM suffix kapsam disi).
 Dogrulama: py_compile + scratch/simulate_rollup_fix.py. DEPLOY: Python degisikligi
 Git Deploy/restart gerektirir (mesai disi + backup); eski planlar Recalculate
-edilmeden duzelmez (cache). Commit/push YOK (onay bekleniyor).
+edilmeden duzelmez (cache). Pushed main 8d2cb4a.
+FOLLOW-UP 2026-10-07: MPC de ayni helper'a gecti (matia_product_cost._mpc_explode 2 nokta: kit tops + children walk, zero-guard ile eski 0.0 semantigi korundu) -> tek donusum noktasi; davranis degisikligi yok (reviewer teyitli). Recalculate sonrasi capraz kontrol eklendi: _mpp_crosscheck_vs_cost plan rolled_usd vs Product Cost unit_map karsilastirir (tolerans abs>0.05 VE rel>%0.5, sifir-birimler atlanir, her hata yutulur); uyumsuzluk log + summary.cost_check + JS warning bildirimi. Bilinen benign fark: buy-rotali phantom top (planda own fiyatli, cost'ta sifir). DEPLOY: onceki fix ile ayni (Git Deploy/restart + Recalculate).

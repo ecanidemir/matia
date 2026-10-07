@@ -23,6 +23,7 @@ from .matia_procurement_plan import (
     _mpp_env_sudo,
     _mpp_find_kit_boms,
     _mpp_kit_tmpl_ids,
+    _mpp_norm_bom_qty,
     _mpp_price_overrides,
     _mpp_product_routes,
     _mpp_stock_per_po_factor,
@@ -88,14 +89,13 @@ class MatiaProductCost(models.AbstractModel):
             entries = []
             for bl in kit['bom'].bom_line_ids:
                 prod = bl.product_id
-                qty = float(bl.product_qty or 0.0)
-                try:
-                    if bl.product_uom_id and prod.uom_id and \
-                            bl.product_uom_id.id != prod.uom_id.id:
-                        qty = bl.product_uom_id._compute_quantity(
-                            qty, prod.uom_id, round=False) or qty
-                except Exception:
-                    pass
+                # Single conversion point shared with the plan
+                # explosion: BOM-line UoM -> child stock UoM. The
+                # zero guard preserves the old inline semantics
+                # (a 0-qty line stays 0.0; the helper defaults
+                # empty qty to 1.0 for plan lines).
+                raw0 = float(bl.product_qty or 0.0)
+                qty = _mpp_norm_bom_qty(bl) if raw0 else 0.0
                 entries.append({
                     'pid': prod.id,
                     'qty': qty,
@@ -140,16 +140,9 @@ class MatiaProductCost(models.AbstractModel):
                 edges = children.setdefault(pid, {})
                 for bl in bom.bom_line_ids:
                     cprod = bl.product_id
-                    qty = float(bl.product_qty or 0.0)
-                    try:
-                        if bl.product_uom_id and cprod.uom_id and \
-                                bl.product_uom_id.id != \
-                                cprod.uom_id.id:
-                            qty = bl.product_uom_id._compute_quantity(
-                                qty, cprod.uom_id,
-                                round=False) or qty
-                    except Exception:
-                        pass
+                    # Same shared conversion as the kit tops above.
+                    craw0 = float(bl.product_qty or 0.0)
+                    qty = _mpp_norm_bom_qty(bl) if craw0 else 0.0
                     edges[cprod.id] = edges.get(cprod.id, 0.0) + qty
                     stack.append(
                         (cprod.id, level + 1, path + (pid,)))
