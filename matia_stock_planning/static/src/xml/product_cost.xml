@@ -85,7 +85,7 @@
                             <button class="btn btn-outline-primary btn-sm mpp-btn-price-us" title="Set purchase location US for the checked rows">
                                 Set US (<span class="mpp-price-selcount">0</span>)
                             </button>
-                            <button class="btn btn-outline-secondary btn-sm mpp-btn-price-clear" title="Delete the overrides of the checked rows">
+                            <button class="btn btn-secondary btn-sm mpp-btn-price-clear" title="Delete the overrides of the checked rows">
                                 <i class="fa fa-eraser mr-1"></i> Clear
                             </button>
                             <button class="btn btn-outline-warning btn-sm mpp-btn-price-reset" title="Copy the computed USD into Corrected for the checked rows (overwrites)">

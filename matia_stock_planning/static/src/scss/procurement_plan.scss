@@ -363,6 +363,10 @@
             width: 96px;
             font-size: 0.78rem;
             padding: 0.15rem 0.4rem;
+            /* form-control is block: keep it inline so the "per X"
+               note stays beside the input, not below it. */
+            display: inline-block;
+            vertical-align: middle;
         }
         .mpp-loc-select {
             width: 72px;

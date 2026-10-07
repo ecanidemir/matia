@@ -1004,7 +1004,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 lastUomNote + '</td>' +
                 '<td style="white-space:nowrap;">' + usdTxt + '</td>' +
                 '<td>' + this._escHtml(r.last_date || '') + '</td>' +
-                '<td><input type="number" class="form-control ' +
+                '<td style="white-space:nowrap;"><input type="number" class="form-control ' +
                 'form-control-sm mpp-corr-input" data-pid="' +
                 r.product_id + '" value="' + corrVal + '" min="0" ' +
                 'step="0.0001" title="' + disTitle + '"' +
