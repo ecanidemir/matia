@@ -283,8 +283,11 @@ class MatiaProductCost(models.AbstractModel):
 
         standard_price IS company-dependent (ir.property rows per
         company; verified live: product 2039 holds 192.61 TRY for
-        TR vs 30.0 USD for US). Each side therefore pins its read
-        with force_company:
+        TR vs 30.0 USD for US). Each side is therefore read from
+        ir.property directly (per-company rows, no ORM-context
+        shortcut: a force_company-context product read proved
+        unreliable live — the TR side kept returning the US
+        value):
 
         - TR side: TR-company standard_price (TRY), converted to
           USD with the TR-company USD rate of the estimated
@@ -298,8 +301,7 @@ class MatiaProductCost(models.AbstractModel):
           max(0.005, 1e-4 * value). Base currency is TRY, so
           USD = TRY * rate. Products with no matching TR layer
           fall back to the latest overall TR USD rate (flagged).
-        - US side: US-company standard_price, read with
-          force_company=US. The US company currency is USD, so
+        - US side: US-company standard_price row. The US company currency is USD, so
           no FX conversion applies (only the stock/PO UoM
           factor, applied by the caller like on the TR side).
           The month-year shown is the latest US-company
@@ -320,25 +322,37 @@ class MatiaProductCost(models.AbstractModel):
         pids = [p for p in (pids or []) if p]
         if not pids:
             return out
-        Product = env_sudo['product.product']
+        std_field = env_sudo['ir.model.fields'].search(
+            [('model', '=', 'product.product'),
+             ('name', '=', 'standard_price')], limit=1)
         stds_tr = {}
-        for pr in Product.with_context(
-                force_company=_MPP_TR_COMPANY_ID).browse(
-                    pids).read(['standard_price']):
-            try:
-                stds_tr[pr['id']] = float(
-                    pr.get('standard_price') or 0.0)
-            except (TypeError, ValueError):
-                stds_tr[pr['id']] = 0.0
         stds_us = {}
-        for pr in Product.with_context(
-                force_company=_MPP_US_COMPANY_ID).browse(
-                    pids).read(['standard_price']):
-            try:
-                stds_us[pr['id']] = float(
-                    pr.get('standard_price') or 0.0)
-            except (TypeError, ValueError):
-                stds_us[pr['id']] = 0.0
+        if std_field:
+            _res = ['product.product,%d' % p for p in pids]
+            for prow in env_sudo['ir.property'].search_read(
+                    [('fields_id', '=', std_field.id),
+                     ('res_id', 'in', _res)],
+                    ['res_id', 'company_id', 'value_float']):
+                try:
+                    _pid = int(
+                        (prow.get('res_id') or ',').split(',')[1])
+                except (IndexError, TypeError, ValueError):
+                    continue
+                try:
+                    _val = float(prow.get('value_float') or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                _cc = prow.get('company_id')
+                _cid = _cc[0] if _cc else False
+                if _cid == _MPP_TR_COMPANY_ID:
+                    stds_tr[_pid] = _val
+                elif _cid == _MPP_US_COMPANY_ID:
+                    stds_us[_pid] = _val
+                elif not _cid:
+                    # Company-independent fallback: only fills
+                    # sides with no company-specific row.
+                    stds_tr.setdefault(_pid, _val)
+                    stds_us.setdefault(_pid, _val)
         live = {pid: std for pid, std in stds_tr.items()
                 if std > 0}
         live_us = {pid for pid, std in stds_us.items()
@@ -740,7 +754,7 @@ class MatiaProductCost(models.AbstractModel):
         return {
             # TEMP-REV-MARKER: proves which revision staging runs
             # (remove after deploy verification).
-            'rev': '5d0e831-fx1',
+            'rev': '5d0e831-fx2',
             'items': items,
             'count': len(items),
             'override_count': sum(
