@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import json
 import math
 from odoo import models, api, _
 from odoo.exceptions import UserError
@@ -63,39 +62,6 @@ def _msp_clamped_avail(tr_stock, tr_res, us_stock, us_res):
     return (max(0.0, float(tr_stock or 0.0) - float(tr_res or 0.0))
             + max(0.0, float(us_stock or 0.0) - float(us_res or 0.0)))
 
-
-# Max dynamic target-device columns on the Capacity page (client + server
-# enforce the same cap).
-_MSP_MAX_DYNAMIC_TARGETS = 3
-
-
-def _msp_sanitize_targets(targets):
-    """Sanitize Capacity dynamic target columns.
-
-    Keeps positive ints only, drops the default 20-devices column,
-    dedupes, sorts ascending, caps at 3.
-
-    @param targets: raw list of target device counts (any content).
-    @return: clean list of ints, e.g. [50, 100].
-    """
-    if not isinstance(targets, (list, tuple)):
-        return []
-    seen = set()
-    clean = []
-    for raw in targets:
-        if isinstance(raw, bool):
-            continue
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if value <= 0 or value == 20 or value in seen:
-            continue
-        seen.add(value)
-        clean.append(value)
-    return sorted(clean)[:_MSP_MAX_DYNAMIC_TARGETS]
-
-
 class MatiaStockPlanning(models.AbstractModel):
     _name = 'matia.stock.planning'
     _description = 'Matia TekRMD Device Capacity and Stock Planning'
@@ -118,38 +84,6 @@ class MatiaStockPlanning(models.AbstractModel):
             active_test=False
         ).sudo().env
         return _mpp_search_kit_forest(env_sudo, query)
-
-    @api.model
-    def get_my_capacity_targets(self):
-        """Read the caller's saved Capacity target columns.
-
-        Only ever reads the caller's own res.users record. sudo() is
-        used purely to bypass res.users field-level restrictions, never
-        to reach another user.
-
-        @return: list of ints, e.g. [50, 100] (max 3, ascending).
-        """
-        raw = self.env.user.sudo().matia_capacity_targets or '[]'
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, ValueError):
-            parsed = []
-        return _msp_sanitize_targets(parsed)
-
-    @api.model
-    def set_my_capacity_targets(self, targets=None):
-        """Persist the caller's Capacity target columns.
-
-        Scoped strictly to the caller's own res.users record; a user
-        can never alter another user's preference through this method.
-
-        @param targets: list of target device counts.
-        @return: sanitized list actually stored.
-        """
-        clean = _msp_sanitize_targets(targets)
-        self.env.user.sudo().write(
-            {'matia_capacity_targets': json.dumps(clean)})
-        return clean
 
     @api.model
     def get_capacity_planning_data(self, include_tr=True, include_usa=True, dynamic_targets=None):
