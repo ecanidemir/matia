@@ -900,13 +900,18 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             var self = this;
             this._rpcPlan('get_slot_list').then(function (res) {
                 var slots = (res && res.slots) || [];
+                var canAdmin = !res ||
+                    res.can_export_admin !== false;
                 ExportPopup.openExportPopup($, Dialog, {
                     parent: self,
                     slots: slots,
                     activeSlot: null,
                     dirtyMsg: null,
-                    onExport: function (sel, withSup, withCost) {
-                        if (!sel.length && !withSup && !withCost) {
+                    canExportAdmin: canAdmin,
+                    onExport: function (sel, withSup, withCost,
+                        withCap) {
+                        if (!sel.length && !withSup && !withCost &&
+                            !withCap) {
                             return;
                         }
                         if (!sel.length) {
@@ -917,8 +922,10 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                                         'study slot for Suppliers.',
                                     type: 'warning',
                                 });
+                            } else if (withCost) {
+                                self._onExportCostCap(withCap);
                             } else {
-                                self._onExportExcel();
+                                self._onExportCapacityOnly();
                             }
                             return;
                         }
@@ -934,6 +941,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                             slots: sel,
                             withSupplier: withSup,
                             withCost: withCost,
+                            withCapacity: withCap,
                         });
                         form.appendChild(input);
                         document.body.appendChild(form);
@@ -942,6 +950,50 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                     },
                 });
             });
+        },
+
+        // Popup Cost (+ optional Capacity) without slots: the legacy
+        // screen-mirror cost file when Capacity is off, otherwise the
+        // live cost sheet plus the live capacity sheet last.
+        _onExportCostCap: function (withCap) {
+            if (!withCap) {
+                this._onExportExcel();
+                return;
+            }
+            var form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/matia_procurement_plan/export_xlsx';
+            var input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'data';
+            input.value = JSON.stringify({
+                mode: 'cost_only',
+                withCost: 1,
+                withCapacity: 1,
+            });
+            form.appendChild(input);
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
+        },
+
+        // Popup Capacity-only without slots: live top-level table,
+        // standard columns (this page holds no capacity screen
+        // state to mirror).
+        _onExportCapacityOnly: function () {
+            var form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/matia_procurement_plan/export_xlsx';
+            var input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'data';
+            input.value = JSON.stringify({
+                mode: 'capacity_only',
+            });
+            form.appendChild(input);
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
         },
 
         _onExportExcel: function () {

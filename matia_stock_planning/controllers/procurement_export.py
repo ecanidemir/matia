@@ -6,7 +6,7 @@ import logging
 import math
 from datetime import datetime
 
-from odoo import http
+from odoo import _, http
 from odoo.http import request
 
 
@@ -18,6 +18,11 @@ except ImportError:
     xlsxwriter = None
 
 from .product_cost_export import cost_csv_lines, write_cost_sheet
+from .capacity_sheet import (
+    CAPACITY_TITLE,
+    capacity_csv_lines,
+    write_capacity_sheet,
+)
 
 # Slot identity colors for the combined export (pastel, pairwise
 # distinguishable side by side): slot N -> SLOT_COLORS[N].
@@ -577,6 +582,73 @@ def _server_supplier(sup, fallback_name, kits=None, scratch=0):
     return out
 
 
+def _sanitize_capacity_targets(targets):
+    """Payload target list into the get_capacity_planning_data rule.
+
+    Positive ints only, at most 3 (same cut as the capacity model;
+    the Capacity page allows at most 3 dynamic columns too).
+
+    @param targets: raw list from the export payload (or None).
+    @return: list of ints.
+    """
+    return [int(t) for t in (targets or [])
+            if str(t).isdigit() and int(t) > 0][:3]
+
+
+def _capacity_writer_groups(cap):
+    """Capacity live result into the shared writer shape (top level only).
+
+    Mirrors the Capacity screen defaults (every toggle column visible)
+    and the stock_planning.js _buildExportCells cell types
+    (OK/need/number/text). Sub-BOM rows never appear here: the live
+    path is BOMs-closed by user rule; the exact on-screen mirror
+    (open sub-BOMs included) arrives as a posted capacity_payload.
+
+    @param cap: get_capacity_planning_data result dict.
+    @return: (headers, groups) writer-shape pair.
+    """
+    targets = cap.get('dynamic_targets') or []
+    headers = ['Part Code', 'Part Name', 'Usage Qty',
+               'On Hand (incl. reserved)', 'Reserved', 'NCR Storage',
+               'Producible Devices', '20 Devices Needed']
+    for t in targets:
+        headers.append('%s Devices Needed' % t)
+    groups = []
+    for g in cap.get('groups') or []:
+        items = []
+        for it in g.get('items') or []:
+            cells = [
+                {'val': it.get('product_code', ''), 'type': 'text'},
+                {'val': it.get('product_name', ''), 'type': 'text'},
+                {'val': '%s %s' % (_jsnum(it.get('bom_qty') or 0),
+                                   it.get('uom_name') or ''),
+                 'type': 'text'},
+                {'val': it.get('stock_qty', 0), 'type': 'number'},
+                {'val': it.get('reserved_qty', 0), 'type': 'number'},
+                {'val': it.get('ncr_qty', 0), 'type': 'number'},
+                {'val': it.get('max_devices', 0), 'type': 'number'},
+            ]
+            if it.get('req_20_status') == 'OK':
+                cells.append({'val': 'OK', 'type': 'ok'})
+            else:
+                cells.append({'val': it.get('req_20_val', 0),
+                              'type': 'need'})
+            dyn = it.get('dynamic_needs') or {}
+            for t in targets:
+                d = dyn.get(str(t))
+                if d and d.get('status') == 'OK':
+                    cells.append({'val': 'OK', 'type': 'ok'})
+                elif d:
+                    cells.append({'val': d.get('val', 0), 'type': 'need'})
+                else:
+                    cells.append({'val': '-', 'type': 'text'})
+            items.append({'cells': cells, 'is_sub': False, 'level': 0})
+        groups.append({'key': g.get('key', ''),
+                       'title': g.get('title', ''),
+                       'items': items})
+    return headers, groups
+
+
 class MatiaProcurementPlanController(http.Controller):
 
     @staticmethod
@@ -592,13 +664,151 @@ class MatiaProcurementPlanController(http.Controller):
     def _cost_suffix(data):
         return '_Cost' if data.get('withCost') else ''
 
+    @staticmethod
+    def _capacity_suffix(data):
+        """Filename fragment when a capacity sheet is appended.
+
+        @param data: posted export payload.
+        @return: '_Capacity' or '' (empty keeps legacy filenames
+            byte-identical).
+        """
+        return '_Capacity' if data.get('withCapacity') else ''
+
+    @staticmethod
+    def _live_capacity(data):
+        """Live capacity table in writer shape (BOMs closed, top level only).
+
+        Mirrors _live_cost: server-side data for the optional sheet, so
+        pages without capacity screen state (Plan, Cost) can still
+        append it. Sub-BOMs are never expanded here; the Capacity page
+        posts its own screen payload when the exact on-screen mirror
+        is wanted.
+
+        NOTE (plans/capacity_sheet_popup.md decision 3 deviation): the
+        plan names get_my_capacity_targets() for the exporter's saved
+        columns, but that server-side store was reverted after a
+        staging outage (see docs/discovery.md "STAGING KESINTISI") -
+        targets live in the browser only. The live path therefore
+        takes an optional `capacity_targets` list from the payload
+        (same sanitize rule as get_capacity_planning_data) and
+        defaults to the standard columns.
+
+        @param data: posted export payload (optional 'capacity_targets').
+        @return: (headers, groups, filter_info) writer-shape triple.
+        """
+        targets = _sanitize_capacity_targets(data.get('capacity_targets'))
+        cap = request.env['matia.stock.planning']
+        res = cap.get_capacity_planning_data(
+            dynamic_targets=targets) or {}
+        headers, groups = _capacity_writer_groups(res)
+        info = []
+        if res.get('include_tr', True):
+            info.append(_('TR (WHTR/Stock)'))
+        if res.get('include_usa', True):
+            info.append(_('USA (WHUS/Stock)'))
+        filter_info = ' + '.join(info) + _(
+            ' [On Hand: incl. reserved | Reserved & NCR excluded'
+            ' in capacity]')
+        return headers, groups, filter_info
+
+    @staticmethod
+    def _resolve_capacity(data):
+        """Capacity table source: screen mirror wins over live compute.
+
+        @param data: posted export payload (optional 'capacity_payload'
+            {headers, groups, filter_info} - the Capacity page screen
+            state, open sub-BOM rows included and written as-is).
+        @return: (headers, groups, filter_info) writer-shape triple.
+        """
+        payload = data.get('capacity_payload') or {}
+        if (isinstance(payload, dict)
+                and isinstance(payload.get('headers'), list)
+                and isinstance(payload.get('groups'), list)):
+            return (payload.get('headers'), payload.get('groups'),
+                    payload.get('filter_info', ''))
+        return MatiaProcurementPlanController._live_capacity(data)
+
+    def _append_capacity_sheet(self, workbook, data):
+        """Append the Device Capacity sheet last (mirrors cost append).
+
+        @param workbook: xlsxwriter Workbook.
+        @param data: posted export payload.
+        @return: None.
+        """
+        if not data.get('withCapacity'):
+            return
+        headers, groups, filter_info = self._resolve_capacity(data)
+        ws = workbook.add_worksheet(self.CAPACITY_SHEET_NAME)
+        write_capacity_sheet(
+            workbook, ws, headers, groups, filter_info,
+            title=_(CAPACITY_TITLE))
+
+    def _append_capacity_csv(self, lines, data):
+        """Append capacity CSV lines last (mirrors the cost prepend).
+
+        @param lines: CSV line list (extended in place).
+        @param data: posted export payload.
+        @return: None.
+        """
+        if not data.get('withCapacity'):
+            return
+        headers, groups, filter_info = self._resolve_capacity(data)
+        lines.append('')
+        lines.extend(capacity_csv_lines(
+            headers, groups, filter_info, title=_(CAPACITY_TITLE)))
+
+    def _export_capacity_only(self, data):
+        """Single Device Capacity sheet (popup: only Capacity checked).
+
+        Screen-mirror payload when posted (Capacity page: exact
+        on-screen rows, open sub-BOMs included, no is_sub filtering),
+        otherwise the live top-level table (Plan/Cost pages).
+
+        @param data: posted export payload.
+        @return: xlsx (or CSV fallback) HTTP response.
+        """
+        headers, groups, filter_info = self._resolve_capacity(data)
+        if not xlsxwriter:
+            lines = capacity_csv_lines(
+                headers, groups, filter_info, title=_(CAPACITY_TITLE))
+            content = '\r\n'.join(lines).encode('utf-8')
+            filename = 'Device_Capacity_%s.csv' % datetime.now().strftime(
+                '%Y%m%d_%H%M')
+            return request.make_response(
+                content,
+                headers=[
+                    ('Content-Type', 'text/csv; charset=utf-8'),
+                    ('Content-Disposition',
+                     'attachment; filename=%s' % filename),
+                ])
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        ws = workbook.add_worksheet(self.CAPACITY_SHEET_NAME)
+        write_capacity_sheet(
+            workbook, ws, headers, groups, filter_info,
+            title=_(CAPACITY_TITLE))
+        workbook.close()
+        output.seek(0)
+        filename = 'Device_Capacity_%s.xlsx' % datetime.now().strftime(
+            '%Y%m%d_%H%M')
+        return request.make_response(
+            output.getvalue(),
+            headers=[
+                ('Content-Type', 'application/vnd.openxmlformats-officedocument'
+                 '.spreadsheetml.sheet'),
+                ('Content-Disposition',
+                 'attachment; filename=%s' % filename),
+            ])
+
     # Sheet order is always: Product Cost (if selected) first,
-    # then Products, then Suppliers. Unselected sheets are skipped.
+    # then Products, then Suppliers, then Device Capacity (if
+    # selected) last. Unselected sheets are skipped.
     COST_SHEET_NAME = 'Product Cost'
     PRODUCTS_SHEET_NAME = 'Combined Plan - Products'
     SUPPLIERS_SHEET_NAME = 'Combined Plan - Suppliers'
     SINGLE_PRODUCTS_SHEET_NAME = 'Plan - Products'
     SINGLE_SUPPLIERS_SHEET_NAME = 'Plan - Suppliers'
+    CAPACITY_SHEET_NAME = 'Device Capacity'
 
     def _append_cost_sheet(self, workbook, data):
         if not data.get('withCost'):
@@ -617,13 +827,18 @@ class MatiaProcurementPlanController(http.Controller):
         lines[:] = new
 
     def _export_cost_only(self, data):
-        """Cost sheet alone (popup: only Product Cost checked)."""
+        """Cost sheet alone (popup: only Product Cost checked).
+
+        With withCapacity the live Device Capacity sheet is appended
+        last (popup: Cost + Capacity, no slot picked)."""
         if not xlsxwriter:
             combos, groups = self._live_cost()
             lines = cost_csv_lines(combos, groups)
+            self._append_capacity_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Product_Cost_%s.csv' % datetime.now().strftime(
-                '%Y%m%d_%H%M')
+            filename = 'Product_Cost%s_%s.csv' % (
+                self._capacity_suffix(data),
+                datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
                 headers=[
@@ -636,10 +851,12 @@ class MatiaProcurementPlanController(http.Controller):
         combos, groups = self._live_cost()
         ws = workbook.add_worksheet(self.COST_SHEET_NAME)
         write_cost_sheet(workbook, ws, combos, groups)
+        self._append_capacity_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Product_Cost_%s.xlsx' % datetime.now().strftime(
-            '%Y%m%d_%H%M')
+        filename = 'Product_Cost%s_%s.xlsx' % (
+            self._capacity_suffix(data),
+            datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
             headers=[
@@ -655,12 +872,19 @@ class MatiaProcurementPlanController(http.Controller):
         data_json = kwargs.get('data')
         if not data_json:
             return request.not_found()
-        # Admin group only
-        if not request.env.user.has_group('base.group_system'):
-            return request.not_found()
         try:
             data = json.loads(data_json)
         except (TypeError, ValueError):
+            return request.not_found()
+        # Mode-based gate: capacity_only serves the already-public
+        # capacity data to every internal user (the Capacity page is
+        # group_user); every other mode keeps the admin-only guard so
+        # slot/supplier/cost data never leaks (client card hiding is
+        # cosmetic only - this guard is the real gate).
+        if data.get('mode') == 'capacity_only':
+            if not request.env.user.has_group('base.group_user'):
+                return request.not_found()
+        elif not request.env.user.has_group('base.group_system'):
             return request.not_found()
         plan_name = data.get('plan_name', 'Plan')
         kits = data.get('kits', [])
@@ -677,6 +901,8 @@ class MatiaProcurementPlanController(http.Controller):
             return self._export_cost_slots(data)
         if data.get('mode') == 'cost_only':
             return self._export_cost_only(data)
+        if data.get('mode') == 'capacity_only':
+            return self._export_capacity_only(data)
         groups = data.get('groups', [])
         total = data.get('total', 0)
 
@@ -684,9 +910,11 @@ class MatiaProcurementPlanController(http.Controller):
             lines = _supplier_csv_lines(
                 plan_name, groups, total, kits, scratch_total)
             self._prepend_cost_csv(lines, data)
+            self._append_capacity_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Supplier_Preview%s_%s.csv' % (
+            filename = 'Supplier_Preview%s%s_%s.csv' % (
                 self._cost_suffix(data),
+                self._capacity_suffix(data),
                 datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
@@ -703,10 +931,12 @@ class MatiaProcurementPlanController(http.Controller):
             'plan_name': plan_name, 'groups': groups,
             'total': total, 'kits': kits,
             'scratch_total': scratch_total})
+        self._append_capacity_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Supplier_Preview%s_%s.xlsx' % (
+        filename = 'Supplier_Preview%s%s_%s.xlsx' % (
             self._cost_suffix(data),
+            self._capacity_suffix(data),
             datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
@@ -961,9 +1191,11 @@ class MatiaProcurementPlanController(http.Controller):
                     sup.get('plan_name', plan_name), groups, total,
                     sup_kits, sup_scratch))
             self._prepend_cost_csv(lines, data)
+            self._append_capacity_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Plan_Supplier%s_%s.csv' % (
+            filename = 'Plan_Supplier%s%s_%s.csv' % (
                 self._cost_suffix(data),
+                self._capacity_suffix(data),
                 datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
@@ -991,10 +1223,12 @@ class MatiaProcurementPlanController(http.Controller):
                     'groups': groups, 'total': total,
                     'kits': sup_kits, 'scratch_total': sup_scratch}
         self._write_supplier_sheet(workbook, ws2, _sup)
+        self._append_capacity_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Plan_Supplier%s_%s.xlsx' % (
+        filename = 'Plan_Supplier%s%s_%s.xlsx' % (
             self._cost_suffix(data),
+            self._capacity_suffix(data),
             datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
@@ -1012,9 +1246,11 @@ class MatiaProcurementPlanController(http.Controller):
         if not xlsxwriter:
             lines = _supplier_csv_lines_v2(sup)
             self._prepend_cost_csv(lines, data)
+            self._append_capacity_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Supplier_Preview%s_%s.csv' % (
+            filename = 'Supplier_Preview%s%s_%s.csv' % (
                 self._cost_suffix(data),
+                self._capacity_suffix(data),
                 datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
@@ -1028,10 +1264,12 @@ class MatiaProcurementPlanController(http.Controller):
         self._append_cost_sheet(workbook, data)
         ws = workbook.add_worksheet('Supplier Preview')
         self._write_supplier_sheet(workbook, ws, sup)
+        self._append_capacity_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Supplier_Preview%s_%s.xlsx' % (
+        filename = 'Supplier_Preview%s%s_%s.xlsx' % (
             self._cost_suffix(data),
+            self._capacity_suffix(data),
             datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
@@ -1056,9 +1294,11 @@ class MatiaProcurementPlanController(http.Controller):
             lines = _plan_csv_lines(
                 plan_name, scratch_total, rows, combo)
             self._prepend_cost_csv(lines, data)
+            self._append_capacity_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Plan%s_%s.csv' % (
+            filename = 'Plan%s%s_%s.csv' % (
                 self._cost_suffix(data),
+                self._capacity_suffix(data),
                 datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
@@ -1074,10 +1314,12 @@ class MatiaProcurementPlanController(http.Controller):
             self.SINGLE_PRODUCTS_SHEET_NAME)
         self._write_plan_sheet(workbook, ws, plan_name, scratch_total,
                                rows, combo)
+        self._append_capacity_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Plan%s_%s.xlsx' % (
+        filename = 'Plan%s%s_%s.xlsx' % (
             self._cost_suffix(data),
+            self._capacity_suffix(data),
             datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
@@ -1367,6 +1609,8 @@ class MatiaProcurementPlanController(http.Controller):
                 'tree_rows': p['rows'],
                 'combo': p['combo'],
                 'withCost': data.get('withCost'),
+                'withCapacity': data.get('withCapacity'),
+                'capacity_payload': data.get('capacity_payload'),
             }
             if p.get('supplier'):
                 single['plan_name'] = p['name']
@@ -1377,7 +1621,9 @@ class MatiaProcurementPlanController(http.Controller):
             return self._export_tree(
                 single, p['name'], p['kits'], p['scratch_total'])
         return self._export_slots_from_plans(
-            plans, {'withCost': data.get('withCost')})
+            plans, {'withCost': data.get('withCost'),
+                    'withCapacity': data.get('withCapacity'),
+                    'capacity_payload': data.get('capacity_payload')})
 
     def _export_slots_from_plans(self, plans, data):
         """Combined matrix from normalized plans (client or server)."""
@@ -1509,10 +1755,12 @@ class MatiaProcurementPlanController(http.Controller):
                 for v in s_est:
                     stotal.append(_usd_csv(v))
                 lines.append(';'.join(stotal))
+            self._append_capacity_csv(lines, data)
             self._prepend_cost_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Plan_Combined%s_%s.csv' % (
+            filename = 'Plan_Combined%s%s_%s.csv' % (
                 self._cost_suffix(data),
+                self._capacity_suffix(data),
                 datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
@@ -1748,12 +1996,14 @@ class MatiaProcurementPlanController(http.Controller):
             ws2.freeze_panes(shrow + 1, 0)
             ws2.set_landscape()
             ws2.fit_to_pages(1, 0)
+        self._append_capacity_sheet(workbook, data)
         workbook.close()
         output.seek(0)
         prefix = 'Plan_Combined_Supplier' if with_supplier \
             else 'Plan_Combined'
-        filename = '%s%s_%s.xlsx' % (
+        filename = '%s%s%s_%s.xlsx' % (
             prefix, self._cost_suffix(data),
+            self._capacity_suffix(data),
             datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),

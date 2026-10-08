@@ -4,6 +4,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
     var AbstractAction = require('web.AbstractAction');
     var core = require('web.core');
     var Dialog = require('web.Dialog');
+    var ExportPopup =
+        require('matia_stock_planning.export_popup');
     var QWeb = core.qweb;
     var _t = core._t;
 
@@ -1142,9 +1144,11 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             }
         },
 
-        _onExportExcel: function (ev) {
-            ev.preventDefault();
-
+        // Screen payload for the capacity export: headers + groups in
+        // the shared writer shape ({headers, groups, filter_info}).
+        // Mirrors the screen: hidden groups skipped, search filters
+        // loaded rows, open sub-BOM rows included with is_sub/level.
+        _buildCapacityPayload: function () {
             var headers = ['Part Code', 'Part Name'];
             if (this.show_bom_qty) {
                 headers.push('Usage Qty');
@@ -1203,14 +1207,85 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             if (this.include_tr) filterInfo.push('TR (WHTR/Stock)');
             if (this.include_usa) filterInfo.push('USA (WHUS/Stock)');
 
-            var payload = {
+            return {
                 headers: headers,
                 groups: exportGroups,
                 filter_info: filterInfo.join(' + ') + ' [On Hand: incl. reserved | Reserved & NCR excluded in capacity]',
             };
+        },
 
+        // Excel button opens the shared export picker (same popup as
+        // the Plan/Cost pages). The Capacity card comes preselected;
+        // picking nothing but Capacity downloads exactly today's file
+        // (same payload, same shared writer). Admins may also add
+        // slots (server-collected) and the live Cost sheet; the
+        // Capacity sheet then keeps this screen's exact rows.
+        _onExportExcel: function (ev) {
+            ev.preventDefault();
+            var self = this;
+            var payload = this._buildCapacityPayload();
+            var open = function (slotList, canAdmin) {
+                ExportPopup.openExportPopup($, Dialog, {
+                    parent: self,
+                    slots: slotList,
+                    activeSlot: null,
+                    dirtyMsg: null,
+                    preselectCapacity: true,
+                    canExportAdmin: canAdmin,
+                    onExport: function (sel, withSup, withCost,
+                        withCap) {
+                        if (!sel.length && !withSup && !withCost &&
+                            !withCap) {
+                            return;
+                        }
+                        if (!sel.length && withCap && !withSup &&
+                            !withCost) {
+                            // Capacity-only: the screen mirror.
+                            self._postProcurementExcel({
+                                mode: 'capacity_only',
+                                capacity_payload: payload,
+                            });
+                            return;
+                        }
+                        if (!sel.length) {
+                            self.displayNotification({
+                                title: _t('No slot selected'),
+                                message: _t('Select at least one ' +
+                                    'study slot for Suppliers/Cost.'),
+                                type: 'warning',
+                            });
+                            return;
+                        }
+                        self._postProcurementExcel({
+                            mode: 'cost_slots',
+                            slots: sel,
+                            withSupplier: withSup,
+                            withCost: withCost,
+                            withCapacity: withCap,
+                            capacity_payload: withCap ? payload : null,
+                        });
+                    },
+                });
+            };
+            // Non-admins can read the slot list (group_user ACL) but
+            // only need the admin flag; when the RPC is unreachable
+            // the popup still opens with the Capacity card only.
+            this._rpc({
+                model: 'matia.procurement.plan',
+                method: 'get_slot_list',
+            }).then(function (res) {
+                var fresh = (res && res.slots) || [];
+                var admin = !!res &&
+                    res.can_export_admin !== false;
+                open(fresh, admin);
+            }, function () {
+                open([], false);
+            });
+        },
+
+        _postProcurementExcel: function (payload) {
             var form = document.createElement('form');
-            form.action = '/matia_stock_planning/export_xlsx';
+            form.action = '/matia_procurement_plan/export_xlsx';
             form.method = 'POST';
             form.target = '_blank';
 

@@ -1639,8 +1639,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Supplier-only export (popup: supplier on, no slot picked).
-        // With withCost the live Cost sheet is appended server-side.
-        _onExportExcel: function (withCost) {
+        // With withCost the live Cost sheet is appended server-side;
+        // with withCap the live Device Capacity sheet is appended last.
+        _onExportExcel: function (withCost, withCap) {
             if (!this.summary) return;
             var self = this;
             var pid = this._planId();
@@ -1650,19 +1651,22 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     mode: 'supplier',
                     supplier: self._supplierV2(sup),
                     withCost: withCost ? 1 : 0,
+                    withCapacity: withCap ? 1 : 0,
                 });
             }, function (err) {
                 self._notifyErr(err);
             });
         },
 
-        // Cost-only export (popup: only Product Cost checked).
-        _onExportCost: function () {
+        // Cost-only export (popup: only Product Cost checked). With
+        // withCap the live Device Capacity sheet is appended last.
+        _onExportCost: function (withCap) {
             if (!this.summary) return;
             this._postExcel({
                 plan_name: this.summary.name || 'Cost',
                 mode: 'cost_only',
                 withCost: 1,
+                withCapacity: withCap ? 1 : 0,
             });
         },
 
@@ -1686,41 +1690,74 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'border-radius': '8px', 'padding': '8px 12px',
                     'font-size': '0.78rem', 'margin-top': '4px'});
             }
-            ExportPopup.openExportPopup($, Dialog, {
-                parent: this,
-                slots: this.slots || [],
-                activeSlot: this.activeSlot,
-                dirtyMsg: dirtyMsg,
-                onExport: function (sel, withSup, withCost) {
-                    if (!sel.length && !withSup && !withCost) {
-                        return;
-                    }
-                    if (!sel.length) {
-                        if (withSup) {
-                            self._onExportExcel(withCost);
-                        } else {
-                            self._onExportCost();
+            var open = function (slotList, canAdmin) {
+                ExportPopup.openExportPopup($, Dialog, {
+                    parent: self,
+                    slots: slotList,
+                    activeSlot: self.activeSlot,
+                    dirtyMsg: dirtyMsg,
+                    canExportAdmin: canAdmin,
+                    onExport: function (sel, withSup, withCost,
+                        withCap) {
+                        if (!sel.length && !withSup && !withCost &&
+                            !withCap) {
+                            return;
                         }
-                        return;
-                    }
-                    if (sel.length === 1 &&
-                        sel[0] === self.activeSlot) {
-                        if (withSup) {
-                            self._onExportPlanSupplier(withCost);
-                        } else {
-                            self._onExportTree(withCost);
+                        if (!sel.length) {
+                            if (withSup) {
+                                self._onExportExcel(withCost,
+                                    withCap);
+                            } else if (withCap && !withCost) {
+                                self._onExportCapacityOnly();
+                            } else {
+                                self._onExportCost(withCap);
+                            }
+                            return;
                         }
-                        return;
-                    }
-                    self._exportSlotsCollect(
-                        sel, withSup, withCost);
-                },
+                        if (sel.length === 1 &&
+                            sel[0] === self.activeSlot) {
+                            if (withSup) {
+                                self._onExportPlanSupplier(withCost,
+                                    withCap);
+                            } else {
+                                self._onExportTree(withCost,
+                                    withCap);
+                            }
+                            return;
+                        }
+                        self._exportSlotsCollect(
+                            sel, withSup, withCost, withCap);
+                    },
+                });
+            };
+            // Fresh slots + admin flag for the popup (server decides
+            // the real export gate per mode; the flag only hides the
+            // admin cards for non-admins). Falls back to the cached
+            // slot bar when the RPC is unreachable.
+            this._rpcPlan('get_slot_list').then(function (res) {
+                var fresh = (res && res.slots) || self.slots || [];
+                var admin = !res ||
+                    res.can_export_admin !== false;
+                open(fresh, admin);
+            }, function () {
+                open(self.slots || [], true);
+            });
+        },
+
+        // Capacity-only export (popup: only Device Capacity checked,
+        // no slot picked): live top-level table, standard columns
+        // (this page holds no capacity screen state to mirror).
+        _onExportCapacityOnly: function () {
+            if (!this.summary) return;
+            this._postExcel({
+                mode: 'capacity_only',
             });
         },
 
         // Single active slot + suppliers: Plan + Suppliers sheets,
-        // no slot reload needed (Cost sheet appended when asked).
-        _onExportPlanSupplier: function (withCost) {
+        // no slot reload needed (Cost sheet appended when asked,
+        // live Capacity sheet appended last when asked).
+        _onExportPlanSupplier: function (withCost, withCap) {
             if (!this.summary) return;
             var self = this;
             var pid = this._planId();
@@ -1741,6 +1778,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         self.summary.scratch_total_usd) || 0,
                     supplier: self._supplierV2(sup),
                     withCost: withCost ? 1 : 0,
+                    withCapacity: withCap ? 1 : 0,
                 });
             }, function (err) {
                 self._notifyErr(err);
@@ -1753,8 +1791,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // withSupplier also collects each slot's supplier breakdown
         // (saved data). A lone slot posts the single-sheet format
         // (tree, or plan_supplier with suppliers) instead of Combined.
-        // withCost appends the live Cost sheet server-side.
-        _exportSlotsCollect: function (slots, withSupplier, withCost) {
+        // withCost appends the live Cost sheet server-side, withCap
+        // appends the live Device Capacity sheet last.
+        _exportSlotsCollect: function (slots, withSupplier, withCost,
+            withCap) {
             var self = this;
             if (this._exporting || !this.summary) return;
             this._exporting = true;
@@ -1854,6 +1894,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         combo: plans[0].combo,
                         scratch_total: plans[0].scratch_total,
                         withCost: withCost ? 1 : 0,
+                        withCapacity: withCap ? 1 : 0,
                     });
                 } else if (plans.length === 1 && withSupplier) {
                     self._postExcel({
@@ -1865,10 +1906,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         scratch_total: plans[0].scratch_total,
                         supplier: plans[0].supplier,
                         withCost: withCost ? 1 : 0,
+                        withCapacity: withCap ? 1 : 0,
                     });
                 } else {
                     self._postExcel({mode: 'slots', plans: plans,
-                        withCost: withCost ? 1 : 0});
+                        withCost: withCost ? 1 : 0,
+                        withCapacity: withCap ? 1 : 0});
                 }
             }, function (err) {
                 restore();
@@ -1910,7 +1953,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             };
         },
 
-        _onExportTree: function (withCost) {
+        _onExportTree: function (withCost, withCap) {
             if (!this.summary) return;
             var entry = this._slotEntry(this.activeSlot);
             var planName = (entry && entry.note) ||
@@ -1923,6 +1966,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 combo: this._planCombos(),
                 scratch_total: this.summary.scratch_total_usd || 0,
                 withCost: withCost ? 1 : 0,
+                withCapacity: withCap ? 1 : 0,
             });
         },
 

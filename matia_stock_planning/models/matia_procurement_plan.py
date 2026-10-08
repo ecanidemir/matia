@@ -2914,8 +2914,10 @@ class MatiaProcurementPlan(models.Model):
         """All study slots with their bound plan (if any). Read-only.
 
         @return: {'slots': [{slot, plan_id, name, note, state,
-            target_count, rfq_count, write_date}]}. Empty slots carry
-            plan_id=False.
+            target_count, rfq_count, write_date}], 'can_export_admin':
+            True when the caller is base.group_system (drives the
+            export popup admin cards; evaluated on the caller env,
+            never sudo)}. Empty slots carry plan_id=False.
         """
         env_sudo = _mpp_env_sudo(self)
         latest = {}
@@ -2954,7 +2956,8 @@ class MatiaProcurementPlan(models.Model):
                     'rfq_count': 0,
                     'write_date': '',
                 })
-        return {'slots': slots}
+        return {'slots': slots,
+                'can_export_admin': _mpp_can_create_docs(self)}
 
     @api.model
     def load_slot(self, slot):
