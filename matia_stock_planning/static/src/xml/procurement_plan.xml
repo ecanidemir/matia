@@ -13,6 +13,19 @@
                     </div>
                 </div>
                 <div class="mpp-actions">
+                    <ul class="nav mpp-nav-tabs mpp-nav-tabs--header">
+                        <li class="nav-item">
+                            <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">
+                                <i class="fa fa-sitemap mr-1"></i>1. Plan
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="#" class="nav-link mpp-nav-tab" data-tab="2">
+                                <i class="fa fa-truck mr-1"></i>2. Suppliers &amp; Production
+                            </a>
+                        </li>
+                    </ul>
+                    <span class="mpp-header-sep"/>
                     <button class="btn btn-outline-light btn-sm mpp-btn-reload" title="Reload the saved plan (discards unsaved Needed edits, no recalculation)">
                         <i class="fa fa-refresh mr-1"></i> Refresh
                     </button>
@@ -41,20 +54,6 @@
                 </button>
                 <span class="mpp-slot-status text-muted"/>
             </div>
-
-            <!-- 2. Step navigation -->
-            <ul class="nav nav-tabs mpp-nav-tabs">
-                <li class="nav-item">
-                    <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">
-                        <i class="fa fa-sitemap mr-1"></i>1. Plan
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a href="#" class="nav-link mpp-nav-tab" data-tab="2">
-                        <i class="fa fa-truck mr-1"></i>2. Suppliers &amp; Production
-                    </a>
-                </li>
-            </ul>
 
             <!-- TAB 1: single-page plan (quantities + tree + cost) -->
             <div class="mpp-pane" data-pane="1">

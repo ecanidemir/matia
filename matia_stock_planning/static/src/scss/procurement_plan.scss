@@ -127,6 +127,58 @@
         }
     }
 
+    /* Header-embedded tabs: the step navigation lives inside the dark
+     * header bar, left of Refresh / Recalculate. Transparent strip with
+     * outline-light pills; the active tab pops on white. */
+    .mpp-nav-tabs--header {
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+
+        .mpp-nav-tab {
+            border: 1px solid rgba(255, 255, 255, 0.45);
+            border-radius: 6px;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 0.8rem;
+            padding: 0.3rem 0.75rem;
+            white-space: nowrap;
+
+            i {
+                opacity: 0.85;
+            }
+
+            &:hover {
+                color: #ffffff;
+                background-color: rgba(255, 255, 255, 0.12);
+                border-color: rgba(255, 255, 255, 0.7);
+            }
+
+            &.active {
+                color: #0f172a;
+                background-color: #ffffff;
+                border-color: #ffffff;
+            }
+        }
+    }
+
+    /* Thin vertical divider between the header tabs and the
+     * Refresh / Recalculate buttons. */
+    .mpp-header-sep {
+        display: inline-block;
+        width: 1px;
+        align-self: stretch;
+        min-height: 22px;
+        background: rgba(255, 255, 255, 0.25);
+    }
+
     .mpp-qty,
     .mpp-need {
         max-width: 110px;
@@ -221,6 +273,10 @@
                     padding: 0.3rem 0.6rem;
                 }
             }
+        }
+
+        .mpp-header-sep {
+            display: none;
         }
 
         .mpp-nav-tabs {
