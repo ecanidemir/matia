@@ -180,11 +180,33 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var html = '';
             (this.treeGroups || []).forEach(function (g) {
                 var net = 0.0;
+                var totNeed = 0.0;
+                var totBom = 0.0;
                 (g.items || []).forEach(function (it) {
                     net += parseFloat(it.rolled_total_usd) || 0.0;
+                    // Per-device average from the ENTERED Needed values:
+                    // each top implies need/bom_qty devices; the average
+                    // is usage-weighted (usage x devices = need), so it
+                    // collapses to total need / total usage. Tops with no
+                    // Needed value are skipped. Net of stock, hence ~.
+                    var nd = parseFloat(it.need) || 0.0;
+                    var bq = parseFloat(it.bom_qty) || 0.0;
+                    if (nd > 0 && bq > 0) {
+                        totNeed += nd;
+                        totBom += bq;
+                    }
                 });
                 net = Math.round(net * 100) / 100;
                 totals[g.key] = net;
+                var dev = totBom > 0 ? totNeed / totBom : 0;
+                var avgHtml = '';
+                if (dev > 0) {
+                    avgHtml = '<div class="kpi-avg" title="Approx net ' +
+                        'cost per device from the entered Needed ' +
+                        'quantities (usage-weighted average, net ' +
+                        'of stock)">~$' +
+                        self._fmtNum(net / dev, 2) + ' / device</div>';
+                }
                 var n = self.fillN[g.key] !== undefined ?
                     self.fillN[g.key] : 50;
                 html += '<div class="msp-kpi-card kpi-' + g.key + '">' +
@@ -195,6 +217,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     self._fmtNum(net, 2) + '</div>' +
                     '<div class="kpi-sub">' + g.items.length +
                     ' tops &middot; net of stock</div>' +
+                    avgHtml +
                     '</div>' +
                     '<div class="kpi-icon"><i class="fa ' +
                     (icons[g.key] || 'fa-cube') + '"></i></div>' +

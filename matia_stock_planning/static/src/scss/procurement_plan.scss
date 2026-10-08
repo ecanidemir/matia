@@ -144,6 +144,14 @@
 
         .kpi-info {
             flex: 1 1 auto;
+
+            // Approx per-device line under the netted total.
+            .kpi-avg {
+                font-size: 0.8rem;
+                font-weight: 700;
+                color: #0369a1;
+                margin-top: 0.2rem;
+            }
         }
 
         .mpp-fill-n {
