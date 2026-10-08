@@ -21,11 +21,14 @@ _GROUP_LABEL = {'base': 'Base', 'screws': 'Base',
 _PLAN = [('Base', ['base', 'screws']),
          ('Outdoor', ['outdoor']),
          ('Seat', ['seat'])]
-_COLUMNS = ['Group', 'Code', 'Part', 'Usage Qty', 'UoM',
-            'Unit USD', 'BOM Cost USD']
-# Width caps per column (Group, Code, Part, Usage, UoM, Unit, BOM,
-# + combo summary overflow col).
-_WIDTH_CAPS = [14, 20, 60, 12, 10, 14, 16, 12]
+_COLUMNS_BASE = ['Group', 'Code', 'Part', 'Usage Qty', 'UoM',
+                 'Unit USD', 'BOM Cost USD']
+# Width caps for the base columns (Group, Code, Part, Usage, UoM,
+# Unit, BOM). The optional Level column caps at 8, the combo-summary
+# overflow column at 12.
+_WIDTH_CAPS_BASE = [14, 20, 60, 12, 10, 14, 16]
+_LEVEL_CAP = 8
+_COMBO_OVERFLOW_CAP = 12
 
 
 class MatiaProductCostController(http.Controller):
@@ -46,6 +49,22 @@ class MatiaProductCostController(http.Controller):
         combos = data.get('combos', {}) or {}
         groups = data.get('groups', []) or []
         by_key = {g.get('key'): g for g in groups if g.get('key')}
+        # Level column appears only when a sub-BOM is expanded
+        # (any item with level > 0): Group | Level | Code | ...
+        # Top-level rows keep a blank Level cell. No leading spaces
+        # or indent anywhere; depth reads from the Level cell
+        # (L1..L10).
+        has_level = any(
+            int(itm.get('level', 0) or 0) > 0
+            for grp in by_key.values()
+            for itm in (grp.get('items', []) or []))
+        columns = (['Group', 'Level'] if has_level
+                   else ['Group']) + _COLUMNS_BASE[1:]
+        caps = ([_WIDTH_CAPS_BASE[0], _LEVEL_CAP] if has_level
+                else [_WIDTH_CAPS_BASE[0]]) + _WIDTH_CAPS_BASE[1:] + \
+            [_COMBO_OVERFLOW_CAP]
+        _C = {name: idx for idx, name in enumerate(columns)}
+        bom_letter = chr(ord('A') + _C['BOM Cost USD'])
 
         if not xlsxwriter:
             def _usd0(val):
@@ -61,20 +80,27 @@ class MatiaProductCostController(http.Controller):
                              _usd0(combos.get('full')),
                              _usd0(combos.get('base_outdoor')),
                              _usd0(combos.get('base_seat'))))
-            lines.append(';'.join(_COLUMNS))
+            lines.append(';'.join(columns))
             for label, keys in _PLAN:
                 for key in keys:
                     grp = by_key.get(key)
                     if not grp:
                         continue
                     for itm in grp.get('items', []):
-                        lines.append('%s;%s;%s;%s;%s;%s;%s' % (
-                            label,
-                            '  ' * int(itm.get('level', 0) or 0) +
-                            (itm.get('code', '') or ''),
-                            itm.get('name', ''), itm.get('usage', ''),
-                            itm.get('uom', ''), itm.get('unit_usd', ''),
-                            itm.get('ext_usd', '')))
+                        lvl = int(itm.get('level', 0) or 0)
+                        vals = {
+                            'Group': label,
+                            'Code': itm.get('code', '') or '',
+                            'Part': itm.get('name', ''),
+                            'Usage Qty': itm.get('usage', ''),
+                            'UoM': itm.get('uom', ''),
+                            'Unit USD': itm.get('unit_usd', ''),
+                            'BOM Cost USD': itm.get('ext_usd', ''),
+                        }
+                        if has_level:
+                            vals['Level'] = 'L%d' % lvl if lvl else ''
+                        lines.append(';'.join(
+                            str(vals.get(c, '')) for c in columns))
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Product_Cost_%s.csv' % datetime.now().strftime(
                 '%Y%m%d_%H%M')
@@ -94,8 +120,8 @@ class MatiaProductCostController(http.Controller):
             {'bold': True, 'bg_color': '#1e40af', 'font_color': '#ffffff',
              'border': 1, 'align': 'center', 'valign': 'vcenter'})
         text_fmt = workbook.add_format({'border': 1})
-        indent_fmt = workbook.add_format(
-            {'border': 1, 'indent': 2})
+        level_fmt = workbook.add_format(
+            {'border': 1, 'align': 'center'})
         qty_fmt = workbook.add_format(
             {'border': 1, 'align': 'center', 'num_format': '#,##0.00'})
         usd_fmt = workbook.add_format(
@@ -126,11 +152,11 @@ class MatiaProductCostController(http.Controller):
             ws.write_number(row, idx * 2 + 1, float(val), usd0_fmt)
         row += 2
         header_row = row
-        ws.write_row(header_row, 0, _COLUMNS, header_fmt)
+        ws.write_row(header_row, 0, columns, header_fmt)
         row += 1
-        # Auto-width tracking (header seeds the minimum; 8th slot is
+        # Auto-width tracking (header seeds the minimum; last slot is
         # the combo-summary overflow column).
-        widths = [len(c) for c in _COLUMNS] + [0]
+        widths = [len(c) for c in columns] + [0]
 
         def _bump(col, val):
             """Track the widest display value per column."""
@@ -149,27 +175,30 @@ class MatiaProductCostController(http.Controller):
             """Write one flat detail row; return its Excel row number."""
             global_row = _write_detail.row
             lvl = int(itm.get('level', 0) or 0)
-            fmt = indent_fmt if lvl else text_fmt
             code = itm.get('code', '') or ''
             name = itm.get('name', '') or ''
             usage = float(itm.get('usage', 0) or 0)
             uom = itm.get('uom', '') or ''
             unit = float(itm.get('unit_usd', 0) or 0)
             ext = float(itm.get('ext_usd', 0) or 0)
-            ws.write(global_row, 0, label, fmt)
-            ws.write(global_row, 1, code, fmt)
-            ws.write(global_row, 2, name, fmt)
-            ws.write_number(global_row, 3, usage, qty_fmt)
-            ws.write(global_row, 4, uom, fmt)
-            ws.write_number(global_row, 5, unit, usd_fmt)
-            ws.write_number(global_row, 6, ext, usd_fmt)
-            _bump(0, label)
-            _bump(1, code)
-            _bump(2, name)
-            _bump(3, '%.2f' % usage)
-            _bump(4, uom)
-            _bump(5, '$%.2f' % unit)
-            _bump(6, '$%.2f' % ext)
+            ws.write(global_row, _C['Group'], label, text_fmt)
+            if has_level:
+                ws.write(global_row, _C['Level'],
+                         'L%d' % lvl if lvl else '', level_fmt)
+                _bump(_C['Level'], 'L%d' % lvl if lvl else '')
+            ws.write(global_row, _C['Code'], code, text_fmt)
+            ws.write(global_row, _C['Part'], name, text_fmt)
+            ws.write_number(global_row, _C['Usage Qty'], usage, qty_fmt)
+            ws.write(global_row, _C['UoM'], uom, text_fmt)
+            ws.write_number(global_row, _C['Unit USD'], unit, usd_fmt)
+            ws.write_number(global_row, _C['BOM Cost USD'], ext, usd_fmt)
+            _bump(_C['Group'], label)
+            _bump(_C['Code'], code)
+            _bump(_C['Part'], name)
+            _bump(_C['Usage Qty'], '%.2f' % usage)
+            _bump(_C['UoM'], uom)
+            _bump(_C['Unit USD'], '$%.2f' % unit)
+            _bump(_C['BOM Cost USD'], '$%.2f' % ext)
             _write_detail.row += 1
             return global_row + 1  # Excel 1-based row number
 
@@ -193,42 +222,42 @@ class MatiaProductCostController(http.Controller):
             # SUBTOTAL(109, ...) sums only visible rows, so the
             # subtotal follows the filter instead of going stale.
             sr = _write_detail.row
-            refs = ','.join('G%d:G%d' % (a, b)
+            refs = ','.join('%s%d:%s%d' % (bom_letter, a, bom_letter, b)
                             for a, b in label_spans)
-            ws.write(sr, 0, label, sub_label_fmt)
-            ws.write(sr, 1, '', sub_label_fmt)
-            ws.write(sr, 2, '%s Subtotal' % label, sub_label_fmt)
-            ws.write(sr, 3, '', sub_label_fmt)
-            ws.write(sr, 4, '', sub_label_fmt)
-            ws.write(sr, 5, '', sub_label_fmt)
-            ws.write_formula(sr, 6, '=SUBTOTAL(109,%s)' % refs,
-                             sub_usd_fmt)
-            _bump(2, '%s Subtotal' % label)
+            ws.write(sr, _C['Group'], label, sub_label_fmt)
+            for c in range(1, _C['BOM Cost USD']):
+                if c == _C['Part']:
+                    ws.write(sr, c, '%s Subtotal' % label, sub_label_fmt)
+                else:
+                    ws.write(sr, c, '', sub_label_fmt)
+            ws.write_formula(sr, _C['BOM Cost USD'],
+                             '=SUBTOTAL(109,%s)' % refs, sub_usd_fmt)
+            _bump(_C['Part'], '%s Subtotal' % label)
             _write_detail.row += 1
             filter_end = sr
         row = _write_detail.row
         # Grand total lives OUTSIDE the autofilter range (blank Group
         # cell would be hidden by a Group filter otherwise) and sums
         # detail rows only (subtotal rows excluded, no double count).
-        all_refs = ','.join('G%d:G%d' % (a, b)
+        all_refs = ','.join('%s%d:%s%d' % (bom_letter, a, bom_letter, b)
                             for rngs in spans.values() for a, b in rngs)
         if all_refs:
             row += 1
-            ws.write(row, 0, '', total_label_fmt)
-            ws.write(row, 1, '', total_label_fmt)
-            ws.write(row, 2, 'GRAND TOTAL', total_label_fmt)
-            ws.write(row, 3, '', total_label_fmt)
-            ws.write(row, 4, '', total_label_fmt)
-            ws.write(row, 5, '', total_label_fmt)
-            ws.write_formula(row, 6, '=SUBTOTAL(109,%s)' % all_refs,
+            for c in range(0, _C['BOM Cost USD']):
+                if c == _C['Part']:
+                    ws.write(row, c, 'GRAND TOTAL', total_label_fmt)
+                else:
+                    ws.write(row, c, '', total_label_fmt)
+            ws.write_formula(row, _C['BOM Cost USD'],
+                             '=SUBTOTAL(109,%s)' % all_refs,
                              total_usd_fmt)
-            _bump(2, 'GRAND TOTAL')
+            _bump(_C['Part'], 'GRAND TOTAL')
         last_row = row
         # Auto widths (measured, capped), filter, freeze, print.
-        for idx, (w, cap) in enumerate(zip(widths, _WIDTH_CAPS)):
+        for idx, (w, cap) in enumerate(zip(widths, caps)):
             ws.set_column(idx, idx, min(w + 2, cap))
         if filter_end > header_row:
-            ws.autofilter(header_row, 0, filter_end, len(_COLUMNS) - 1)
+            ws.autofilter(header_row, 0, filter_end, len(columns) - 1)
         ws.freeze_panes(header_row + 1, 0)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
