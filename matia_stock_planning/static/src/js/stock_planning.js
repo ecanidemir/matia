@@ -37,7 +37,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.show_bom_qty = true;
             this.show_reserved = true;
             this.show_ncr = true;
-            this.dynamic_targets = [];
+            this.dynamic_targets = this._loadPersistedTargets();
             this.groups = [];
             this.sub_bom_cache = {};
             this.expanded_boms = {};
@@ -58,10 +58,13 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         },
 
         willStart: function () {
+            var self = this;
             return Promise.all([
                 this._super.apply(this, arguments),
-                this._fetchPlanningData()
-            ]);
+                this._fetchSavedTargets(),
+            ]).then(function () {
+                return self._fetchPlanningData();
+            });
         },
 
         start: function () {
@@ -256,6 +259,90 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this._updateView();
         },
 
+        // ─── Dynamic-column persistence (localStorage + server) ──────────
+        // Added target-device columns survive reload / new session AND
+        // follow the user across browsers: the server copy
+        // (res.users.matia_capacity_targets, per-user) is the source of
+        // truth, localStorage is a fast offline-safe cache. Both sides
+        // enforce the same rules (no 20, positive ints, unique, max 3,
+        // ascending) so a stale value can never break the fetch.
+        _sanitizeTargets: function (vals) {
+            if (!Array.isArray(vals)) {
+                return [];
+            }
+            var seen = {};
+            var out = [];
+            for (var i = 0; i < vals.length && out.length < 3; i++) {
+                var t = parseInt(vals[i], 10);
+                if (isNaN(t) || t <= 0 || t === 20 || seen[t]) {
+                    continue;
+                }
+                seen[t] = true;
+                out.push(t);
+            }
+            out.sort(function (a, b) { return a - b; });
+            return out;
+        },
+
+        _loadPersistedTargets: function () {
+            var raw = null;
+            try {
+                raw = window.localStorage.getItem('msp_dynamic_targets');
+            } catch (e) {
+                return [];
+            }
+            if (!raw) {
+                return [];
+            }
+            var parsed;
+            try {
+                parsed = JSON.parse(raw);
+            } catch (e) {
+                return [];
+            }
+            return this._sanitizeTargets(parsed);
+        },
+
+        _persistTargets: function () {
+            try {
+                window.localStorage.setItem(
+                    'msp_dynamic_targets', JSON.stringify(this.dynamic_targets));
+            } catch (e) {
+                // Private mode / quota exceeded: table still works for
+                // this session, columns just won't survive reload.
+            }
+        },
+
+        // Server is authoritative: a saved server list replaces the
+        // local cache (cross-device follow). Empty server list keeps
+        // the local cache (first run / migration).
+        _fetchSavedTargets: function () {
+            var self = this;
+            return this._rpc({
+                model: 'matia.stock.planning',
+                method: 'get_my_capacity_targets',
+            }).then(function (result) {
+                var server = self._sanitizeTargets(result);
+                if (server.length) {
+                    self.dynamic_targets = server;
+                    self._persistTargets();
+                }
+            }).catch(function () {
+                // RPC/DB hiccup: keep the localStorage values.
+            });
+        },
+
+        _saveTargetsServer: function () {
+            return this._rpc({
+                model: 'matia.stock.planning',
+                method: 'set_my_capacity_targets',
+                kwargs: { targets: this.dynamic_targets },
+            }).catch(function () {
+                // Local copy is already saved; server sync retries on
+                // the next add/remove.
+            });
+        },
+
         _onAddDynamicColumn: function (ev) {
             ev.preventDefault();
             var self = this;
@@ -316,6 +403,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
 
             this.dynamic_targets.push(target);
             this.dynamic_targets.sort(function (a, b) { return a - b; });
+            this._persistTargets();
+            this._saveTargetsServer();
 
             // Invalidate sub-BOM cache; open nodes re-expand after re-render
             this.sub_bom_cache = {};
@@ -341,6 +430,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.dynamic_targets = this.dynamic_targets.filter(function (t) {
                 return t !== target;
             });
+            this._persistTargets();
+            this._saveTargetsServer();
             // Clear sort if it was on removed dynamic col
             if (this.sort_col === 'dyn_' + target) {
                 this.sort_col = null;

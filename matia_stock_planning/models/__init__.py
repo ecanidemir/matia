@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from . import res_users
 from . import stock_planning
 from . import matia_procurement_plan
 from . import matia_procurement_plan_rfq
