@@ -1486,14 +1486,22 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _collectExportRows: function () {
             var self = this;
             var rows = [];
+            // Group key -> screen title (the Excel Group column; group
+            // separator rows are no longer exported).
+            var titles = {};
+            this.treeGroups.forEach(function (g) {
+                titles[g.key] = g.title;
+            });
             // Same rule as _renderTree: a search forces everything open.
             var searching = !!(self.treeSearch && self.treeSearch.length);
-            var walk = function (items, level, groupKey, parentUid) {
+            var walk = function (items, level, groupKey, parentUid,
+                gtitle) {
                 items.forEach(function (r) {
                     var uid = self._canonUid(parentUid, r.product_id);
                     if (!self._subtreeMatch(uid, r)) return;
                     var net = self._rowNet(r);
                     rows.push({
+                        group: gtitle, pid: r.product_id,
                         code: r.code, name: r.name, level: level,
                         bom_qty: r.bom_qty, uom: self._uomEn(r.uom),
                         tr: parseFloat(r.avail_tr) || 0,
@@ -1523,7 +1531,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     var cached = self.subCache[uid];
                     if (self.expanded[uid] && cached) {
                         walk(cached.items, cached.level,
-                            cached.groupKey, uid);
+                            cached.groupKey, uid,
+                            titles[cached.groupKey] || gtitle);
                     }
                 });
             };
@@ -1531,10 +1540,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 // Same visibility rule as the screen: collapsed groups
                 // are excluded unless a search forces everything open.
                 if (!searching && self.collapsedGroups[g.key]) return;
-                rows.push({code: '[' + g.title + '] ' + (g.bom_name || ''),
+                rows.push({group: g.title,
+                    code: '[' + g.title + '] ' + (g.bom_name || ''),
                     level: 0, is_header: true});
                 var items = self._sortItems((g.items || []).slice());
-                walk(items, 0, g.key, g.key + ':');
+                walk(items, 0, g.key, g.key + ':', g.title);
             });
             return rows;
         },
@@ -1640,6 +1650,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._exporting = true;
             var orig = this.activeSlot;
             var plans = [];
+            var notes = {};
+            (this.slots || []).forEach(function (s) {
+                notes[s.slot] = s.note || '';
+            });
             this.displayNotification({
                 title: 'Export',
                 message: 'Collecting ' + slots.length + ' slots...',
@@ -1674,8 +1688,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                                     }
                                     plans.push({
                                         slot: s,
-                                        name: (self.summary &&
-                                            self.summary.name) || '',
+                                        name: notes[s] ||
+                                            ((self.summary &&
+                                            self.summary.name) || ''),
+                                        combo: self._planCombos(),
                                         scratch_total: (self.summary &&
                                             self.summary.scratch_total_usd) ||
                                             0,
@@ -1706,13 +1722,47 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
+        // Slot entry lookup (note feeds the Excel title).
+        _slotEntry: function (slot) {
+            var found = null;
+            (this.slots || []).forEach(function (s) {
+                if (s.slot === slot) found = s;
+            });
+            return found;
+        },
+
+        // Screen KPI combos (netted rolled totals, screws inside base),
+        // rounded to whole USD for the Excel summary line.
+        _planCombos: function () {
+            var totals = {};
+            (this.treeGroups || []).forEach(function (g) {
+                var net = 0.0;
+                (g.items || []).forEach(function (it) {
+                    net += parseFloat(it.rolled_total_usd) || 0.0;
+                });
+                totals[g.key] = net;
+            });
+            var base = (totals.base || 0) + (totals.screws || 0);
+            var outdoor = totals.outdoor || 0;
+            var seat = totals.seat || 0;
+            return {
+                full: Math.round(base + outdoor + seat),
+                outdoor: Math.round(base + outdoor),
+                seat: Math.round(base + seat),
+            };
+        },
+
         _onExportTree: function () {
             if (!this.summary) return;
+            var entry = this._slotEntry(this.activeSlot);
+            var planName = (entry && entry.note) ||
+                this.summary.name || '';
             this._postExcel({
-                plan_name: this.summary.name || '',
+                plan_name: planName,
                 mode: 'tree',
                 tree_rows: this._collectExportRows(),
                 kits: this.summary.kits || [],
+                combo: this._planCombos(),
                 scratch_total: this.summary.scratch_total_usd || 0,
             });
         },
