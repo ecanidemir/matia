@@ -281,54 +281,74 @@ class MatiaProductCost(models.AbstractModel):
     def _mpc_std_usd_map(self, env_sudo, pids):
         """Company-aware standard-price fallback in USD, per stock UoM.
 
-        standard_price is NOT company-dependent (verified live:
-        no ir.property rows) and is kept in TRY, so each side is
-        sourced differently:
+        standard_price IS company-dependent (ir.property rows per
+        company; verified live: product 2039 holds 192.61 TRY for
+        TR vs 30.0 USD for US). Each side therefore pins its read
+        with force_company:
 
-        - TR side: standard_price (TRY), converted to USD with the
-          TR-company USD rate of the estimated last-change day.
-          The day is estimated from stock valuation because
-          standard_price has no history table and product write
-          dates are unreliable (variant write_date always mirrors
-          the last valuation layer; template write_date is
-          stale): the latest TR-company incoming (quantity > 0)
-          stock.valuation.layer whose unit_cost matches
-          standard_price within max(0.005, 1e-4 * value).
-          Base currency is TRY, so USD = TRY * rate. Products
-          with no matching TR layer fall back to the latest
-          overall TR USD rate (flagged).
-        - US side: the latest US-company incoming layer unit_cost.
-          The US company currency is USD, so no FX conversion
-          applies (only the stock/PO UoM factor, applied by the
-          caller like on the TR side).
+        - TR side: TR-company standard_price (TRY), converted to
+          USD with the TR-company USD rate of the estimated
+          last-change day. The day is estimated from stock
+          valuation because standard_price has no history table
+          and product write dates are unreliable (variant
+          write_date always mirrors the last valuation layer;
+          template write_date is stale): the latest TR-company
+          incoming (quantity > 0) stock.valuation.layer whose
+          unit_cost matches the TR standard_price within
+          max(0.005, 1e-4 * value). Base currency is TRY, so
+          USD = TRY * rate. Products with no matching TR layer
+          fall back to the latest overall TR USD rate (flagged).
+        - US side: US-company standard_price, read with
+          force_company=US. The US company currency is USD, so
+          no FX conversion applies (only the stock/PO UoM
+          factor, applied by the caller like on the TR side).
+          The month-year shown is the latest US-company
+          incoming layer when one exists, otherwise blank.
 
         @param env_sudo: sudo environment.
         @param pids: product.product IDs.
         @return: {pid: {'std_tr_usd': float, 'std_tr_date': str
             (month-year of the TR rate used), 'std_tr_latest':
             bool (True when the fallback latest TR rate was used),
-            'std_us_usd': float (0.0 when the product has no US
-            incoming layer), 'std_us_date': str (month-year of the
-            latest US layer)}}. All USD values are per stock UoM.
+            'std_us_usd': float (0.0 when the US company holds
+            no standard_price), 'std_us_date': str (month-year
+            of the latest US layer, '' when the product has no
+            US incoming layer)}}. All USD values are per stock
+            UoM.
         """
         out = {}
         pids = [p for p in (pids or []) if p]
         if not pids:
             return out
         Product = env_sudo['product.product']
-        stds = {}
-        for pr in Product.browse(pids).read(['standard_price']):
+        stds_tr = {}
+        for pr in Product.with_context(
+                force_company=_MPP_TR_COMPANY_ID).browse(
+                    pids).read(['standard_price']):
             try:
-                stds[pr['id']] = float(
+                stds_tr[pr['id']] = float(
                     pr.get('standard_price') or 0.0)
             except (TypeError, ValueError):
-                stds[pr['id']] = 0.0
-        live = {pid: std for pid, std in stds.items() if std > 0}
+                stds_tr[pr['id']] = 0.0
+        stds_us = {}
+        for pr in Product.with_context(
+                force_company=_MPP_US_COMPANY_ID).browse(
+                    pids).read(['standard_price']):
+            try:
+                stds_us[pr['id']] = float(
+                    pr.get('standard_price') or 0.0)
+            except (TypeError, ValueError):
+                stds_us[pr['id']] = 0.0
+        live = {pid: std for pid, std in stds_tr.items()
+                if std > 0}
+        live_us = {pid for pid, std in stds_us.items()
+                   if std > 0}
         # One read for both companies; layers arrive newest-first
         # per product so the first hit per side wins.
-        if live:
+        layered = list(set(live) | live_us)
+        if layered:
             layers = env_sudo['stock.valuation.layer'].search_read(
-                [('product_id', 'in', list(live)),
+                [('product_id', 'in', layered),
                  ('quantity', '>', 0)],
                 ['product_id', 'unit_cost', 'create_date',
                  'company_id'],
@@ -340,7 +360,8 @@ class MatiaProductCost(models.AbstractModel):
         for lay in layers:
             _lp = lay.get('product_id')
             pid = _lp[0] if _lp else False
-            if not pid or pid not in live:
+            if not pid or (pid not in live
+                           and pid not in live_us):
                 continue
             _lc = lay.get('company_id')
             comp = _lc[0] if _lc else False
@@ -357,7 +378,7 @@ class MatiaProductCost(models.AbstractModel):
                 # US company currency is USD: no FX conversion.
                 us_latest[pid] = (cost, dt.date())
             elif comp == _MPP_TR_COMPANY_ID and \
-                    pid not in tr_match:
+                    pid in live and pid not in tr_match:
                 std = live[pid]
                 if abs(cost - std) <= max(0.005, 1e-4 * abs(std)):
                     tr_match[pid] = dt.date()
@@ -379,7 +400,7 @@ class MatiaProductCost(models.AbstractModel):
                     continue
         rate_points.sort(key=lambda t: t[0], reverse=True)
         for pid in pids:
-            std = stds.get(pid, 0.0)
+            std = stds_tr.get(pid, 0.0)
             tr_usd, tr_date, tr_latest = 0.0, '', False
             if std > 0 and rate_points:
                 tgt = tr_match.get(pid)
@@ -393,9 +414,11 @@ class MatiaProductCost(models.AbstractModel):
                 tr_usd = std * rate
                 tr_date = _mpc_month_year(rdate)
             us_usd, us_date = 0.0, ''
-            if pid in us_latest:
-                us_usd = us_latest[pid][0]
-                us_date = _mpc_month_year(us_latest[pid][1])
+            if stds_us.get(pid, 0.0) > 0:
+                us_usd = stds_us[pid]
+                if pid in us_latest:
+                    us_date = _mpc_month_year(
+                        us_latest[pid][1])
             out[pid] = {'std_tr_usd': tr_usd, 'std_tr_date': tr_date,
                         'std_tr_latest': tr_latest,
                         'std_us_usd': us_usd, 'std_us_date': us_date}
@@ -779,10 +802,10 @@ class MatiaProductCost(models.AbstractModel):
         """Copy the location-side standard USD into corrected.
 
         The source side follows the row location (see
-        _mpc_std_usd_map): US rows copy the latest US-company
-        incoming layer cost (already USD), TR rows copy
-        standard_price converted at the estimated last-change
-        day rate. Manufactured/kit products take no corrected
+        _mpc_std_usd_map): US rows copy the US-company
+        standard_price (already USD), TR rows copy the
+        TR-company standard_price converted at the estimated
+        last-change day rate. Manufactured/kit products take no corrected
         price; rows without a location or without a usable side
         value are reported as skipped (same guard as the
         single-row save).
