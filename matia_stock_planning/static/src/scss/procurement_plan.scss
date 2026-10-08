@@ -135,75 +135,34 @@
         font-weight: 600;
     }
 
-    // Fill bar under the step tabs: one N per kit group + single
-    // Apply. Labels reuse the group-row colors from stock_planning.scss.
-    .mpp-fill-bar {
-        display: flex;
-        align-items: stretch;
-        gap: 0.6rem;
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-top: 0;
-        border-radius: 0 0 10px 10px;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
-        padding: 0.6rem 0.75rem;
-        margin-bottom: 0.75rem;
+    // Plan cost header: same KPI + combo cards as the Product Cost
+    // page (shared .msp-kpi-card / .mpc-combo-box styles apply via the
+    // common scope). Each of the 4 group cards holds its N input below
+    // the totals, so the old standalone fill bar is gone.
+    .mpp-cost-kpi-grid .msp-kpi-card {
         flex-wrap: wrap;
+
+        .kpi-info {
+            flex: 1 1 auto;
+        }
+
+        .mpp-fill-n {
+            flex: 1 1 100%;
+            margin-top: 0.45rem;
+            text-align: center;
+            font-weight: 700;
+        }
     }
-    .mpp-fill-item {
+    .mpp-cost-apply {
         display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        min-width: 110px;
-        flex: 1 1 0;
-        border-radius: 8px;
-        border: 1px solid #e2e8f0;
-        padding: 0.35rem 0.5rem 0.3rem;
-    }
-    .mpp-fill-item.fill-base {
-        background-color: #eff6ff;
-        border-color: #bfdbfe;
-    }
-    .mpp-fill-item.fill-outdoor {
-        background-color: #ecfdf5;
-        border-color: #a7f3d0;
-    }
-    .mpp-fill-item.fill-seat {
-        background-color: #faf5ff;
-        border-color: #e9d5ff;
-    }
-    .mpp-fill-item.fill-screws {
-        background-color: #f8fafc;
-        border-color: #cbd5e1;
-    }
-    .mpp-fill-item .mpp-fill-n {
-        width: 100%;
-        margin: 0;
-        text-align: center;
-        font-weight: 700;
-    }
-    .mpp-fill-label {
-        margin-top: 0.2rem;
-        text-align: center;
-        font-size: 0.78rem;
-        font-weight: 700;
-    }
-    .mpp-fill-item.fill-base .mpp-fill-label {
-        color: #1e40af;
-    }
-    .mpp-fill-item.fill-outdoor .mpp-fill-label {
-        color: #065f46;
-    }
-    .mpp-fill-item.fill-seat .mpp-fill-label {
-        color: #6b21a8;
-    }
-    .mpp-fill-item.fill-screws .mpp-fill-label {
-        color: #334155;
-    }
-    .mpp-btn-needfill-all {
-        align-self: center;
-        font-weight: 700;
-        white-space: nowrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.6rem;
+        margin: 0.5rem 0 0.75rem;
+
+        span {
+            font-size: 0.75rem;
+        }
     }
 
     // Slot bar under the header: study selector 0-9 + save.
@@ -425,7 +384,7 @@
     }
 
     /* Product Cost combos: 3 boxes above the cost table (base already
-     * includes screws; only rendered under .o_matia_product_cost). */
+     * includes screws; rendered on the Cost page and the Plan header). */
     .mpc-combo-row {
         display: flex;
         flex-wrap: wrap;

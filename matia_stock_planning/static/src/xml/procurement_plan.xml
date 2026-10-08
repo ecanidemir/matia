@@ -55,41 +55,20 @@
                 </li>
             </ul>
 
-            <!-- TAB FILL BAR: one N per kit group + single Apply.
-                 Values persist here (outside the re-rendered tree). -->
-            <div class="mpp-fill-bar" data-pane="1">
-                <div class="mpp-fill-item fill-base">
-                    <input type="number" min="0" value="50"
-                        class="form-control form-control-sm mpp-fill-n"
-                        data-group="base"/>
-                    <span class="mpp-fill-label">Base</span>
-                </div>
-                <div class="mpp-fill-item fill-outdoor">
-                    <input type="number" min="0" value="50"
-                        class="form-control form-control-sm mpp-fill-n"
-                        data-group="outdoor"/>
-                    <span class="mpp-fill-label">Outdoor</span>
-                </div>
-                <div class="mpp-fill-item fill-seat">
-                    <input type="number" min="0" value="50"
-                        class="form-control form-control-sm mpp-fill-n"
-                        data-group="seat"/>
-                    <span class="mpp-fill-label">Seat</span>
-                </div>
-                <div class="mpp-fill-item fill-screws">
-                    <input type="number" min="0" value="50"
-                        class="form-control form-control-sm mpp-fill-n"
-                        data-group="screws"/>
-                    <span class="mpp-fill-label">Screws</span>
-                </div>
-                <button type="button" class="btn btn-secondary btn-sm mpp-btn-needfill-all"
-                    title="Fill Needed with N locally for all four groups, then press Rebuild to apply">
-                    <i class="fa fa-magic mr-1"></i>Apply
-                </button>
-            </div>
-
             <!-- TAB 1: single-page plan (quantities + tree + cost) -->
             <div class="mpp-pane" data-pane="1">
+                <!-- Live 1-device-set cost per group (same cards as the
+                     Product Cost page; each card holds its group N input).
+                     Costs are plan-independent (live purchase data). -->
+                <div class="msp-kpi-grid mpp-cost-kpi-grid mt-2"/>
+                <div class="mpc-combo-row mpp-cost-combo-row mt-2"/>
+                <div class="mpp-cost-apply">
+                    <span class="text-muted">Fill Needed with N per group, then press Rebuild to apply.</span>
+                    <button type="button" class="btn btn-secondary btn-sm mpp-btn-needfill-all"
+                        title="Fill Needed with N locally for all four groups, then press Rebuild to apply">
+                        <i class="fa fa-magic mr-1"></i>Apply
+                    </button>
+                </div>
                 <div class="msp-table-card mt-2">
                     <div class="msp-table-search">
                         <div class="search-input-box">

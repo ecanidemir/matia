@@ -60,8 +60,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             // Study slots 0-9 (persisted on the plan record).
             this.slots = [];
             this.activeSlot = 0;
-            // Per-group auto-fill targets (Plan group headers).
+            // Per-group auto-fill targets (Cost card inputs).
             this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
+            // Live 1-device-set cost per kit group (same source as the
+            // Product Cost page). Rendered as KPI cards with the N
+            // inputs inside, combos below.
+            this.costData = null;
+            this.costLoaded = false;
             this.activeTab = 1;
             this.supSummary = null;
             this.pendingRfqSeller = null;
@@ -73,6 +78,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return Promise.all([
                 this._super.apply(this, arguments),
                 this._fetchStartup(),
+                this._fetchCost(),
             ]);
         },
 
@@ -81,6 +87,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return this._super.apply(this, arguments).then(function () {
                 self._showTab(1);
                 self._renderTree();
+                self._renderCostKpis();
                 self._renderSlotBar();
             });
         },
@@ -120,14 +127,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     this.classList.add('d-none');
                 }
             });
-            this.$('.mpp-fill-bar').each(function () {
-                var t = parseInt(this.dataset.pane, 10) || 1;
-                if (t === n) {
-                    this.classList.remove('d-none');
-                } else {
-                    this.classList.add('d-none');
-                }
-            });
+            // Cost cards live inside pane 1, so they follow the pane.
             if (n === 1) this._renderTree();
             if (n === 2) this._renderSup();
         },
@@ -160,6 +160,88 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return this._rpcPlan('get_startup_tree').then(function (res) {
                 self._applySummary(res);
             });
+        },
+
+        _rpcCost: function (method, args) {
+            return this._rpc({
+                model: 'matia.product.cost',
+                method: method,
+                args: args || [],
+            });
+        },
+
+        // Live group costs for the Plan header cards (same RPC the
+        // Product Cost page uses; plan-independent live purchase data).
+        // Both pages are admin-only, so the cross-model call is safe.
+        _fetchCost: function () {
+            var self = this;
+            return this._rpcCost('get_cost_tree', []).then(function (res) {
+                // Keep typed-but-unapplied N values across refreshes.
+                self.$('.mpp-fill-n[data-group]').each(function () {
+                    var k = this.dataset.group;
+                    var n = parseInt(this.value, 10);
+                    if (k && !isNaN(n) && n >= 0) self.fillN[k] = n;
+                });
+                self.costData = res || {groups: [], combos: {}};
+                self.costLoaded = true;
+                // NOTE: willStart runs before mount (no $el yet).
+                if (self.$el) self._renderCostKpis();
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        // Same KPI + combo cards as the Product Cost page, with the
+        // per-group N input inside each of the 4 group cards. Inputs
+        // keep the .mpp-fill-n class, so _onNeedFillAll works unchanged.
+        // Runs only on cost fetch (never in _renderTree), so typing
+        // never loses focus or resets.
+        _renderCostKpis: function () {
+            if (!this.costLoaded || !this.costData || !this.$el) return;
+            var self = this;
+            var icons = {base: 'fa-cube', outdoor: 'fa-leaf',
+                seat: 'fa-user', screws: 'fa-wrench'};
+            var html = '';
+            (this.costData.groups || []).forEach(function (g) {
+                var n = self.fillN[g.key] !== undefined ?
+                    self.fillN[g.key] : 50;
+                html += '<div class="msp-kpi-card kpi-' + g.key + '">' +
+                    '<div class="kpi-info">' +
+                    '<div class="kpi-title">' + (g.label || g.title) +
+                    '</div>' +
+                    '<div class="kpi-value">$' +
+                    self._fmtNum(g.set_total, 2) + '</div>' +
+                    '<div class="kpi-sub">' + g.items.length +
+                    ' parts &middot; 1-device set</div>' +
+                    '</div>' +
+                    '<div class="kpi-icon"><i class="fa ' +
+                    (icons[g.key] || 'fa-cube') + '"></i></div>' +
+                    '<input type="number" min="0" value="' + n + '" ' +
+                    'class="form-control form-control-sm mpp-fill-n" ' +
+                    'data-group="' + g.key + '" ' +
+                    'title="Needed quantity for this group, then Apply"/>' +
+                    '</div>';
+            });
+            this.$('.mpp-cost-kpi-grid').html(html);
+            var c = this.costData.combos || {};
+            var boxes = [
+                ['Full Set', 'Base + Screws + Outdoor + Seat',
+                    c.full, 'mpc-combo-full'],
+                ['Base + Outdoor', 'Base + Screws + Outdoor',
+                    c.base_outdoor, ''],
+                ['Base + Seat', 'Base + Screws + Seat',
+                    c.base_seat, ''],
+            ];
+            var combo = '';
+            boxes.forEach(function (b) {
+                combo += '<div class="mpc-combo-box ' + b[3] + '">' +
+                    '<div class="mpc-combo-title">' + b[0] + '</div>' +
+                    '<div class="mpc-combo-sub">' + b[1] + '</div>' +
+                    '<div class="mpc-combo-value">$' +
+                    self._fmtNum(b[2], 2) + '</div>' +
+                    '</div>';
+            });
+            this.$('.mpp-cost-combo-row').html(combo);
         },
 
         // Shared summary intake (startup + recalculate + need-save):
@@ -391,6 +473,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             [pid, self.needMap, true]).then(function (res) {
                             self._applySummary(res);
                             self._renderTree();
+                            self._fetchCost();
                             self._updateRebuildBtn();
                             self.displayNotification({
                                 title: _t('Rebuilt'),
@@ -456,8 +539,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._markNeedsDirty();
         },
 
-        // Fill bar (above the Plan tab): Needed = N (gross want) for
-        // every top in each group, applied LOCALLY (no server call).
+        // Cost-card N inputs (inside the Plan header cards): Needed = N
+        // (gross want) for every top in each group, applied LOCALLY
+        // (no server call).
         // Press Rebuild afterwards to net stock and recalculate.
         // Each of the four inputs is read independently; an
         // empty/invalid input leaves that group untouched. Stock is
@@ -513,8 +597,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // Fill-bar visibility follows the active tab (groups only
-        // make sense on the Plan tab; see _showTab).
+        // Cost cards live inside pane 1 (hidden with the pane).
 
         _fetchSupSummary: function () {
             var self = this;
