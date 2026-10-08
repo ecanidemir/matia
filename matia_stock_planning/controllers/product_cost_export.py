@@ -23,8 +23,9 @@ _PLAN = [('Base', ['base', 'screws']),
          ('Seat', ['seat'])]
 _COLUMNS = ['Group', 'Code', 'Part', 'Usage Qty', 'UoM',
             'Unit USD', 'BOM Cost USD']
-# Width caps per column (Group, Code, Part, Usage, UoM, Unit, BOM).
-_WIDTH_CAPS = [14, 20, 60, 12, 10, 14, 16]
+# Width caps per column (Group, Code, Part, Usage, UoM, Unit, BOM,
+# + combo summary overflow col).
+_WIDTH_CAPS = [14, 20, 60, 12, 10, 14, 16, 12]
 
 
 class MatiaProductCostController(http.Controller):
@@ -47,13 +48,19 @@ class MatiaProductCostController(http.Controller):
         by_key = {g.get('key'): g for g in groups if g.get('key')}
 
         if not xlsxwriter:
+            def _usd0(val):
+                """Rounded USD display, no cents (e.g. $4,598)."""
+                try:
+                    return '$%s' % '{:,.0f}'.format(float(val or 0))
+                except (TypeError, ValueError):
+                    return '$0'
+
             lines = ['\ufeffProduct Cost - 1-device set (USD)']
-            lines.append('Base (incl. screws): %s | Full: %s | '
-                         'Base+Outdoor: %s | Base+Seat: %s' % (
-                             combos.get('base', 0),
-                             combos.get('full', 0),
-                             combos.get('base_outdoor', 0),
-                             combos.get('base_seat', 0)))
+            lines.append('Full: %s | Base+Outdoor: %s | Base+Seat: %s'
+                         % (
+                             _usd0(combos.get('full')),
+                             _usd0(combos.get('base_outdoor')),
+                             _usd0(combos.get('base_seat'))))
             lines.append(';'.join(_COLUMNS))
             for label, keys in _PLAN:
                 for key in keys:
@@ -93,6 +100,8 @@ class MatiaProductCostController(http.Controller):
             {'border': 1, 'align': 'center', 'num_format': '#,##0.00'})
         usd_fmt = workbook.add_format(
             {'border': 1, 'num_format': '"$"#,##0.00'})
+        usd0_fmt = workbook.add_format(
+            {'num_format': '"$"#,##0'})
         sub_label_fmt = workbook.add_format(
             {'bold': True, 'bg_color': '#dbeafe', 'border': 1})
         sub_usd_fmt = workbook.add_format(
@@ -107,24 +116,31 @@ class MatiaProductCostController(http.Controller):
         row = 0
         ws.write(row, 0, 'Product Cost - 1-device set (USD)', title_fmt)
         row += 1
-        ws.write(row, 0, 'Base (incl. screws): %.2f | Full: %.2f | '
-                         'Base+Outdoor: %.2f | Base+Seat: %.2f' % (
-                             combos.get('base', 0) or 0,
-                             combos.get('full', 0) or 0,
-                             combos.get('base_outdoor', 0) or 0,
-                             combos.get('base_seat', 0) or 0))
+        combo_pairs = [
+            ('Full:', combos.get('full', 0) or 0),
+            ('Base+Outdoor:', combos.get('base_outdoor', 0) or 0),
+            ('Base+Seat:', combos.get('base_seat', 0) or 0),
+        ]
+        for idx, (lab, val) in enumerate(combo_pairs):
+            ws.write(row, idx * 2, lab)
+            ws.write_number(row, idx * 2 + 1, float(val), usd0_fmt)
         row += 2
         header_row = row
         ws.write_row(header_row, 0, _COLUMNS, header_fmt)
         row += 1
-        # Auto-width tracking (header seeds the minimum).
-        widths = [len(c) for c in _COLUMNS]
+        # Auto-width tracking (header seeds the minimum; 8th slot is
+        # the combo-summary overflow column).
+        widths = [len(c) for c in _COLUMNS] + [0]
 
         def _bump(col, val):
             """Track the widest display value per column."""
             if val is None:
                 return
             widths[col] = max(widths[col], len(str(val)))
+
+        for idx, (lab, val) in enumerate(combo_pairs):
+            _bump(idx * 2, lab)
+            _bump(idx * 2 + 1, '$%.0f' % float(val))
 
         spans = {}  # label -> list of (first_excel_row, last_excel_row)
         filter_end = header_row
