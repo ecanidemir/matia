@@ -202,19 +202,29 @@ class MatiaProcurementPlanController(http.Controller):
     def _cost_suffix(data):
         return '_Cost' if data.get('withCost') else ''
 
+    # Sheet order is always: Product Cost (if selected) first,
+    # then Products, then Suppliers. Unselected sheets are skipped.
+    COST_SHEET_NAME = 'Product Cost'
+    PRODUCTS_SHEET_NAME = 'Combined Plan - Products'
+    SUPPLIERS_SHEET_NAME = 'Combined Plan - Suppliers'
+    SINGLE_PRODUCTS_SHEET_NAME = 'Plan - Products'
+    SINGLE_SUPPLIERS_SHEET_NAME = 'Plan - Suppliers'
+
     def _append_cost_sheet(self, workbook, data):
         if not data.get('withCost'):
             return
         combos, groups = self._live_cost()
-        ws = workbook.add_worksheet('Cost')
+        ws = workbook.add_worksheet(self.COST_SHEET_NAME)
         write_cost_sheet(workbook, ws, combos, groups)
 
-    def _append_cost_csv(self, lines, data):
+    def _prepend_cost_csv(self, lines, data):
         if not data.get('withCost'):
             return
         combos, groups = self._live_cost()
-        lines.append('')
-        lines.extend(cost_csv_lines(combos, groups))
+        new = cost_csv_lines(combos, groups)
+        new.append('')
+        new.extend(lines)
+        lines[:] = new
 
     def _export_cost_only(self, data):
         """Cost sheet alone (popup: only Product Cost checked)."""
@@ -234,7 +244,7 @@ class MatiaProcurementPlanController(http.Controller):
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         combos, groups = self._live_cost()
-        ws = workbook.add_worksheet('Cost')
+        ws = workbook.add_worksheet(self.COST_SHEET_NAME)
         write_cost_sheet(workbook, ws, combos, groups)
         workbook.close()
         output.seek(0)
@@ -279,7 +289,7 @@ class MatiaProcurementPlanController(http.Controller):
         if not xlsxwriter:
             lines = _supplier_csv_lines(
                 plan_name, groups, total, kits, scratch_total)
-            self._append_cost_csv(lines, data)
+            self._prepend_cost_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Supplier_Preview%s_%s.csv' % (
                 self._cost_suffix(data),
@@ -293,10 +303,10 @@ class MatiaProcurementPlanController(http.Controller):
                 ])
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        self._append_cost_sheet(workbook, data)
         ws = workbook.add_worksheet('Supplier Preview')
         self._write_supplier_sheet(workbook, ws, plan_name, groups,
                                    total, kits, scratch_total)
-        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
         filename = 'Supplier_Preview%s_%s.xlsx' % (
@@ -376,7 +386,7 @@ class MatiaProcurementPlanController(http.Controller):
             lines.extend(_supplier_csv_lines(
                 sup.get('plan_name', plan_name), groups, total,
                 sup_kits, sup_scratch))
-            self._append_cost_csv(lines, data)
+            self._prepend_cost_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Plan_Supplier%s_%s.csv' % (
                 self._cost_suffix(data),
@@ -390,14 +400,16 @@ class MatiaProcurementPlanController(http.Controller):
                 ])
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-        ws = workbook.add_worksheet('Plan')
+        self._append_cost_sheet(workbook, data)
+        ws = workbook.add_worksheet(
+            self.SINGLE_PRODUCTS_SHEET_NAME)
         self._write_plan_sheet(workbook, ws, plan_name, scratch_total,
                                rows, combo)
-        ws2 = workbook.add_worksheet('Suppliers')
+        ws2 = workbook.add_worksheet(
+            self.SINGLE_SUPPLIERS_SHEET_NAME)
         self._write_supplier_sheet(
             workbook, ws2, sup.get('plan_name', plan_name), groups,
             total, sup_kits, sup_scratch)
-        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
         filename = 'Plan_Supplier%s_%s.xlsx' % (
@@ -425,7 +437,7 @@ class MatiaProcurementPlanController(http.Controller):
         if not xlsxwriter:
             lines = _plan_csv_lines(
                 plan_name, scratch_total, rows, combo)
-            self._append_cost_csv(lines, data)
+            self._prepend_cost_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Plan%s_%s.csv' % (
                 self._cost_suffix(data),
@@ -439,10 +451,11 @@ class MatiaProcurementPlanController(http.Controller):
                 ])
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-        ws = workbook.add_worksheet('Plan')
+        self._append_cost_sheet(workbook, data)
+        ws = workbook.add_worksheet(
+            self.SINGLE_PRODUCTS_SHEET_NAME)
         self._write_plan_sheet(workbook, ws, plan_name, scratch_total,
                                rows, combo)
-        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
         filename = 'Plan%s_%s.xlsx' % (
@@ -721,7 +734,7 @@ class MatiaProcurementPlanController(http.Controller):
                 for v in s_est:
                     stotal.append('%d' % v)
                 lines.append(';'.join(stotal))
-            self._append_cost_csv(lines, data)
+            self._prepend_cost_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Plan_Combined%s_%s.csv' % (
                 self._cost_suffix(data),
@@ -735,6 +748,7 @@ class MatiaProcurementPlanController(http.Controller):
                 ])
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        self._append_cost_sheet(workbook, data)
         title_fmt = workbook.add_format({'bold': True, 'font_size': 14})
         header_fmt = workbook.add_format(
             {'bold': True, 'bg_color': '#7c2d12', 'font_color': '#ffffff',
@@ -760,7 +774,7 @@ class MatiaProcurementPlanController(http.Controller):
         # Combined matrix sheet: fixed base columns plus one Est. USD
         # column per slot (slot description as header, slot pastel).
         mC = {name: idx for idx, name in enumerate(mheaders)}
-        ws = workbook.add_worksheet('Combined')
+        ws = workbook.add_worksheet(self.PRODUCTS_SHEET_NAME)
         slot_fmts = []
         for p in plans:
             color = SLOT_COLORS[p['slot'] % len(SLOT_COLORS)]
@@ -790,7 +804,7 @@ class MatiaProcurementPlanController(http.Controller):
                 return
             mwidths[col] = max(mwidths[col], len(str(val)))
 
-        ws.write(0, 0, 'Combined Plan (USD)', title_fmt)
+        ws.write(0, 0, 'Combined Plan - Products (USD)', title_fmt)
         hrow = 2
         ws.write_row(hrow, 0, mheaders, header_fmt)
         for i, title in enumerate(slot_titles):
@@ -854,8 +868,9 @@ class MatiaProcurementPlanController(http.Controller):
         if with_supplier:
             locs, blocks, present = _combined_supplier_table(plans)
             sheaders = ['Supplier', 'Location'] + slot_titles
-            ws2 = workbook.add_worksheet('Suppliers')
-            ws2.write(0, 0, 'Suppliers (USD)', title_fmt)
+            ws2 = workbook.add_worksheet(self.SUPPLIERS_SHEET_NAME)
+            ws2.write(0, 0, 'Combined Plan - Suppliers (USD)',
+                      title_fmt)
             shrow = 2
             ws2.write_row(shrow, 0, sheaders, header_fmt)
             for i, title in enumerate(slot_titles):
@@ -916,7 +931,6 @@ class MatiaProcurementPlanController(http.Controller):
             ws2.freeze_panes(shrow + 1, 0)
             ws2.set_landscape()
             ws2.fit_to_pages(1, 0)
-        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
         prefix = 'Plan_Combined_Supplier' if with_supplier \
