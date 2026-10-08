@@ -439,8 +439,18 @@ def _producible_of(r, avail):
     return _fnum(p)
 
 
-def _est_usd(r, row_net):
-    """_estUsd port: rolled_usd x (order_qty when set, else row net)."""
+def _est_usd(r, row_net, level=0):
+    """_estUsd port: level-0 rows use the retained kit share (the same
+    cents as the screen cards and the supplier grand total); sub-rows
+    and pre-rebuild payloads keep rolled_usd x (order_qty or row net).
+    """
+    if not level:
+        try:
+            ret = float(r.get('retained_total_usd') or 0)
+        except (TypeError, ValueError):
+            ret = 0.0
+        if ret > 0:
+            return ret
     try:
         ru = float(r.get('rolled_usd') or 0)
     except (TypeError, ValueError):
@@ -520,7 +530,7 @@ def _port_row(r, group, level, targets=None, gkey=None):
         'date': r.get('last_date') or '',
         'rolled_usd': r.get('rolled_usd') or '',
         'scratch_usd': r.get('scratch_usd') or '',
-        'est_usd': _jsnum(_est_usd(r, net)),
+        'est_usd': _jsnum(_est_usd(r, net, level)),
     }
 
 

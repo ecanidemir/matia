@@ -1001,13 +1001,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return false;
         },
 
-        _sortItems: function (rows) {
+        _sortItems: function (rows, level) {
             var k = this.treeSort.key, d = this.treeSort.dir;
             var num = {avail: 1, tr: 1, us: 1, need: 1,
                 producible: 1, planned: 1, est: 1};
             var self = this;
+            var lvl = level || 0;
             rows.sort(function (a, b) {
-                var av = self._sortVal(a, k), bv = self._sortVal(b, k);
+                var av = self._sortVal(a, k, lvl),
+                    bv = self._sortVal(b, k, lvl);
                 if (num[k]) return (av - bv) * d;
                 av = (av || '').toString().toLowerCase();
                 bv = (bv || '').toString().toLowerCase();
@@ -1018,7 +1020,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return rows;
         },
 
-        _sortVal: function (r, k) {
+        _sortVal: function (r, k, level) {
             if (k === 'code') return (r.code || '') + ' ' + (r.name || '');
             if (k === 'tr') return parseFloat(r.avail_tr) || 0;
             if (k === 'us') return parseFloat(r.avail_us) || 0;
@@ -1026,7 +1028,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (k === 'need') return parseFloat(r.need) || 0;
             if (k === 'producible') return this._producible(r);
             if (k === 'planned') return this._rowNet(r);
-            if (k === 'est') return this._estUsd(r);
+            if (k === 'est') return this._estUsd(r, level);
             return 0;
         },
 
@@ -1196,7 +1198,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return ' title="' + t + '"';
         },
 
-        _estUsd: function (r) {
+        _estUsd: function (r, level) {
+            // Level-0 rows show the retained kit share (same cents as
+            // the screen cards and the supplier grand total); sub-rows
+            // and pre-rebuild rows keep rolled_usd x qty.
+            var ret = parseFloat(r.retained_total_usd);
+            if ((!level || level === 0) && !isNaN(ret) && ret > 0) {
+                return ret;
+            }
             var qty = (r.order_qty !== undefined && r.order_qty !== null &&
                 r.order_qty !== '') ? parseFloat(r.order_qty) || 0 :
                 this._rowNet(r);
@@ -1332,7 +1341,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 this._fmtNum(r.scratch_usd, 2) + '</td>' +
                 '<td class="text-right"' +
                 this._estTitle(r, level, openQ) + '><strong>' +
-                this._fmtNum(this._estUsd(r), 2) + '</strong></td>' +
+                this._fmtNum(this._estUsd(r, level), 2) + '</strong></td>' +
                 '</tr>';
             return html;
         },
@@ -1542,7 +1551,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         usd: r.last_usd || '', date: r.last_date || '',
                         rolled_usd: r.rolled_usd || '',
                         scratch_usd: r.scratch_usd || '',
-                        est_usd: self._estUsd(r),
+                        est_usd: self._estUsd(r, level),
                         breakdown: r.top_breakdown || '',
                     });
                     var cached = self.subCache[uid];
