@@ -738,6 +738,9 @@ class MatiaProductCost(models.AbstractModel):
                         it['route'], 'Unknown')
         items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
         return {
+            # TEMP-REV-MARKER: proves which revision staging runs
+            # (remove after deploy verification).
+            'rev': '5d0e831-fx1',
             'items': items,
             'count': len(items),
             'override_count': sum(
