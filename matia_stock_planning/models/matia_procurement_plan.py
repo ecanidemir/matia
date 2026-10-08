@@ -145,6 +145,145 @@ def _mpp_line_uom_factor(line):
         return 1.0
 
 
+def _mpp_line_own_usd(line, ovr_map):
+    """Effective own USD per line UoM (single price rule).
+
+    THE price rule shared by the Plan totals and the supplier summary:
+    a manual corrected USD price wins (never on manufactured lines,
+    whose own price is always 0), else the last-buy USD snapshot
+    normalized to the line UoM, else 0.0. Both callers use this, so a
+    Plan card and a supplier row for the same line can never disagree
+    on the unit price.
+
+    @param line: matia.procurement.plan.line record (or False).
+    @param ovr_map: _mpp_price_overrides() map (or {}).
+    @return: float own USD per line UoM.
+    """
+    _ov = (ovr_map or {}).get(
+        line.product_id.id, {}) if line else {}
+    try:
+        _oprice = float(_ov.get('price') or 0.0)
+    except (TypeError, ValueError):
+        _oprice = 0.0
+    # Overrides never apply to manufactured lines: their own price is
+    # always 0, cost rolls up from the components.
+    if _oprice > 0 and (not line or line.route_type != 'make'):
+        return _oprice
+    if line and line.route_type in (
+            'buy', 'subcontract', 'unknown'):
+        try:
+            return float(line.last_price_usd or 0.0) * \
+                _mpp_line_uom_factor(line)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _mpp_po_cents(own_per_unit, qty):
+    """PO-value cents for one line (single rounding rule).
+
+    THE rounding rule shared by the Plan totals and the supplier
+    summary: round-half-even to 2 decimals (exactly the old
+    ``round(own * qty, 2)`` expression), then integer cents. Both
+    displayed totals are built from these identical cents, so the
+    Plan Full Set and the supplier grand total always agree to the
+    cent (unknown-route lines excepted, see get_supplier_summary).
+
+    @param own_per_unit: effective own USD per line UoM (see
+        _mpp_line_own_usd).
+    @param qty: order quantity in the line UoM.
+    @return: int cents (>= 0 for sane inputs).
+    """
+    try:
+        _dollars = round(
+            float(own_per_unit or 0.0) * float(qty or 0.0), 2)
+    except (TypeError, ValueError):
+        return 0
+    return int(round(_dollars * 100))
+
+
+def _mpp_split_cents(total_cents, weights):
+    """Split integer cents across parents, summing EXACTLY to total.
+
+    Largest-remainder on contribution weights: every parent gets the
+    floor of its exact share, leftover cents go one by one to the
+    largest fractional parts (ties broken by parent id, so output is
+    deterministic). The returned shares always add up to
+    ``total_cents`` — no cent leaks, no cent doubles.
+
+    @param total_cents: int cents to distribute (>= 0).
+    @param weights: [(parent id, contribution float)] with at least
+        one positive contribution.
+    @return: {parent id: int cents}.
+    """
+    _items = [(pp, float(w or 0.0)) for pp, w in (weights or [])]
+    _items = [(pp, w) for pp, w in _items if w > 0]
+    if not _items or total_cents <= 0:
+        return {pp: 0 for pp, _w in _items}
+    _tot = sum(w for _pp, w in _items)
+    if _tot <= 0:
+        return {pp: 0 for pp, _w in _items}
+    _base = {}
+    _frac = []
+    _assigned = 0
+    for pp, w in _items:
+        _exact = total_cents * w / _tot
+        _b = int(math.floor(_exact))
+        _base[pp] = _b
+        _assigned += _b
+        _frac.append((_exact - _b, pp))
+    _frac.sort(key=lambda r: (-r[0], r[1]))
+    _left = total_cents - _assigned
+    _i = 0
+    while _left > 0 and _frac:
+        _base[_frac[_i % len(_frac)][1]] += 1
+        _left -= 1
+        _i += 1
+    return _base
+
+
+def _mpp_retain_push_cents(net_cents, want_w, push_w):
+    """Split net cents into (retained, pushed) want/push buckets.
+
+    Two-bucket largest remainder: each side gets its floor, the
+    leftover cent goes to the larger fraction (ties to retained, so
+    output is deterministic). The pair always adds up to exactly
+    ``net_cents``. No sentinel keys, no sorting: parent ids stay
+    plain ints everywhere.
+
+    @param net_cents: int net cents of the row.
+    @param want_w: entry-demand weight (retained side).
+    @param push_w: total parent-contribution weight (pushed side).
+    @return: (retained cents, pushed cents).
+    """
+    try:
+        _net = int(net_cents or 0)
+    except (TypeError, ValueError):
+        return (0, 0)
+    try:
+        _w = float(want_w or 0.0)
+        _p = float(push_w or 0.0)
+    except (TypeError, ValueError):
+        _w, _p = 0.0, 0.0
+    _tot = _w + _p
+    if _net <= 0 or _tot <= 0:
+        # Nothing to push, or nowhere to push it: retain it all.
+        # (The nowhere-to-push case cannot happen for ordered lines:
+        # order > 0 implies demand > 0, hence want + push > 0.)
+        return (_net if _net > 0 else 0, 0)
+    _exact_r = _net * _w / _tot
+    _exact_p = _net * _p / _tot
+    _fr = int(math.floor(_exact_r))
+    _fp = int(math.floor(_exact_p))
+    _left = _net - _fr - _fp
+    if _left > 0:
+        if (_exact_p - _fp) > (_exact_r - _fr):
+            _fp += _left
+        else:
+            _fr += _left
+    return (_fr, _fp)
+
+
 def _mpp_stock_per_po_factor(env_sudo, stock_uom_id, po_uom_id):
     """Stock-UoM units per one purchase-UoM unit (fail-safe 1.0).
 
@@ -1938,11 +2077,18 @@ class MatiaProcurementPlan(models.Model):
         children-first. A shared child's stock is deducted per usage:
         its total net cost is split across parents proportional to
         gross contribution, net_cost(P) = order x own_eff(P) + SUM
-        over children C of net_cost(C) x contrib(P,C)/demand(C).
-        Each parent therefore carries only its gap share (stock-covered
-        material is never charged); the shares of one child always sum
-        to exactly its net cost. No plan-line reads except the own
-        line, so lineless/phantom children flow transparently.
+        over children C of the exact cent shares of the PUSHED part
+        of net_cost(C) (largest-remainder split over the parent
+        contributions, so the pushed shares always add up to exactly
+        the pushed part). Each node retains its want-attributable
+        part (entry demand share; phantoms retain nothing), each
+        parent therefore carries only its gap share (stock-covered
+        material is never charged). Integer cents make the retained
+        sums telescoping: summed over the kit tops they ALWAYS equal
+        the flat PO-value total of get_supplier_summary to the cent
+        (same _mpp_po_cents addends; unknown-route lines excepted).
+        No plan-line reads except the own line, so lineless/phantom
+        children flow transparently.
         Level-0 pools never enter (display only).
 
         @param env_sudo: sudo environment.
@@ -1951,7 +2097,11 @@ class MatiaProcurementPlan(models.Model):
         @param line_by_pid: {pid: plan line}.
         @param own_usd: callable(pid) -> own USD per line UoM.
         @param own_try: callable(pid) -> own TRY per line UoM.
-        @return: ({pid: net USD total}, {pid: net TRY total}).
+        @return: (net USD totals, net TRY totals, retained USD
+            totals, retained TRY totals), each {pid: dollars}. Net is
+            the full stock-netted gap cost shown on every row;
+            retained is the want-attributable part the Plan cards sum
+            (identical to net for pure tops).
         """
         try:
             targets = json.loads(plan.target_json or '{}')
@@ -2038,27 +2188,79 @@ class MatiaProcurementPlan(models.Model):
                     demand[c] += add
                     contrib[(p, c)] = contrib.get((p, c), 0.0) + add
         net_u, net_t = {}, {}
+        ret_u, ret_t = {}, {}
+        share_u, share_t = {}, {}
         for p in reversed(topo):
             line = line_by_pid.get(p)
             order = float(line.order_qty or 0.0) if line else 0.0
             try:
-                own_u = order * float(own_usd(p) or 0.0)
+                own_unit_u = float(own_usd(p) or 0.0)
             except Exception:
-                own_u = 0.0
+                own_unit_u = 0.0
             try:
-                own_t = order * float(own_try(p) or 0.0)
+                own_unit_t = float(own_try(p) or 0.0)
             except Exception:
-                own_t = 0.0
-            sub_u, sub_t = 0.0, 0.0
+                own_unit_t = 0.0
+            # Own PO cents (same addends as get_supplier_summary).
+            own_uc = _mpp_po_cents(own_unit_u, order)
+            own_tc = _mpp_po_cents(own_unit_t, order)
+            sub_uc = 0
+            sub_tc = 0
             for c in children.get(p, {}):
-                dmd = demand.get(c, 0.0)
-                if dmd > 0:
-                    w = contrib.get((p, c), 0.0) / dmd
-                    sub_u += w * net_u.get(c, 0.0)
-                    sub_t += w * net_t.get(c, 0.0)
-            net_u[p] = own_u + sub_u
-            net_t[p] = own_t + sub_t
-        return net_u, net_t
+                sub_uc += share_u.get((p, c), 0)
+                sub_tc += share_t.get((p, c), 0)
+            net_uc = own_uc + sub_uc
+            net_tc = own_tc + sub_tc
+            net_u[p] = net_uc / 100.0
+            net_t[p] = net_tc / 100.0
+            # Retain-vs-push buckets: the want-attributable part of
+            # this net stays on this row (it is what the Plan cards
+            # sum); only the pushed part flows upward to the parents.
+            # Buckets always partition the net exactly, so the card
+            # sums telescope to the flat PO-value total of
+            # get_supplier_summary. Phantoms retain nothing
+            # (pass-through). A row that is both an entered top and
+            # someone's component (e.g. a screw used inside a base
+            # assembly) therefore counts once: retained here, pushed
+            # parts on the parent rows.
+            _pars = [pp for pp, ch in children.items() if p in ch]
+            _push_w = 0.0
+            for pp in _pars:
+                try:
+                    _push_w += float(contrib.get((pp, p), 0.0))
+                except (TypeError, ValueError):
+                    continue
+            if btype.get(p) == 'phantom':
+                _want_w = 0.0
+            else:
+                try:
+                    _want_w = float(want.get(p, 0.0))
+                except (TypeError, ValueError):
+                    _want_w = 0.0
+            _parts_u = _mpp_retain_push_cents(
+                net_uc, _want_w, _push_w)
+            _ret_uc, _push_uc = _parts_u
+            _parts_t = _mpp_retain_push_cents(
+                net_tc, _want_w, _push_w)
+            _ret_tc, _push_tc = _parts_t
+            ret_u[p] = _ret_uc / 100.0
+            ret_t[p] = _ret_tc / 100.0
+            # Distribute only the pushed part (children-first order
+            # guarantees the net is final). Weights normalize by the
+            # total parent contribution, never by demand.
+            _wu = [(pp, contrib.get((pp, p), 0.0)) for pp in _pars]
+            _wu = [(pp, w) for pp, w in _wu if w > 0]
+            if _wu and _push_uc > 0:
+                for pp, _s in _mpp_split_cents(
+                        _push_uc, _wu).items():
+                    share_u[(pp, p)] = _s
+            _wt = [(pp, contrib.get((pp, p), 0.0)) for pp in _pars]
+            _wt = [(pp, w) for pp, w in _wt if w > 0]
+            if _wt and _push_tc > 0:
+                for pp, _s in _mpp_split_cents(
+                        _push_tc, _wt).items():
+                    share_t[(pp, p)] = _s
+        return net_u, net_t, ret_u, ret_t
 
     @api.model
     def _compute_rollup(self, env_sudo, plan):
@@ -2100,18 +2302,10 @@ class MatiaProcurementPlan(models.Model):
         visiting_try = set()
 
         def _own_usd(pid):
-            _ov = _roll_ovr.get(pid, {})
-            line = line_by_pid.get(pid)
-            # Overrides never apply to manufactured lines: their own
-            # price is always 0, cost rolls up from the components.
-            if float(_ov.get('price') or 0.0) > 0 and (
-                    not line or line.route_type != 'make'):
-                return float(_ov['price'])
-            if line and line.route_type in (
-                    'buy', 'subcontract', 'unknown'):
-                return float(line.last_price_usd or 0.0) * \
-                    _mpp_line_uom_factor(line)
-            return 0.0
+            # Single price rule (see _mpp_line_own_usd): identical to
+            # the supplier summary basis, so scratch/rolled units and
+            # PO values can never diverge on price.
+            return _mpp_line_own_usd(line_by_pid.get(pid), _roll_ovr)
 
         def _own_try(pid):
             _ov = _roll_ovr.get(pid, {})
@@ -2175,7 +2369,7 @@ class MatiaProcurementPlan(models.Model):
         # proportional contrib/demand split). Pool/producible never
         # enters the cost (display only). rolled_* stores the NET
         # figures; scratch_* keeps the zero-from-scratch units above.
-        net_u, net_t = self._mpp_net_costs(
+        net_u, net_t, ret_u, ret_t = self._mpp_net_costs(
             env_sudo, plan, children, line_by_pid, _own_usd, _own_try)
         for pid, line in line_by_pid.items():
             unit_u = _unit_usd(pid)
@@ -2194,6 +2388,11 @@ class MatiaProcurementPlan(models.Model):
                 'rolled_total_usd': ncu,
                 'rolled_try': (nct / nqty) if nqty > 0 else 0.0,
                 'rolled_total_try': nct,
+                # Retained (want-attributable) part: the Plan cards
+                # sum this, so they agree with the supplier
+                # grand total to the cent (see _mpp_net_costs).
+                'retained_total_usd': ret_u.get(pid, 0.0),
+                'retained_total_try': ret_t.get(pid, 0.0),
             })
 
         # Kit totals from entry quantities (members only, no double count:
@@ -2582,6 +2781,41 @@ class MatiaProcurementPlan(models.Model):
                 'warn': line.min_qty_warn or '',
             })
             s['cost'] += line.subtotal or 0.0
+        # Retained sums per kit (Plan cards): want-attributable parts
+        # of the kit tops, built from the same cents as the supplier
+        # grand total, so the cards agree with it to the cent. Stored
+        # per line, therefore correct on the cached view too (no
+        # rebuild needed to read them).
+        _kit_of = {}
+        try:
+            for _kit in _mpp_find_kit_boms(env_sudo):
+                for _bl in _kit['bom'].bom_line_ids:
+                    _kit_of.setdefault(_bl.product_id.id, _kit['key'])
+        except Exception:
+            _kit_of = {}
+        _ret_kits = {}
+        _ret_total = 0.0
+        _ret_total_try = 0.0
+        for line in plan.line_ids:
+            _pid = line.product_id.id
+            if _pid not in _kit_of:
+                continue
+            try:
+                _rv = float(line.retained_total_usd or 0.0)
+            except (TypeError, ValueError):
+                _rv = 0.0
+            try:
+                _rt = float(line.retained_total_try or 0.0)
+            except (TypeError, ValueError):
+                _rt = 0.0
+            _kk = _kit_of[_pid]
+            _rk = _ret_kits.setdefault(
+                _kk, {'key': _kk, 'retained_usd': 0.0,
+                      'retained_try': 0.0})
+            _rk['retained_usd'] += _rv
+            _rk['retained_try'] += _rt
+            _ret_total += _rv
+            _ret_total_try += _rt
         return {
             'plan_id': plan.id,
             'name': plan.name,
@@ -2591,6 +2825,9 @@ class MatiaProcurementPlan(models.Model):
             'total_cost': plan.total_cost,
             'groups': groups,
             'suppliers': list(suppliers.values()),
+            'retained_kits': list(_ret_kits.values()),
+            'retained_total_usd': round(_ret_total, 2),
+            'retained_total_try': round(_ret_total_try, 2),
         }
 
     # ------------------------------------------------------------------
@@ -3019,6 +3256,10 @@ class MatiaProcurementPlan(models.Model):
                     'rolled_usd': line.rolled_usd if line else 0.0,
                     'rolled_total_usd':
                         line.rolled_total_usd if line else 0.0,
+                    'retained_total_usd':
+                        line.retained_total_usd if line else 0.0,
+                    'retained_total_try':
+                        line.retained_total_try if line else 0.0,
                     'scratch_usd':
                         line.scratch_unit_usd if line else 0.0,
                     'scratch_total_usd':
@@ -3904,14 +4145,13 @@ class MatiaProcurementPlan(models.Model):
             _qty = float(line.order_qty or 0.0)
             # PO-value basis (same as the draft RFQ subtotal): own
             # last-buy USD per line UoM x order (manual corrected USD
-            # when set). Rolled (own + children) is info only, never
+            # when set). Single price + rounding rules (see
+            # _mpp_line_own_usd/_mpp_po_cents): the Plan totals are
+            # built from these identical cents, so both tabs always
+            # agree. Rolled (own + children) is info only, never
             # summed into the total.
-            if _scorr > 0:
-                _own = _scorr
-            else:
-                _own = float(line.last_price_usd or 0.0) * \
-                    _mpp_line_uom_factor(line)
-            _ptotal = round(_own * _qty, 2)
+            _own = _mpp_line_own_usd(line, _sup_ovr)
+            _ptotal = _mpp_po_cents(_own, _qty) / 100.0
             _rolled = float(line.rolled_usd or 0.0)
             # Unknown-route lines are listed for visibility but stay
             # out of the cash totals: they are not RFQ-eligible (no
@@ -4776,6 +5016,16 @@ class MatiaProcurementPlanLine(models.Model):
     rolled_total_try = fields.Float(
         digits=(16, 2),
         help='Total NET TRY gap cost for this row.')
+    retained_total_usd = fields.Float(
+        digits=(16, 2),
+        help='Want-attributable part of the NET USD gap cost (entry '
+             'demand share; pushed shares live on the parent rows). '
+             'The Plan cards sum this, so they agree with the '
+             'supplier grand total to the cent. Identical to the '
+             'rolled total for pure tops.')
+    retained_total_try = fields.Float(
+        digits=(16, 2),
+        help='Want-attributable part of the NET TRY gap cost.')
     scratch_unit_usd = fields.Float(
         digits=(16, 4),
         help='Zero-from-scratch USD unit cost: own last-buy USD price '

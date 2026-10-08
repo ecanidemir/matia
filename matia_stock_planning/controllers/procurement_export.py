@@ -525,12 +525,20 @@ def _port_row(r, group, level, targets=None, gkey=None):
 
 
 def _server_combo(tree_groups):
-    """_planCombos port: rolled_total_usd sums {full, outdoor, seat}."""
+    """_planCombos port: retained sums when present, else rolled sums.
+
+    Retained (same cents as the supplier grand total) keeps the Excel
+    Full Set identical to the screen cards; pre-rebuild payloads
+    without retained values fall back to rolled_total_usd.
+    """
     tot = {}
     for g in tree_groups or []:
         s = 0.0
         for it in g.get('items', []) or []:
-            s += _fnum(it.get('rolled_total_usd'))
+            _r = it.get('retained_total_usd')
+            if _r is None or _r == '':
+                _r = it.get('rolled_total_usd')
+            s += _fnum(_r)
         tot[g.get('key')] = s
     base = tot.get('base', 0) + tot.get('screws', 0)
     outdoor = tot.get('outdoor', 0)

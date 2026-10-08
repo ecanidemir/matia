@@ -190,6 +190,18 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 seat: 'fa-user', screws: 'fa-wrench'};
             var totals = {};
             var html = '';
+            // Retained kit sums come from the server in the same
+            // payload (same cents as the supplier grand total), so the
+            // cards always agree with the Suppliers tab. Plans built
+            // before the retained values existed fall back to the row
+            // sums below (Recalculate upgrades them).
+            var rk = {};
+            ((self.summary && self.summary.retained_kits) || []).forEach(function (r) {
+                rk[r.key] = parseFloat(r.retained_usd) || 0.0;
+            });
+            var retainedTotal = self.summary ?
+                (parseFloat(self.summary.retained_total_usd) || 0.0) : 0.0;
+            var useRetained = retainedTotal > 0;
             (this.treeGroups || []).forEach(function (g) {
                 var net = 0.0;
                 var totNeed = 0.0;
@@ -209,6 +221,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     }
                 });
                 net = Math.round(net * 100) / 100;
+                if (useRetained && rk.hasOwnProperty(g.key)) {
+                    net = Math.round(rk[g.key] * 100) / 100;
+                }
                 totals[g.key] = net;
                 var dev = totBom > 0 ? totNeed / totBom : 0;
                 var avgHtml = '';
@@ -1861,14 +1876,18 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return found;
         },
 
-        // Screen KPI combos (netted rolled totals, screws inside base),
-        // rounded to whole USD for the Excel summary line.
+        // Screen KPI combos (retained totals when the plan was
+        // rebuilt with them, else netted rolled totals; screws inside
+        // base), rounded to whole USD for the Excel summary line.
         _planCombos: function () {
             var totals = {};
             (this.treeGroups || []).forEach(function (g) {
                 var net = 0.0;
                 (g.items || []).forEach(function (it) {
-                    net += parseFloat(it.rolled_total_usd) || 0.0;
+                    var rv = parseFloat(it.retained_total_usd);
+                    net += (it.hasOwnProperty('retained_total_usd') &&
+                        !isNaN(rv)) ? rv :
+                        (parseFloat(it.rolled_total_usd) || 0.0);
                 });
                 totals[g.key] = net;
             });
