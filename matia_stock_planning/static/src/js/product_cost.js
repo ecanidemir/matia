@@ -181,6 +181,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         _costSortVal: function (r, k) {
             if (k === 'usage') return parseFloat(r.usage) || 0;
             if (k === 'cost') return parseFloat(r.ext_usd) || 0;
+            if (k === 'unit') return parseFloat(r.unit_usd) || 0;
             return ((r.code || '') + ' ' + (r.name || '')).toLowerCase();
         },
 
@@ -300,10 +301,6 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             var prodTitle = hasKids ?
                 'Click to show BOM components' : '';
             var plainName = this._plainName(r.code, r.name);
-            var costNote = (parseFloat(r.unit_usd) || 0) > 0 &&
-                (parseFloat(r.usage) || 0) !== 1 ?
-                '<div style="font-size:11px;opacity:0.7;">$' +
-                this._fmtNum(r.unit_usd, 4) + ' / unit</div>' : '';
             return '<tr class="item-row" data-node="' + r.product_id +
                 '" data-group="' + gkey + '" data-path="">' +
                 '<td class="td-product">' + toggle +
@@ -324,8 +321,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 (r.uom ? ' <small class="text-muted">' +
                     this._escHtml(r.uom) + '</small>' : '') + '</td>' +
                 '<td><span class="dev-badge">$' +
-                this._fmtNum(r.ext_usd, 2) + '</span>' + costNote +
-                '</td></tr>';
+                this._fmtNum(r.ext_usd, 2) + '</span></td>' +
+                '<td class="td-unit-cost">$' +
+                this._fmtNum(r.unit_usd, 2) + '</td></tr>';
         },
 
         _renderCostTree: function () {
@@ -345,6 +343,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 '<th class="msp-th-sortable" data-sort-col="cost" ' +
                 'style="cursor:pointer;" title="Sort by cost">BOM Cost' +
                 this._costArrow('cost') + '</th>' +
+                '<th class="msp-th-sortable" data-sort-col="unit" ' +
+                'style="cursor:pointer;" title="Sort by unit cost">Unit Cost' +
+                this._costArrow('unit') + '</th>' +
                 '</tr></thead><tbody>';
             var groupIcons = {
                 base: '<i class="fa fa-cube mr-1 text-primary"></i>',
@@ -359,7 +360,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 var hidden = !!self.collapsedGroups[g.key];
                 html += '<tr class="group-row group-' + g.key +
                     '" data-group="' + g.key + '">' +
-                    '<td colspan="3"><div class="group-title-badge">' +
+                    '<td colspan="4"><div class="group-title-badge">' +
                     (groupIcons[g.key] || '') +
                     '<span>' + this._escHtml(g.title) + '</span>' +
                     '<span class="group-count ml-2">(' + g.items.length +
@@ -516,10 +517,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                         self._fmtQty(it.usage_per_parent) +
                         ' per parent)</div>') + '</td>' +
                     '<td><span class="dev-badge">$' +
-                    self._fmtNum(ext, 2) + '</span>' +
-                    '<div style="font-size:11px;opacity:0.7;">$' +
-                    self._fmtNum(it.unit_usd, 4) + ' / unit</div>' +
-                    '</td></tr>';
+                    self._fmtNum(ext, 2) + '</span></td>' +
+                    '<td class="td-unit-cost">$' +
+                    self._fmtNum(it.unit_usd, 2) + '</td></tr>';
             });
             parentRow.after(html);
             if (this.treeSearch) this._applySearchFilter();
