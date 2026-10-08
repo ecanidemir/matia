@@ -339,6 +339,29 @@
         font-size: 0.78rem;
         padding: 0.4rem 0.5rem;
         border-top: 1px dashed #bae6fd;
+        vertical-align: middle;
+    }
+    // Detail lines mirror the 6 supplier columns, so every cell
+    // lines up with its header (order right, route centered,
+    // totals right, last-buy note left).
+    table.msp-table tbody tr.mpp-sup-sub-row td.td-product {
+        text-align: left;
+        white-space: normal;
+    }
+    table.msp-table tbody tr.mpp-sup-sub-row td.mpp-sup-sub-prod {
+        padding-left: 1.7rem;
+    }
+    table.msp-table tbody tr.mpp-sup-sub-row td.td-stock {
+        white-space: nowrap;
+    }
+    // Supplier company group Show/Hide: same pill look as the Plan
+    // tab group toggles (selector there is .msp-btn-toggle-group).
+    table.msp-table tbody tr.group-row td .mpp-btn-sup-group-toggle {
+        flex-shrink: 0;
+        border-radius: 5px;
+        font-size: 0.72rem !important;
+        padding: 2px 10px !important;
+        line-height: 1.5;
     }
     .mpp-need {
         max-width: 84px;

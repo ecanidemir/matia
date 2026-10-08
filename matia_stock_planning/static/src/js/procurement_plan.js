@@ -39,6 +39,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .msp-th-sortable': '_onSort',
             'click .mpp-btn-sup-toggle': '_onSupToggle',
             'click .mpp-sup-name': '_onSupToggle',
+            'click .mpp-btn-sup-group-toggle': '_onSupGroupToggle',
         },
 
         init: function (parent, action) {
@@ -72,6 +73,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.supSummary = null;
             this.pendingRfqSeller = null;
             this.expandedSup = {};
+            this.collapsedSupGroups = {};
             this._expanding = false;
         },
 
@@ -269,6 +271,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.supSummary = null;
             this.pendingRfqSeller = null;
             this.expandedSup = {};
+            this.collapsedSupGroups = {};
             this.treeSearch = '';
             this.treeSearchMatches = [];
             this.treeSearchDone = false;
@@ -1575,18 +1578,39 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // ---------------- tab 2: suppliers + production ----------------
         _renderSup: function () {
             var s = this.supSummary;
+            // Async fills (RFQ/MO creation, summary fetch) replace the
+            // tables: keep the scroll offsets so the page stays put.
+            var $root = this.$el ? this.$('.o_matia_procurement_plan') :
+                null;
+            var rootTop = ($root && $root.length) ?
+                $root.scrollTop() : 0;
+            var winTop = (typeof $ !== 'undefined') ?
+                $(window).scrollTop() || 0 : window.pageYOffset || 0;
+            var restore = function () {
+                if ($root && $root.length) $root.scrollTop(rootTop);
+                if (typeof $ !== 'undefined') {
+                    $(window).scrollTop(winTop);
+                } else if (winTop) {
+                    window.scrollTo(0, winTop);
+                }
+            };
             if (!s) {
                 this.$('.mpp-sup-cards').html('');
                 this.$('.mpp-sup-body').html(
                     '<div class="alert alert-info">Loading…</div>');
                 this.$('.mpp-prod-body').html('');
+                restore();
                 return;
             }
+            var stats = this._supCompanyStats(s);
             var cards = '<div class="msp-kpi-card kpi-base"><div class="kpi-info">' +
                 '<div class="kpi-title">Suppliers</div>' +
                 '<div class="kpi-value" style="color:#2563eb;">' +
                 s.supplier_count + '</div>' +
-                '<div class="kpi-sub">Vendors with net demand</div></div>' +
+                '<div class="kpi-sub">USA ' + stats.usaCount +
+                ' &middot; TR ' + stats.trCount + '</div>' +
+                '<div class="kpi-sub">Draft RFQs ' + (s.rfq_count || 0) +
+                ' &middot; Draft MOs ' + (s.mo_count || 0) + '</div></div>' +
                 '<div class="kpi-icon" style="color:#2563eb;">' +
                 '<i class="fa fa-truck"></i></div></div>' +
                 '<div class="msp-kpi-card kpi-outdoor"><div class="kpi-info">' +
@@ -1604,22 +1628,25 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<div class="kpi-icon" style="color:#059669;">' +
                 '<i class="fa fa-dollar"></i></div></div>' +
                 '<div class="msp-kpi-card kpi-seat"><div class="kpi-info">' +
-                '<div class="kpi-title">Draft RFQs</div>' +
+                '<div class="kpi-title">USA Est. Total USD</div>' +
                 '<div class="kpi-value" style="color:#7c3aed;">' +
-                s.rfq_count + '</div>' +
-                '<div class="kpi-sub">Created drafts</div></div>' +
+                this._fmtNum(stats.usaTotal, 2) + '</div>' +
+                '<div class="kpi-sub">' + stats.usaCount +
+                ' suppliers with net demand</div></div>' +
                 '<div class="kpi-icon" style="color:#7c3aed;">' +
-                '<i class="fa fa-file-text-o"></i></div></div>' +
+                '<i class="fa fa-dollar"></i></div></div>' +
                 '<div class="msp-kpi-card kpi-screws"><div class="kpi-info">' +
-                '<div class="kpi-title">Draft MOs</div>' +
+                '<div class="kpi-title">TR Est. Total USD</div>' +
                 '<div class="kpi-value" style="color:#64748b;">' +
-                s.mo_count + '</div>' +
-                '<div class="kpi-sub">Created drafts</div></div>' +
+                this._fmtNum(stats.trTotal, 2) + '</div>' +
+                '<div class="kpi-sub">' + stats.trCount +
+                ' suppliers with net demand</div></div>' +
                 '<div class="kpi-icon" style="color:#64748b;">' +
-                '<i class="fa fa-cogs"></i></div></div>';
+                '<i class="fa fa-dollar"></i></div></div>';
             this.$('.mpp-sup-cards').html(cards);
             this._renderSuppliers(s);
             this._renderProduction(s);
+            restore();
         },
 
         // Suppliers grouped under separate TR / USA sections (user rule).
@@ -1633,7 +1660,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<div class="alert alert-info">No supplier lines with quantity.</div>');
                 return;
             }
-            var order = {'TR': 0, 'USA': 1};
+            var order = {'USA': 0, 'TR': 1};
             var secs = {};
             sups.forEach(function (sp) {
                 var c = sp.company || '';
@@ -1677,6 +1704,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     (c === 'TR' ? 'group-base' : 'group-screws');
                 var badgeCls = c === 'USA' ? 'badge-warning' :
                     (c === 'TR' ? 'badge-primary' : 'badge-secondary');
+                var collapsed = !!self.collapsedSupGroups[c || ''];
                 html += '<tr class="group-row ' + grpCls + '">' +
                     '<td colspan="6"><div class="group-title-badge">' +
                     '<i class="fa fa-truck mr-1"></i>' +
@@ -1686,7 +1714,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     ' Suppliers)</span>' +
                     '<span class="ml-auto text-muted" style="font-size: 0.75rem;">' +
                     'Est. ' + self._fmtNum(tot, 2) + ' USD</span>' +
-                    '</div></td></tr>';
+                    '<button type="button" class="btn btn-sm mpp-btn-sup-group-toggle ml-2 ' +
+                    (collapsed ? 'msp-btn-group-show' : 'msp-btn-group-hide') +
+                    '" data-group-key="' + (c || '') + '"' +
+                    ' title="' + (collapsed ? 'Show this company group' : 'Hide this company group') + '"' +
+                    ' style="padding:1px 10px; font-size:0.75rem; font-weight:600;">' +
+                    (collapsed ?
+                        '<i class="fa fa-eye mr-1"></i>Show' :
+                        '<i class="fa fa-eye-slash mr-1"></i>Hide') +
+                    '</button></div></td></tr>';
+                if (collapsed) return;
                 rows.forEach(function (sp) {
                     html += self._supplierRowHtml(sp);
                     if (self.expandedSup[self._supKey(sp)]) {
@@ -1706,17 +1743,77 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return (sp.seller_id || 0) + ':' + (sp.company_id || 0);
         },
 
+        // Re-rendering the supplier table must not move the page:
+        // remember the scroll offsets of the action root (the real
+        // scroller) and the window, then restore them after painting.
+        _preserveSupScroll: function (fn) {
+            var $root = this.$el ? this.$('.o_matia_procurement_plan') :
+                null;
+            var rootTop = ($root && $root.length) ?
+                $root.scrollTop() : 0;
+            var hasJQ = typeof $ !== 'undefined';
+            var winTop = hasJQ ? $(window).scrollTop() || 0 :
+                window.pageYOffset || 0;
+            fn.call(this);
+            if ($root && $root.length) $root.scrollTop(rootTop);
+            if (hasJQ) {
+                $(window).scrollTop(winTop);
+            } else if (winTop) {
+                window.scrollTo(0, winTop);
+            }
+        },
+
+        // Per-company cash totals + distinct-vendor counts for the KPI
+        // cards (client-side from the supplier summary, same PO-value
+        // basis as the server grand total).
+        _supCompanyStats: function (s) {
+            var usaTotal = 0, trTotal = 0;
+            var usaSellers = {}, trSellers = {};
+            (s.suppliers || []).forEach(function (sp) {
+                var t = parseFloat(sp.total_usd) || 0;
+                if (sp.company === 'USA') {
+                    usaTotal += t;
+                    if (sp.seller_id) usaSellers[sp.seller_id] = true;
+                } else if (sp.company === 'TR') {
+                    trTotal += t;
+                    if (sp.seller_id) trSellers[sp.seller_id] = true;
+                }
+            });
+            return {
+                usaTotal: Math.round(usaTotal * 100) / 100,
+                trTotal: Math.round(trTotal * 100) / 100,
+                usaCount: Object.keys(usaSellers).length,
+                trCount: Object.keys(trSellers).length,
+            };
+        },
+
+        _onSupGroupToggle: function (ev) {
+            ev.stopPropagation();
+            var key = ev.currentTarget.dataset.groupKey;
+            if (key === undefined || key === null) return;
+            var self = this;
+            this._preserveSupScroll(function () {
+                self.collapsedSupGroups[key] =
+                    !self.collapsedSupGroups[key];
+                self._renderSuppliers(self.supSummary);
+            });
+        },
+
         _onSupToggle: function (ev) {
             ev.stopPropagation();
+            if (ev.preventDefault) ev.preventDefault();
             var el = ev.currentTarget;
             var key = el.dataset.supKey;
             if (!key) return;
-            if (this.expandedSup[key]) {
-                delete this.expandedSup[key];
-            } else {
-                this.expandedSup[key] = true;
-            }
-            this._renderSuppliers(this.supSummary);
+            var self = this;
+            this._preserveSupScroll(function () {
+                if (self.expandedSup[key]) {
+                    delete self.expandedSup[key];
+                } else {
+                    self.expandedSup[key] = true;
+                }
+                self._renderSuppliers(self.supSummary);
+            });
         },
 
         _supplierLinesHtml: function (sp) {
@@ -1740,37 +1837,41 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 if (ln.no_price) {
                     badges += ' <span class="badge badge-warning" title="No last-buy or pricelist price; counted as 0 USD">No price</span>';
                 }
+                // Same 6 columns as the supplier row above (Supplier /
+                // Lines / Routes / Est. Total USD / RFQs / action) so the
+                // detail lines stay visually aligned with the headers.
+                var lastInfo = ln.last_price ?
+                    '<small class="text-muted">Last: ' +
+                    self._fmtNum(ln.last_price, 2) + ' ' +
+                    (ln.last_currency || '') +
+                    (ln.last_date ? ' (' + ln.last_date + ')' : '') +
+                    '</small>' :
+                    '<small class="text-muted">' +
+                    (ln.note || 'No purchase history') + '</small>';
                 html += '<tr class="mpp-sup-sub-row">' +
-                    '<td class="td-product">' +
+                    '<td class="td-product mpp-sup-sub-prod">' +
                     '<i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>' +
                     (ln.code ? '<span class="prod-code sub-prod-code">[' +
                         ln.code + ']</span> ' : '') +
                     '<span class="prod-name">' +
                     (self._plainName(ln.code, ln.name) || '') + '</span>' +
                     badges + '</td>' +
-                    '<td class="td-stock">' +
+                    '<td class="td-stock text-right">' +
                     self._fmtNum(ln.order_qty, 0) + ' ' +
                     '<small class="text-muted">' +
                     (ln.uom || '') + '</small></td>' +
-                    '<td><span class="badge badge-info">' +
+                    '<td class="text-center"><span class="badge badge-info">' +
                     (ln.route || '') + '</span></td>' +
-                    '<td class="td-stock">PO est <strong>' +
+                    '<td class="td-stock text-right"><strong>' +
                     self._fmtNum(ln.total_usd, 2) + ' USD</strong>' +
-                    '<small class="text-muted d-block" style="font-weight:400;">Net ' +
-                    self._fmtNum(ln.rolled_usd, 2) + ' USD x ' +
+                    '<small class="text-muted d-block" style="font-weight:400;" title="Net gap cost (own + net child shares)">' +
+                    'Net ' +
+                    self._fmtNum(ln.rolled_usd, 2) + ' x ' +
                     self._fmtNum(ln.order_qty, 0) + ' = ' +
                     self._fmtNum(ln.rolled_total_usd, 2) +
-                    ' (net gap cost)</small>' +
-                    (ln.last_price ?
-                        '<small class="text-muted d-block" style="font-weight:400;">Last: ' +
-                        self._fmtNum(ln.last_price, 2) + ' ' +
-                        (ln.last_currency || '') +
-                        (ln.last_date ? ' (' + ln.last_date + ')' : '') +
-                        '</small>' :
-                        '<small class="text-muted d-block" style="font-weight:400;">' +
-                        (ln.note || 'No purchase history') + '</small>') +
-                    '</td>' +
-                    '<td colspan="2"></td></tr>';
+                    '</small></td>' +
+                    '<td>' + lastInfo + '</td>' +
+                    '<td></td></tr>';
             });
             return html;
         },
