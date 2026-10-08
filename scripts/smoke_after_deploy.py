@@ -4,11 +4,13 @@ Catches the 'Internal Server Error everywhere' class of outage where new
 Python code (registry) references stored fields whose DB columns were
 never created because the module Upgrade step was skipped.
 
-Read-only. Credentials ONLY from process env
-(ODOO_URL/ODOO_DB/ODOO_USERNAME/ODOO_PASSWORD). Never prints secrets.
+Read-only. Credentials ONLY from process env. Without flags it uses the
+prod vars (ODOO_URL/ODOO_DB/ODOO_USERNAME/ODOO_PASSWORD); with --staging
+it uses ODOO_STAGING_URL/ODOO_STAGING_DB/ODOO_STAGING_USERNAME/
+ODOO_STAGING_PASSWORD. Never prints secrets.
 
 Usage:
-    python scripts/smoke_after_deploy.py
+    python scripts/smoke_after_deploy.py [--staging]
 Exit: 0 = green, 1 = env/auth failure, 2 = DRIFT DETECTED (run Upgrade).
 """
 import os
@@ -16,9 +18,10 @@ import sys
 import xmlrpc.client
 
 MODULE_NAME = "matia_stock_planning"
-# (model, field) pairs this deployment is known to require.
+# (model, field) pairs current main-branch code requires. NOTE: res.users
+# matia_capacity_targets was REVERTED (commit 4905308) after it caused a
+# total staging outage — it must NOT be listed here.
 REQUIRED_FIELDS = [
-    ("res.users", "matia_capacity_targets"),
     ("matia.procurement.plan.line", "retained_total_usd"),
 ]
 
@@ -29,13 +32,16 @@ def fail(msg):
 
 
 def main():
-    url = os.environ.get("ODOO_URL", "").rstrip("/")
-    db = os.environ.get("ODOO_DB", "")
-    user = os.environ.get("ODOO_USERNAME", "")
-    pw = os.environ.get("ODOO_PASSWORD", "")
+    prefix = "ODOO_STAGING_" if "--staging" in sys.argv[1:] else "ODOO_"
+    url = os.environ.get(prefix + "URL", "").rstrip("/")
+    db = os.environ.get(prefix + "DB", "")
+    user = os.environ.get(prefix + "USERNAME", "")
+    pw = os.environ.get(prefix + "PASSWORD", "")
     if not all([url, db, user, pw]):
-        print("SMOKE-ERROR: missing ODOO_URL/ODOO_DB/ODOO_USERNAME/ODOO_PASSWORD")
+        print("SMOKE-ERROR: missing %sURL/%sDB/%sUSERNAME/%sPASSWORD"
+              % (prefix, prefix, prefix, prefix))
         return 1
+    print("SMOKE: target instance %s" % url)
     common = xmlrpc.client.ServerProxy("%s/xmlrpc/2/common" % url)
     try:
         uid = common.authenticate(db, user, pw, {})

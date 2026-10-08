@@ -6,12 +6,14 @@ It can NOT load new Python code -- that needs Git Deploy + restart first.
 ALSO NOTE: if logins themselves crash (e.g. missing column on res.users),
 XML-RPC auth crashes too and this script cannot help; fix code + redeploy.
 
-Credentials ONLY from process env (ODOO_URL/ODOO_DB/ODOO_USERNAME/
-ODOO_PASSWORD -- point them at staging or prod first). Never prints secrets.
+Credentials ONLY from process env. Without flags it uses the prod vars
+(ODOO_URL/ODOO_DB/ODOO_USERNAME/ODOO_PASSWORD); with --staging it uses
+ODOO_STAGING_URL/ODOO_STAGING_DB/ODOO_STAGING_USERNAME/
+ODOO_STAGING_PASSWORD. Never prints secrets.
 Default is dry-run (reports state only); --apply triggers the upgrade.
 
 Usage:
-    python scripts/trigger_module_upgrade.py [--module NAME] [--apply]
+    python scripts/trigger_module_upgrade.py [--staging] [--module NAME] [--apply]
 Exit: 0 = installed/upgrade done, 1 = env/auth/trigger failure,
       2 = dry-run info only, 3 = poll timeout.
 """
@@ -31,12 +33,14 @@ def main():
         name = args[args.index("--module") + 1]
     except (ValueError, IndexError):
         name = "matia_stock_planning"
-    url = os.environ.get("ODOO_URL", "").rstrip("/")
-    db = os.environ.get("ODOO_DB", "")
-    user = os.environ.get("ODOO_USERNAME", "")
-    pw = os.environ.get("ODOO_PASSWORD", "")
+    prefix = "ODOO_STAGING_" if "--staging" in args else "ODOO_"
+    url = os.environ.get(prefix + "URL", "").rstrip("/")
+    db = os.environ.get(prefix + "DB", "")
+    user = os.environ.get(prefix + "USERNAME", "")
+    pw = os.environ.get(prefix + "PASSWORD", "")
     if not all([url, db, user, pw]):
-        print("ENV-MISSING: ODOO_URL/ODOO_DB/ODOO_USERNAME/ODOO_PASSWORD")
+        print("ENV-MISSING: %sURL/%sDB/%sUSERNAME/%sPASSWORD"
+              % (prefix, prefix, prefix, prefix))
         return 1
     print("target instance: %s" % url)
     common = xmlrpc.client.ServerProxy("%s/xmlrpc/2/common" % url)
