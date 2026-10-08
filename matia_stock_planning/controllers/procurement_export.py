@@ -77,8 +77,7 @@ def _plan_csv_lines(plan_name, scratch_total, rows, combo=None):
     lines = ['\ufeff' + 'Plan - %s' % plan_name]
     lines.append(_combo_line(combo, scratch_total))
     lines.append(';'.join(headers))
-    tot_qty = [0.0] * 5
-    tot_money = [0.0] * 3
+    tot_est = 0.0
     for r in rows:
         if r.get('is_header'):
             continue
@@ -100,20 +99,14 @@ def _plan_csv_lines(plan_name, scratch_total, rows, combo=None):
             str(r.get('est_usd', ''))])
         lines.append(';'.join(cells))
         if not lvl:
-            for i, k in enumerate(
-                    ('tr', 'us', 'producible', 'need', 'planned')):
-                tot_qty[i] += _fnum(r.get(k))
-            for i, k in enumerate(
-                    ('rolled_usd', 'scratch_usd', 'est_usd')):
-                tot_money[i] += _fnum(r.get(k))
+            tot_est += _fnum(r.get('est_usd'))
     total = ['TOTAL', '']
     if has_level:
         total.append('')
     total.extend(['', ''])
-    total.extend(['%g' % v for v in tot_qty])
     total.extend(['', '', '', '', ''])
-    total.extend(['%g' % tot_money[0],
-                  '%g' % tot_money[1], '%g' % tot_money[2]])
+    total.extend(['', '', '', '', ''])
+    total.extend(['', '', '%g' % tot_est])
     lines.append(';'.join(total))
     return lines
 
@@ -271,7 +264,8 @@ class MatiaProcurementPlanController(http.Controller):
         """Write one full Plan table (title + combo + grid + TOTAL).
 
         Group-first flat table (no separator rows); child numbers print
-        gray like the Cost page; TOTAL sums level-0 rows (static).
+        gray like the Cost page; TOTAL shows the Est. USD level-0 sum
+        (static).
         """
         headers, has_level = _plan_headers(rows)
         title_fmt = workbook.add_format({'bold': True, 'font_size': 14})
@@ -329,9 +323,7 @@ class MatiaProcurementPlanController(http.Controller):
         header_row = row
         ws.write_row(header_row, 0, headers, header_fmt)
         row += 1
-        sum_qty = {col: 0.0 for col in qty_keys}
-        sum_money = {col: 0.0 for col in
-                     ('Net USD', 'Scratch USD', 'Est. USD')}
+        sum_est = 0.0
         for r in rows:
             if r.get('is_header'):
                 continue
@@ -368,12 +360,10 @@ class MatiaProcurementPlanController(http.Controller):
             for col, key in money_keys.items():
                 _bump(_C[col], '$%.2f' % _fnum(r.get(key)))
             if not lvl:
-                for col, key in qty_keys.items():
-                    sum_qty[col] += _fnum(r.get(key))
-                for col in sum_money:
-                    sum_money[col] += _fnum(r.get(money_keys[col]))
+                sum_est += _fnum(r.get('est_usd'))
             row += 1
-        # TOTAL row (level-0 sums, static); kept out of the filter.
+        # TOTAL row: Est. USD only (level-0 sum, static); kept out of
+        # the filter.
         ws.write(row, _C['Group'], 'TOTAL', total_fmt)
         ws.write(row, _C['Part Code'], '', total_fmt)
         if has_level:
@@ -381,12 +371,12 @@ class MatiaProcurementPlanController(http.Controller):
         ws.write(row, _C['Part Name'], '', total_fmt)
         ws.write(row, _C['Usage'], '', total_fmt)
         for col in qty_keys:
-            ws.write_number(row, _C[col], sum_qty[col], total_num_fmt)
+            ws.write(row, _C[col], '', total_fmt)
         for col in ('Seller', 'Source', 'Last Price', 'USD', 'Last Buy'):
             ws.write(row, _C[col], '', total_fmt)
-        for col in ('Net USD', 'Scratch USD', 'Est. USD'):
-            ws.write_number(row, _C[col], sum_money[col],
-                            total_money_fmt)
+        for col in ('Net USD', 'Scratch USD'):
+            ws.write(row, _C[col], '', total_fmt)
+        ws.write_number(row, _C['Est. USD'], sum_est, total_money_fmt)
         last_row = row - 1
         # Auto widths (measured, capped), filter, freeze, print.
         for idx, h in enumerate(headers):
@@ -398,10 +388,12 @@ class MatiaProcurementPlanController(http.Controller):
         ws.fit_to_pages(1, 0)
 
     def _export_slots(self, data):
-        """Combined multi-slot export: Compare sheet + one sheet per slot.
+        """Combined multi-slot export: single Combined sheet, BOM closed.
 
-        The client fully expands each selected slot and posts its rows,
-        so this only assembles the workbook (no recompute server-side).
+        The client posts fully expanded rows per slot, but the combined
+        matrix always uses level-0 rows only (never the BOM-open
+        version). One 'Combined' worksheet is written; no Compare
+        sheet and no per-slot sheets.
         """
         plans = []
         seen = set()
@@ -439,12 +431,16 @@ class MatiaProcurementPlanController(http.Controller):
             for r in rows:
                 if r.get('is_header'):
                     continue
+                if int(r.get('level') or 0) > 0:
+                    continue
                 k = _mbase_key(r)
                 seen[k] = seen.get(k, 0) + 1
                 d[k + (seen[k],)] = r
             return d
 
-        canon = [r for r in plans[0]['rows'] if not r.get('is_header')]
+        canon = [r for r in plans[0]['rows']
+                 if not r.get('is_header')
+                 and int(r.get('level') or 0) == 0]
         canon_keys = []
         seen = {}
         for r in canon:
@@ -452,56 +448,43 @@ class MatiaProcurementPlanController(http.Controller):
             seen[k] = seen.get(k, 0) + 1
             canon_keys.append(k + (seen[k],))
         overlays = [_overlay(p['rows']) for p in plans]
-        any_level = any(int(r.get('level') or 0) > 0 for r in canon)
-        mbase = ['Group', 'Part Code', 'Part Name', 'Usage', 'TR', 'US',
-                 'Producible', 'Scratch USD']
-        if any_level:
-            mbase.insert(2, 'Level')
+        # Combined is always BOM-closed: level-0 rows only, no Level col.
+        mbase = ['Group', 'Part Code', 'Part Name', 'Usage', 'Unit Cost']
         mheaders = list(mbase)
+        # One Est. USD column per slot, headed by the slot description.
+        slot_titles = []
         for p in plans:
-            mheaders.append('Slot %d N/P' % p['slot'])
-            mheaders.append('Slot %d Est. USD' % p['slot'])
+            title = (p.get('name') or '').strip()
+            if not title or title in slot_titles:
+                title = 'Slot %d' % p['slot']
+            slot_titles.append(title)
+            mheaders.append(title)
         if not xlsxwriter:
             lines = ['\ufeffCombined Plan - Slots %s' % (
                 ', '.join(str(p['slot']) for p in plans))]
             lines.append(';'.join(mheaders))
-            m_tot = [0.0] * 4
             m_est = [0.0] * len(plans)
             for ck, r in zip(canon_keys, canon):
                 lvl = int(r.get('level') or 0)
                 cells = [str(r.get('group', '')),
-                         str(r.get('code', ''))]
-                if any_level:
-                    cells.append('L%d' % lvl if lvl else '')
-                cells.extend([
-                    str(r.get('name', '')),
-                    '%s %s' % (r.get('bom_qty', ''),
-                               r.get('uom', '')),
-                    str(r.get('tr', '')), str(r.get('us', '')),
-                    str(r.get('producible', '')),
-                    str(r.get('scratch_usd', ''))])
-                if not lvl:
-                    for i, k in enumerate(('tr', 'us', 'producible')):
-                        m_tot[i] += _fnum(r.get(k))
-                    m_tot[3] += _fnum(r.get('scratch_usd'))
+                         str(r.get('code', '')),
+                         str(r.get('name', '')),
+                         '%s %s' % (r.get('bom_qty', ''),
+                                    r.get('uom', '')),
+                         str(r.get('scratch_usd', ''))]
                 for i, ov in enumerate(overlays):
                     o = ov.get(ck)
-                    cells.append(_np_txt(o) if o else '')
                     cells.append(str(o.get('est_usd', ''))
                                  if o else '')
                     if o and not lvl:
                         m_est[i] += _fnum(o.get('est_usd'))
                 lines.append(';'.join(cells))
-            total = ['TOTAL', '']
-            if any_level:
-                total.append('')
-            total.extend(['', '', '%g' % m_tot[0], '%g' % m_tot[1],
-                          '%g' % m_tot[2], '%g' % m_tot[3]])
+            total = ['TOTAL', '', '', '', '']
             for v in m_est:
-                total.extend(['', '%g' % v])
+                total.append('%g' % v)
             lines.append(';'.join(total))
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Plan_Compare_%s.csv' % datetime.now().strftime(
+            filename = 'Plan_Combined_%s.csv' % datetime.now().strftime(
                 '%Y%m%d_%H%M')
             return request.make_response(
                 content,
@@ -512,8 +495,6 @@ class MatiaProcurementPlanController(http.Controller):
                 ])
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-        # Compare sheet: one line per slot.
-        ws = workbook.add_worksheet('Compare')
         title_fmt = workbook.add_format({'bold': True, 'font_size': 14})
         header_fmt = workbook.add_format(
             {'bold': True, 'bg_color': '#7c2d12', 'font_color': '#ffffff',
@@ -535,35 +516,8 @@ class MatiaProcurementPlanController(http.Controller):
             {'bold': True, 'border': 1, 'align': 'center'})
         total_money_fmt = workbook.add_format(
             {'bold': True, 'border': 1, 'num_format': '"$"#,##0.00'})
-        ws.write(0, 0, 'Plan Comparison (USD)', title_fmt)
-        cmp_headers = ['Slot', 'Study', 'Scratch Total USD',
-                       'Detail Lines']
-        cmp_caps = [10, 40, 18, 14]
-        cmp_widths = [len(h) for h in cmp_headers]
-        ws.write_row(1, 0, cmp_headers, header_fmt)
-        for i, p in enumerate(plans):
-            r = i + 2
-            detail_n = len([x for x in p['rows']
-                            if not x.get('is_header')])
-            ws.write_number(r, 0, p['slot'], num_fmt)
-            ws.write(r, 1, p['name'], text_fmt)
-            ws.write_number(r, 2, _fnum(p['scratch_total']), money_fmt)
-            ws.write_number(r, 3, detail_n, num_fmt)
-            cmp_widths[0] = max(cmp_widths[0], len(str(p['slot'])))
-            cmp_widths[1] = max(cmp_widths[1], len(p['name']))
-            cmp_widths[2] = max(
-                cmp_widths[2], len('$%.2f' % _fnum(p['scratch_total'])))
-            cmp_widths[3] = max(cmp_widths[3], len(str(detail_n)))
-        last_cmp = len(plans) + 1
-        for idx, h in enumerate(cmp_headers):
-            ws.set_column(idx, idx, min(cmp_widths[idx] + 2, cmp_caps[idx]))
-        ws.autofilter(1, 0, last_cmp, len(cmp_headers) - 1)
-        ws.freeze_panes(2, 0)
-        ws.set_landscape()
-        ws.fit_to_pages(1, 0)
-        # Combined matrix sheet: slot info block on top (each slot in
-        # its own pastel color), then the fixed base columns plus one
-        # colored Needed/Planned + Est. USD pair per slot.
+        # Combined matrix sheet: fixed base columns plus one Est. USD
+        # column per slot (slot description as header, slot pastel).
         mC = {name: idx for idx, name in enumerate(mheaders)}
         ws = workbook.add_worksheet('Combined')
         slot_fmts = []
@@ -596,120 +550,71 @@ class MatiaProcurementPlanController(http.Controller):
             mwidths[col] = max(mwidths[col], len(str(val)))
 
         ws.write(0, 0, 'Combined Plan (USD)', title_fmt)
-        ws.write_row(1, 0, ['Slot', 'Study', 'Scratch Total USD'],
-                     header_fmt)
-        for i, p in enumerate(plans):
-            f = slot_fmts[i]
-            r = i + 2
-            ws.write(r, 0, 'Slot %d' % p['slot'], f['header'])
-            ws.write(r, 1, p['name'], f['text'])
-            ws.write_number(r, 2, _fnum(p['scratch_total']), f['money'])
-            _mbump(0, 'Slot %d' % p['slot'])
-            _mbump(1, p['name'])
-            _mbump(2, '$%.2f' % _fnum(p['scratch_total']))
-        hrow = len(plans) + 3
+        hrow = 2
         ws.write_row(hrow, 0, mheaders, header_fmt)
-        for i, p in enumerate(plans):
-            f = slot_fmts[i]
-            ws.write(hrow, mC['Slot %d N/P' % p['slot']],
-                     'Slot %d N/P' % p['slot'], f['header'])
-            ws.write(hrow, mC['Slot %d Est. USD' % p['slot']],
-                     'Slot %d Est. USD' % p['slot'], f['header'])
-        m_tot = [0.0] * 4
+        for i, title in enumerate(slot_titles):
+            ws.write(hrow, len(mbase) + i, title,
+                     slot_fmts[i]['header'])
         m_est = [0.0] * len(plans)
         r = hrow + 1
         for ck, row in zip(canon_keys, canon):
             lvl = int(row.get('level') or 0)
             fmt = child_fmt if lvl else text_fmt
-            qfmt = child_num_gray_fmt if lvl else num_fmt
             mfmt = child_money_gray_fmt if lvl else money_fmt
             ws.write(r, mC['Group'], row.get('group', ''), fmt)
             ws.write(r, mC['Part Code'], str(row.get('code', '')), fmt)
-            if any_level:
-                ws.write(r, mC['Level'],
-                         'L%d' % lvl if lvl else '', fmt)
             ws.write(r, mC['Part Name'], str(row.get('name', '')), fmt)
             usage = '%s %s' % (row.get('bom_qty', ''),
                                row.get('uom', ''))
             ws.write(r, mC['Usage'], usage, fmt)
-            for col, key in (('TR', 'tr'), ('US', 'us'),
-                             ('Producible', 'producible')):
-                ws.write_number(r, mC[col], _fnum(row.get(key)), qfmt)
-            ws.write_number(r, mC['Scratch USD'],
+            ws.write_number(r, mC['Unit Cost'],
                             _fnum(row.get('scratch_usd')), mfmt)
             _mbump(mC['Group'], row.get('group', ''))
             _mbump(mC['Part Code'], row.get('code', ''))
             _mbump(mC['Part Name'], row.get('name', ''))
             _mbump(mC['Usage'], usage)
-            _mbump(mC['Scratch USD'],
+            _mbump(mC['Unit Cost'],
                    '$%.2f' % _fnum(row.get('scratch_usd')))
-            if not lvl:
-                for i, key in enumerate(('tr', 'us', 'producible')):
-                    m_tot[i] += _fnum(row.get(key))
-                m_tot[3] += _fnum(row.get('scratch_usd'))
             for i, ov in enumerate(overlays):
                 f = slot_fmts[i]
                 o = ov.get(ck)
-                np_col = mC['Slot %d N/P' % plans[i]['slot']]
-                est_col = mC['Slot %d Est. USD' % plans[i]['slot']]
+                est_col = len(mbase) + i
                 if o is None:
-                    ws.write(r, np_col, '', f['text'])
                     ws.write(r, est_col, '', f['text'])
                     continue
-                np_txt = _np_txt(o)
                 if lvl:
-                    ws.write(r, np_col, np_txt, f['gray'])
                     ws.write_number(r, est_col, _fnum(o.get('est_usd')),
                                     f['money_gray'])
                 else:
-                    ws.write(r, np_col, np_txt, f['text'])
                     ws.write_number(r, est_col, _fnum(o.get('est_usd')),
                                     f['money'])
                     m_est[i] += _fnum(o.get('est_usd'))
-                _mbump(np_col, np_txt)
                 _mbump(est_col, '$%.2f' % _fnum(o.get('est_usd')))
             r += 1
-        # TOTAL row (level-0 sums, static); kept out of the filter.
+        # TOTAL row: per-slot Est. USD only (level-0 sums, static);
+        # kept out of the filter.
         ws.write(r, mC['Group'], 'TOTAL', total_fmt)
         ws.write(r, mC['Part Code'], '', total_fmt)
-        if any_level:
-            ws.write(r, mC['Level'], '', total_fmt)
         ws.write(r, mC['Part Name'], '', total_fmt)
         ws.write(r, mC['Usage'], '', total_fmt)
-        for i, col in enumerate(('TR', 'US', 'Producible')):
-            ws.write_number(r, mC[col], m_tot[i], total_num_fmt)
-        ws.write_number(r, mC['Scratch USD'], m_tot[3], total_money_fmt)
-        for i, p in enumerate(plans):
-            ws.write(r, mC['Slot %d N/P' % p['slot']], '',
-                     total_fmt)
-            ws.write_number(r, mC['Slot %d Est. USD' % p['slot']],
-                            m_est[i], slot_fmts[i]['total'])
+        ws.write(r, mC['Unit Cost'], '', total_fmt)
+        for i in range(len(plans)):
+            ws.write_number(r, len(mbase) + i, m_est[i],
+                            slot_fmts[i]['total'])
         last_m = r - 1
-        mcaps = {'Group': 18, 'Part Code': 40, 'Level': 8,
-                 'Part Name': 60, 'Usage': 16, 'TR': 12, 'US': 12,
-                 'Producible': 12, 'Scratch USD': 16}
+        mcaps = {'Group': 18, 'Part Code': 40,
+                 'Part Name': 60, 'Usage': 16, 'Unit Cost': 16}
         for idx, h in enumerate(mheaders):
-            if h in mcaps:
-                cap = mcaps[h]
-            elif h.endswith('N/P'):
-                cap = 16
-            else:
-                cap = 16
-            ws.set_column(idx, idx, min(mwidths[idx] + 2, cap))
+            ws.set_column(idx, idx, min(mwidths[idx] + 2,
+                                        mcaps.get(h, 16)))
         if last_m > hrow:
             ws.autofilter(hrow, 0, last_m, len(mheaders) - 1)
         ws.freeze_panes(hrow + 1, 0)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
-        for p in plans:
-            sheet = workbook.add_worksheet('Slot %d' % p['slot'])
-            self._write_plan_sheet(
-                workbook, sheet,
-                'Slot %d - %s' % (p['slot'], p['name']),
-                p['scratch_total'], p['rows'], p.get('combo'))
         workbook.close()
         output.seek(0)
-        filename = 'Plan_Compare_%s.xlsx' % datetime.now().strftime(
+        filename = 'Plan_Combined_%s.xlsx' % datetime.now().strftime(
             '%Y%m%d_%H%M')
         return request.make_response(
             output.getvalue(),
