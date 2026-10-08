@@ -71,6 +71,44 @@ def _np_txt(r):
     return '%s/%s' % (need, planned)
 
 
+def _sheet_name(base):
+    """Sanitize an xlsx sheet name (31 chars, no : \\ / ? * [ ])."""
+    bad = ':\\/?*[]'
+    for ch in bad:
+        base = base.replace(ch, ' ')
+    return base[:31] or 'Sheet'
+
+
+def _usd0num(val):
+    """Whole-USD number for the combined export (no cents)."""
+    try:
+        return round(float(val or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _supplier_csv_lines(plan_name, groups, total, kits, scratch_total):
+    """CSV fallback lines for one supplier sheet (mirrors the xlsx)."""
+    lines = ['\ufeff' + 'Supplier Preview - %s' % plan_name]
+    lines.append('Total: %s' % (total or 0))
+    lines.append('Scratch total (USD): %s' % scratch_total)
+    for kit in kits or []:
+        lines.append('Kit: %s | %s | %s' % (
+            kit.get('name', ''), kit.get('count', 0),
+            kit.get('cost', 0)))
+    for grp in groups or []:
+        lines.append('--- %s (%s) ---' % (
+            grp.get('title', ''), grp.get('cost', 0)))
+        for itm in grp.get('items', []):
+            lines.append('%s;%s;%s;%s;%s;%s;%s;%s;%s' % (
+                itm.get('code', ''), itm.get('name', ''),
+                itm.get('order_qty', ''), _last_str(itm),
+                itm.get('last_usd', ''), itm.get('last_date', ''),
+                itm.get('unit_usd', ''), itm.get('rolled_usd', ''),
+                itm.get('subtotal', '')))
+    return lines
+
+
 def _plan_csv_lines(plan_name, scratch_total, rows, combo=None):
     """CSV fallback lines for one plan sheet (mirrors the xlsx)."""
     headers, has_level = _plan_headers(rows)
@@ -133,27 +171,16 @@ class MatiaProcurementPlanController(http.Controller):
             return self._export_tree(data, plan_name, kits, scratch_total)
         if data.get('mode') == 'slots':
             return self._export_slots(data)
+        if data.get('mode') == 'plan_supplier':
+            return self._export_plan_supplier(data)
         groups = data.get('groups', [])
         total = data.get('total', 0)
 
         if not xlsxwriter:
-            lines = ['\ufeff' + 'Supplier Preview - %s' % plan_name]
-            lines.append('Scratch total (USD): %s' % scratch_total)
-            for kit in kits:
-                lines.append('Kit: %s | %s | %s' % (
-                    kit.get('name', ''), kit.get('count', 0),
-                    kit.get('cost', 0)))
-            for grp in groups:
-                lines.append('--- %s (%.2f) ---' % (
-                    grp.get('title', ''), grp.get('cost', 0)))
-                for itm in grp.get('items', []):
-                    lines.append('%s;%s;%s;%s;%s;%s;%s;%s;%s' % (
-                        itm.get('code', ''), itm.get('name', ''),
-                        itm.get('order_qty', ''), _last_str(itm),
-                        itm.get('last_usd', ''), itm.get('last_date', ''),
-                        itm.get('unit_usd', ''), itm.get('rolled_usd', ''),
-                        itm.get('subtotal', '')))
-            content = '\r\n'.join(lines).encode('utf-8')
+            content = '\r\n'.join(
+                _supplier_csv_lines(
+                    plan_name, groups, total, kits, scratch_total)
+            ).encode('utf-8')
             filename = 'Supplier_Preview_%s.csv' % datetime.now().strftime(
                 '%Y%m%d_%H%M')
             return request.make_response(
@@ -166,6 +193,25 @@ class MatiaProcurementPlanController(http.Controller):
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         ws = workbook.add_worksheet('Supplier Preview')
+        self._write_supplier_sheet(workbook, ws, plan_name, groups,
+                                   total, kits, scratch_total)
+        workbook.close()
+        output.seek(0)
+        filename = 'Supplier_Preview_%s.xlsx' % datetime.now().strftime(
+            '%Y%m%d_%H%M')
+        return request.make_response(
+            output.getvalue(),
+            headers=[
+                ('Content-Type', 'application/vnd.openxmlformats-officedocument'
+                 '.spreadsheetml.sheet'),
+                ('Content-Disposition',
+                 'attachment; filename=%s' % filename),
+            ])
+
+    @staticmethod
+    def _write_supplier_sheet(workbook, ws, plan_name, groups, total,
+                              kits, scratch_total):
+        """Write one supplier breakdown table (shared by all modes)."""
         title_fmt = workbook.add_format(
             {'bold': True, 'font_size': 14})
         header_fmt = workbook.add_format(
@@ -180,13 +226,13 @@ class MatiaProcurementPlanController(http.Controller):
         row += 1
         ws.write(row, 0, 'Scratch total (USD): %s' % scratch_total)
         row += 1
-        for kit in kits:
+        for kit in kits or []:
             ws.write(row, 0, 'Kit: %s (%s) - %s' % (
                 kit.get('name', ''), kit.get('count', 0),
                 kit.get('cost', 0)))
             row += 1
         row += 1
-        for grp in groups:
+        for grp in groups or []:
             ws.write(row, 0, '%s (%.2f)' % (
                 grp.get('title', ''), grp.get('cost', 0)), header_fmt)
             row += 1
@@ -207,9 +253,48 @@ class MatiaProcurementPlanController(http.Controller):
                 ws.write(row, 8, itm.get('subtotal', 0) or 0, num_fmt)
                 row += 1
             row += 1
+
+    def _export_plan_supplier(self, data):
+        """Single slot + suppliers: Plan sheet + Suppliers sheet."""
+        plan_name = data.get('plan_name', 'Plan')
+        rows = data.get('tree_rows', []) or []
+        combo = data.get('combo')
+        kits = data.get('kits', [])
+        scratch_total = data.get('scratch_total', 0)
+        sup = data.get('supplier') or {}
+        groups = sup.get('groups', [])
+        total = sup.get('total', 0)
+        sup_kits = sup.get('kits', kits)
+        sup_scratch = sup.get('scratch_total', scratch_total)
+        if not xlsxwriter:
+            lines = _plan_csv_lines(
+                plan_name, scratch_total, rows, combo)
+            lines.append('')
+            lines.extend(_supplier_csv_lines(
+                sup.get('plan_name', plan_name), groups, total,
+                sup_kits, sup_scratch))
+            content = '\r\n'.join(lines).encode('utf-8')
+            filename = 'Plan_Supplier_%s.csv' % datetime.now().strftime(
+                '%Y%m%d_%H%M')
+            return request.make_response(
+                content,
+                headers=[
+                    ('Content-Type', 'text/csv; charset=utf-8'),
+                    ('Content-Disposition',
+                      'attachment; filename=%s' % filename),
+                ])
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        ws = workbook.add_worksheet('Plan')
+        self._write_plan_sheet(workbook, ws, plan_name, scratch_total,
+                               rows, combo)
+        ws2 = workbook.add_worksheet('Suppliers')
+        self._write_supplier_sheet(
+            workbook, ws2, sup.get('plan_name', plan_name), groups,
+            total, sup_kits, sup_scratch)
         workbook.close()
         output.seek(0)
-        filename = 'Supplier_Preview_%s.xlsx' % datetime.now().strftime(
+        filename = 'Plan_Supplier_%s.xlsx' % datetime.now().strftime(
             '%Y%m%d_%H%M')
         return request.make_response(
             output.getvalue(),
@@ -392,8 +477,9 @@ class MatiaProcurementPlanController(http.Controller):
 
         The client posts fully expanded rows per slot, but the combined
         matrix always uses level-0 rows only (never the BOM-open
-        version). One 'Combined' worksheet is written; no Compare
-        sheet and no per-slot sheets.
+        version). All money in the Combined sheet is whole-USD
+        (rounded, no cents). With the supplier option each slot also
+        gets its own supplier sheet in the same workbook.
         """
         plans = []
         seen = set()
@@ -414,6 +500,9 @@ class MatiaProcurementPlanController(http.Controller):
                 if isinstance(p.get('combo'), dict) else None,
                 'scratch_total': p.get('scratch_total', 0) or 0,
                 'rows': p.get('tree_rows', []) or [],
+                'kits': p.get('kits', []) or [],
+                'supplier': p.get('supplier')
+                if isinstance(p.get('supplier'), dict) else None,
             })
         if not plans:
             return request.not_found()
@@ -459,11 +548,12 @@ class MatiaProcurementPlanController(http.Controller):
                 title = 'Slot %d' % p['slot']
             slot_titles.append(title)
             mheaders.append(title)
+        with_supplier = any(p.get('supplier') for p in plans)
         if not xlsxwriter:
             lines = ['\ufeffCombined Plan - Slots %s' % (
                 ', '.join(str(p['slot']) for p in plans))]
             lines.append(';'.join(mheaders))
-            m_est = [0.0] * len(plans)
+            m_est = [0] * len(plans)
             for ck, r in zip(canon_keys, canon):
                 lvl = int(r.get('level') or 0)
                 cells = [str(r.get('group', '')),
@@ -471,18 +561,29 @@ class MatiaProcurementPlanController(http.Controller):
                          str(r.get('name', '')),
                          '%s %s' % (r.get('bom_qty', ''),
                                     r.get('uom', '')),
-                         str(r.get('scratch_usd', ''))]
+                         '%d' % _usd0num(r.get('scratch_usd'))]
                 for i, ov in enumerate(overlays):
                     o = ov.get(ck)
-                    cells.append(str(o.get('est_usd', ''))
-                                 if o else '')
+                    est = _usd0num(o.get('est_usd')) if o else ''
+                    cells.append(str(est))
                     if o and not lvl:
-                        m_est[i] += _fnum(o.get('est_usd'))
+                        m_est[i] += _usd0num(o.get('est_usd'))
                 lines.append(';'.join(cells))
             total = ['TOTAL', '', '', '', '']
             for v in m_est:
-                total.append('%g' % v)
+                total.append('%d' % v)
             lines.append(';'.join(total))
+            if with_supplier:
+                for p in plans:
+                    sup = p.get('supplier')
+                    if not sup:
+                        continue
+                    lines.append('')
+                    lines.extend(_supplier_csv_lines(
+                        sup.get('plan_name', p['name']),
+                        sup.get('groups', []), sup.get('total', 0),
+                        sup.get('kits', []),
+                        sup.get('scratch_total', 0)))
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Plan_Combined_%s.csv' % datetime.now().strftime(
                 '%Y%m%d_%H%M')
@@ -501,8 +602,9 @@ class MatiaProcurementPlanController(http.Controller):
              'border': 1})
         num_fmt = workbook.add_format({'border': 1, 'align': 'center'})
         text_fmt = workbook.add_format({'border': 1})
+        # Combined money is whole-USD (rounded, no cents).
         money_fmt = workbook.add_format(
-            {'border': 1, 'num_format': '"$"#,##0.00'})
+            {'border': 1, 'num_format': '"$"#,##0'})
         child_fmt = workbook.add_format(
             {'border': 1, 'bg_color': '#FFFBEB'})
         child_num_gray_fmt = workbook.add_format(
@@ -510,12 +612,12 @@ class MatiaProcurementPlanController(http.Controller):
              'font_color': '#808080'})
         child_money_gray_fmt = workbook.add_format(
             {'border': 1, 'bg_color': '#FFFBEB',
-             'font_color': '#808080', 'num_format': '"$"#,##0.00'})
+             'font_color': '#808080', 'num_format': '"$"#,##0'})
         total_fmt = workbook.add_format({'bold': True, 'border': 1})
         total_num_fmt = workbook.add_format(
             {'bold': True, 'border': 1, 'align': 'center'})
         total_money_fmt = workbook.add_format(
-            {'bold': True, 'border': 1, 'num_format': '"$"#,##0.00'})
+            {'bold': True, 'border': 1, 'num_format': '"$"#,##0'})
         # Combined matrix sheet: fixed base columns plus one Est. USD
         # column per slot (slot description as header, slot pastel).
         mC = {name: idx for idx, name in enumerate(mheaders)}
@@ -531,16 +633,16 @@ class MatiaProcurementPlanController(http.Controller):
                      'font_color': '#808080'}),
                 'money': workbook.add_format(
                     {'border': 1, 'bg_color': color,
-                     'num_format': '"$"#,##0.00'}),
+                     'num_format': '"$"#,##0'}),
                 'money_gray': workbook.add_format(
                     {'border': 1, 'bg_color': color,
                      'font_color': '#808080',
-                     'num_format': '"$"#,##0.00'}),
+                     'num_format': '"$"#,##0'}),
                 'header': workbook.add_format(
                     {'bold': True, 'border': 1, 'bg_color': color}),
                 'total': workbook.add_format(
                     {'bold': True, 'border': 1, 'bg_color': color,
-                     'num_format': '"$"#,##0.00'}),
+                     'num_format': '"$"#,##0'}),
             })
         mwidths = [len(h) for h in mheaders]
 
@@ -555,26 +657,25 @@ class MatiaProcurementPlanController(http.Controller):
         for i, title in enumerate(slot_titles):
             ws.write(hrow, len(mbase) + i, title,
                      slot_fmts[i]['header'])
-        m_est = [0.0] * len(plans)
+        m_est = [0] * len(plans)
         r = hrow + 1
         for ck, row in zip(canon_keys, canon):
             lvl = int(row.get('level') or 0)
             fmt = child_fmt if lvl else text_fmt
             mfmt = child_money_gray_fmt if lvl else money_fmt
+            unit = _usd0num(row.get('scratch_usd'))
             ws.write(r, mC['Group'], row.get('group', ''), fmt)
             ws.write(r, mC['Part Code'], str(row.get('code', '')), fmt)
             ws.write(r, mC['Part Name'], str(row.get('name', '')), fmt)
             usage = '%s %s' % (row.get('bom_qty', ''),
                                row.get('uom', ''))
             ws.write(r, mC['Usage'], usage, fmt)
-            ws.write_number(r, mC['Unit Cost'],
-                            _fnum(row.get('scratch_usd')), mfmt)
+            ws.write_number(r, mC['Unit Cost'], unit, mfmt)
             _mbump(mC['Group'], row.get('group', ''))
             _mbump(mC['Part Code'], row.get('code', ''))
             _mbump(mC['Part Name'], row.get('name', ''))
             _mbump(mC['Usage'], usage)
-            _mbump(mC['Unit Cost'],
-                   '$%.2f' % _fnum(row.get('scratch_usd')))
+            _mbump(mC['Unit Cost'], '$%d' % unit)
             for i, ov in enumerate(overlays):
                 f = slot_fmts[i]
                 o = ov.get(ck)
@@ -582,14 +683,13 @@ class MatiaProcurementPlanController(http.Controller):
                 if o is None:
                     ws.write(r, est_col, '', f['text'])
                     continue
+                est = _usd0num(o.get('est_usd'))
                 if lvl:
-                    ws.write_number(r, est_col, _fnum(o.get('est_usd')),
-                                    f['money_gray'])
+                    ws.write_number(r, est_col, est, f['money_gray'])
                 else:
-                    ws.write_number(r, est_col, _fnum(o.get('est_usd')),
-                                    f['money'])
-                    m_est[i] += _fnum(o.get('est_usd'))
-                _mbump(est_col, '$%.2f' % _fnum(o.get('est_usd')))
+                    ws.write_number(r, est_col, est, f['money'])
+                    m_est[i] += est
+                _mbump(est_col, '$%d' % est)
             r += 1
         # TOTAL row: per-slot Est. USD only (level-0 sums, static);
         # kept out of the filter.
@@ -612,10 +712,23 @@ class MatiaProcurementPlanController(http.Controller):
         ws.freeze_panes(hrow + 1, 0)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
+        if with_supplier:
+            for p in plans:
+                sup = p.get('supplier')
+                if not sup:
+                    continue
+                ws2 = workbook.add_worksheet(_sheet_name(
+                    'Sup S%d %s' % (p['slot'], p['name'])))
+                self._write_supplier_sheet(
+                    workbook, ws2, sup.get('plan_name', p['name']),
+                    sup.get('groups', []), sup.get('total', 0),
+                    sup.get('kits', []), sup.get('scratch_total', 0))
         workbook.close()
         output.seek(0)
-        filename = 'Plan_Combined_%s.xlsx' % datetime.now().strftime(
-            '%Y%m%d_%H%M')
+        prefix = 'Plan_Combined_Supplier' if with_supplier \
+            else 'Plan_Combined'
+        filename = '%s_%s.xlsx' % (
+            prefix, datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
             headers=[

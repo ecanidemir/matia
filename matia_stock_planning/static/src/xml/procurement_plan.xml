@@ -32,11 +32,8 @@
                     <button class="btn btn-warning btn-sm mpp-btn-rebuild" title="Save all Needed numbers and recalculate the whole plan from live data (routes, BOMs, stock, prices)">
                         <i class="fa fa-calculator mr-1"></i> Rebuild
                     </button>
-                    <button class="btn btn-success btn-sm mpp-btn-excel" title="Export suppliers to Excel">
-                        <i class="fa fa-file-excel-o mr-1"></i> Excel (suppliers)
-                    </button>
-                    <button class="btn btn-success btn-sm mpp-btn-excel-tree" title="Export plan to Excel">
-                        <i class="fa fa-file-excel-o mr-1"></i> Excel (Plan)
+                    <button class="btn btn-success btn-sm mpp-btn-excel-tree" title="Export to Excel">
+                        <i class="fa fa-file-excel-o mr-1"></i> Excel
                     </button>
                 </div>
             </div>

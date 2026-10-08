@@ -21,7 +21,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'change .mpp-slot-select': '_onSlotChange',
             'click .mpp-btn-slot-save': '_onSlotSave',
             'input .mpp-slot-note': '_onSlotNoteInput',
-            'click .mpp-btn-excel': '_onExportExcel',
             'click .mpp-btn-excel-tree': '_onExportPlanPopup',
             'click .mpp-btn-create-rfq': '_onCreateRfq',
             'click .mpp-btn-confirm-rfq': '_onConfirmRfq',
@@ -1563,10 +1562,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             document.body.removeChild(form);
         },
 
-        _onExportExcel: function () {
-            if (!this.summary) return;
+        // Supplier breakdown payload from the current (saved) summary.
+        _supplierPayload: function () {
             var groups = [];
-            var sups = this.summary.suppliers || [];
+            var sups = (this.summary && this.summary.suppliers) || [];
             for (var i = 0; i < sups.length; i++) {
                 groups.push({
                     title: sups[i].seller_name,
@@ -1574,49 +1573,142 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     items: sups[i].lines,
                 });
             }
-            this._postExcel({
+            return {
                 plan_name: this.summary.name,
                 groups: groups,
                 total: this.summary.total_cost,
                 kits: this.summary.kits || [],
-                scratch_total: this.summary.scratch_total_usd || 0,
+                scratch_total:
+                    this.summary.scratch_total_usd || 0,
+            };
+        },
+
+        // Supplier-only export (popup: supplier on, no slot picked).
+        _onExportExcel: function () {
+            if (!this.summary) return;
+            var sup = this._supplierPayload();
+            this._postExcel({
+                plan_name: sup.plan_name,
+                groups: sup.groups,
+                total: sup.total,
+                kits: sup.kits,
+                scratch_total: sup.scratch_total,
             });
         },
 
-        // Excel button opens the slot picker: only the active slot
-        // alone keeps today's single-sheet export; any other choice
-        // collects the selected slots (fully expanded, SAVED data)
-        // into one combined workbook (Compare + one sheet per slot).
+        // Excel button opens the export picker (page palette: deep
+        // brown #7c2d12, cream #fff7ed, ink #0f172a). Supplier is a
+        // separate card on top; slots below. No slot + supplier =
+        // supplier only; one slot + supplier = Plan + Suppliers
+        // sheets; several slots + supplier = Combined + per-slot
+        // supplier sheets. Inline styles: the Dialog lives outside
+        // the page root, so the scoped scss does not reach it.
         _onExportPlanPopup: function () {
             if (!this.summary) return;
             var self = this;
-            var $list = $('<div/>');
+            var INK = '#0f172a', MUT = '#64748b', LINE = '#e2e8f0';
+            var $wrap = $('<div/>');
+            // Supplier card (toggle).
+            var $supInput = $('<input/>', {
+                type: 'checkbox',
+                'class': 'mpp-exp-sup',
+            }).css({'width': '18px', 'height': '18px',
+                'accent-color': '#7c2d12', 'flex-shrink': '0',
+                'cursor': 'pointer'});
+            var $sup = $('<div/>').css({
+                'display': 'flex', 'align-items': 'center',
+                'gap': '12px', 'background': '#fff7ed',
+                'border': '1px solid #fed7aa', 'border-radius': '10px',
+                'padding': '10px 14px', 'margin-bottom': '12px',
+                'cursor': 'pointer'});
+            var $supIcon = $('<span/>').css({
+                'display': 'inline-flex', 'align-items': 'center',
+                'justify-content': 'center', 'width': '34px',
+                'height': '34px', 'border-radius': '50%',
+                'background': '#7c2d12', 'color': '#fdba74',
+                'flex-shrink': '0'})
+                .append($('<i/>', {'class': 'fa fa-truck'}));
+            var $supTxt = $('<div/>').css({'flex': '1 1 auto'})
+                .append($('<div/>').text('Suppliers').css({
+                    'font-weight': '700', 'color': INK,
+                    'font-size': '0.9rem'}))
+                .append($('<div/>').text(
+                    'Supplier breakdown as a separate sheet').css({
+                    'color': MUT, 'font-size': '0.76rem'}));
+            $sup.append($supIcon).append($supTxt).append($supInput);
+            $sup.on('click', function (ev) {
+                if (ev.target.tagName !== 'INPUT') {
+                    $supInput.prop('checked',
+                        !$supInput.prop('checked')).trigger('change');
+                }
+            });
+            $supInput.on('change', function () {
+                $sup.css('border-color',
+                    $supInput.is(':checked') ? '#7c2d12' : '#fed7aa');
+                $sup.css('box-shadow',
+                    $supInput.is(':checked') ?
+                    '0 0 0 1px #7c2d12' : 'none');
+            });
+            $wrap.append($sup);
+            // Slot rows.
+            $wrap.append($('<div/>').text('STUDY SLOTS').css({
+                'font-size': '0.7rem', 'font-weight': '700',
+                'letter-spacing': '0.06em', 'color': MUT,
+                'margin-bottom': '6px'}));
+            var $slots = $('<div/>').css({'max-height': '260px',
+                'overflow-y': 'auto', 'padding-right': '2px'});
             (this.slots || []).forEach(function (s) {
                 var has = !!s.plan_id;
-                var label = 'Slot ' + s.slot + (has ?
-                    ' - ' + (s.name || '') +
-                    (s.note ? ' (' + s.note + ')' : '') :
-                    ' - empty');
-                $list.append($('<label/>', {class: 'd-block'}).append(
-                    $('<input/>', {
-                        type: 'checkbox',
-                        value: s.slot,
-                        disabled: has ? null : 'disabled',
-                        checked: (has && s.slot === self.activeSlot) ?
-                            'checked' : null,
-                    }),
-                    ' ' + label));
+                var isActive = s.slot === self.activeSlot;
+                var $row = $('<label/>').css({
+                    'display': 'flex', 'align-items': 'center',
+                    'gap': '10px', 'background':
+                    has ? '#ffffff' : '#f8fafc',
+                    'border': '1px solid ' + LINE,
+                    'border-radius': '8px', 'padding': '7px 12px',
+                    'margin-bottom': '6px',
+                    'cursor': has ? 'pointer' : 'default',
+                    'color': has ? INK : '#94a3b8'});
+                var $cb = $('<input/>', {
+                    type: 'checkbox',
+                    value: s.slot,
+                    'class': 'mpp-exp-slot',
+                    disabled: has ? null : 'disabled',
+                    checked: (has && isActive) ? 'checked' : null,
+                }).css({'width': '16px', 'height': '16px',
+                    'accent-color': '#7c2d12', 'flex-shrink': '0',
+                    'cursor': has ? 'pointer' : 'default'});
+                var $txt = $('<span/>').css({'flex': '1 1 auto',
+                    'font-size': '0.85rem'})
+                    .append($('<strong/>').text('Slot ' + s.slot + '  '))
+                    .append($('<span/>').text(has ?
+                        ((s.name || '') +
+                        (s.note ? '  ·  ' + s.note : '')) :
+                        'empty').css({'color': MUT}));
+                $row.append($cb).append($txt);
+                if (has && isActive) {
+                    $row.append($('<span/>').text('current').css({
+                        'font-size': '0.68rem', 'font-weight': '700',
+                        'color': '#ffffff', 'background': '#7c2d12',
+                        'border-radius': '20px',
+                        'padding': '2px 10px', 'flex-shrink': '0'}));
+                }
+                $slots.append($row);
             });
+            $wrap.append($slots);
             if (this.dirtyNeeds || this.dirtySlotNote) {
-                $list.append($('<p/>', {class: 'text-warning'}).text(
+                $wrap.append($('<div/>').text(
                     'Unsaved Needed/description changes are NOT ' +
-                    'included when other slots are exported - ' +
-                    'Save first.'));
+                    'included for other slots - Save first.').css({
+                    'background': '#fef3c7', 'color': '#b45309',
+                    'border': '1px solid #fde68a',
+                    'border-radius': '8px', 'padding': '8px 12px',
+                    'font-size': '0.78rem', 'margin-top': '4px'}));
             }
             new Dialog(this, {
-                title: 'Export Plan to Excel',
+                title: 'Export to Excel',
                 size: 'medium',
-                $content: $list,
+                $content: $wrap,
                 buttons: [
                     {
                         text: 'Export',
@@ -1624,16 +1716,26 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         close: true,
                         click: function () {
                             var sel = [];
-                            $list.find('input:checked').each(function () {
-                                sel.push(parseInt(this.value, 10));
-                            });
-                            if (!sel.length) return;
+                            $wrap.find('.mpp-exp-slot:checked').each(
+                                function () {
+                                    sel.push(parseInt(this.value, 10));
+                                });
+                            var withSup = $supInput.is(':checked');
+                            if (!sel.length && !withSup) return;
+                            if (withSup && !sel.length) {
+                                self._onExportExcel();
+                                return;
+                            }
                             if (sel.length === 1 &&
                                 sel[0] === self.activeSlot) {
-                                self._onExportTree();
-                            } else {
-                                self._exportSlotsCollect(sel);
+                                if (withSup) {
+                                    self._onExportPlanSupplier();
+                                } else {
+                                    self._onExportTree();
+                                }
+                                return;
                             }
+                            self._exportSlotsCollect(sel, withSup);
                         },
                     },
                     {text: 'Cancel', close: true},
@@ -1641,10 +1743,31 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }).open();
         },
 
+        // Single active slot + suppliers: Plan + Suppliers sheets,
+        // no slot reload needed.
+        _onExportPlanSupplier: function () {
+            if (!this.summary) return;
+            var entry = this._slotEntry(this.activeSlot);
+            var planName = (entry && entry.note) ||
+                this.summary.name || '';
+            this._postExcel({
+                plan_name: planName,
+                mode: 'plan_supplier',
+                tree_rows: this._collectExportRows(),
+                kits: this.summary.kits || [],
+                combo: this._planCombos(),
+                scratch_total: this.summary.scratch_total_usd || 0,
+                supplier: this._supplierPayload(),
+            });
+        },
+
         // Sequentially loads every selected slot, fully expands it via
         // the bulk get_full_tree RPC and collects its export rows, then
         // restores the original slot view before posting the payload.
-        _exportSlotsCollect: function (slots) {
+        // withSupplier also collects each slot's supplier breakdown
+        // (saved data). A lone slot posts the single-sheet format
+        // (tree, or plan_supplier with suppliers) instead of Combined.
+        _exportSlotsCollect: function (slots, withSupplier) {
             var self = this;
             if (this._exporting || !this.summary) return;
             this._exporting = true;
@@ -1695,8 +1818,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                                         scratch_total: (self.summary &&
                                             self.summary.scratch_total_usd) ||
                                             0,
+                                        kits: (self.summary &&
+                                            self.summary.kits) || [],
                                         tree_rows:
                                             self._collectExportRows(),
+                                        supplier: withSupplier ?
+                                            self._supplierPayload() :
+                                            null,
                                     });
                                 });
                         });
@@ -1715,7 +1843,28 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             };
             chain.then(function () {
                 restore();
-                self._postExcel({mode: 'slots', plans: plans});
+                if (plans.length === 1 && !withSupplier) {
+                    self._postExcel({
+                        plan_name: plans[0].name,
+                        mode: 'tree',
+                        tree_rows: plans[0].tree_rows,
+                        kits: plans[0].kits,
+                        combo: plans[0].combo,
+                        scratch_total: plans[0].scratch_total,
+                    });
+                } else if (plans.length === 1 && withSupplier) {
+                    self._postExcel({
+                        plan_name: plans[0].name,
+                        mode: 'plan_supplier',
+                        tree_rows: plans[0].tree_rows,
+                        kits: plans[0].kits,
+                        combo: plans[0].combo,
+                        scratch_total: plans[0].scratch_total,
+                        supplier: plans[0].supplier,
+                    });
+                } else {
+                    self._postExcel({mode: 'slots', plans: plans});
+                }
             }, function (err) {
                 restore();
                 self._notifyErr(err);
