@@ -62,11 +62,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.activeSlot = 0;
             // Per-group auto-fill targets (Cost card inputs).
             this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
-            // Live 1-device-set cost per kit group (same source as the
-            // Product Cost page). Rendered as KPI cards with the N
-            // inputs inside, combos below.
-            this.costData = null;
-            this.costLoaded = false;
             this.activeTab = 1;
             this.supSummary = null;
             this.pendingRfqSeller = null;
@@ -78,7 +73,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return Promise.all([
                 this._super.apply(this, arguments),
                 this._fetchStartup(),
-                this._fetchCost(),
             ]);
         },
 
@@ -162,57 +156,45 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        _rpcCost: function (method, args) {
-            return this._rpc({
-                model: 'matia.product.cost',
-                method: method,
-                args: args || [],
-            });
-        },
-
-        // Live group costs for the Plan header cards (same RPC the
-        // Product Cost page uses; plan-independent live purchase data).
-        // Both pages are admin-only, so the cross-model call is safe.
-        _fetchCost: function () {
-            var self = this;
-            return this._rpcCost('get_cost_tree', []).then(function (res) {
-                // Keep typed-but-unapplied N values across refreshes.
-                self.$('.mpp-fill-n[data-group]').each(function () {
-                    var k = this.dataset.group;
-                    var n = parseInt(this.value, 10);
-                    if (k && !isNaN(n) && n >= 0) self.fillN[k] = n;
-                });
-                self.costData = res || {groups: [], combos: {}};
-                self.costLoaded = true;
-                // NOTE: willStart runs before mount (no $el yet).
-                if (self.$el) self._renderCostKpis();
-            }, function (err) {
-                self._notifyErr(err);
-            });
-        },
-
-        // Same KPI + combo cards as the Product Cost page, with the
+        // Plan header cost cards: NETTED group totals from the plan
+        // tree below (sum of each top's rolled_total_usd, i.e. stock
+        // deducted - the server splits shared children's net cost
+        // across parents with no double count). Same KPI + combo look
+        // as the Product Cost page (which stays gross/1-set), with the
         // per-group N input inside each of the 4 group cards. Inputs
         // keep the .mpp-fill-n class, so _onNeedFillAll works unchanged.
-        // Runs only on cost fetch (never in _renderTree), so typing
-        // never loses focus or resets.
+        // Runs on every _applySummary (startup/refresh/rebuild/slot),
+        // never in _renderTree, so typing never loses focus or resets.
         _renderCostKpis: function () {
-            if (!this.costLoaded || !this.costData || !this.$el) return;
+            if (!this.$el) return;
             var self = this;
+            // Keep typed-but-unapplied N values across re-renders.
+            this.$('.mpp-fill-n[data-group]').each(function () {
+                var k = this.dataset.group;
+                var n = parseInt(this.value, 10);
+                if (k && !isNaN(n) && n >= 0) self.fillN[k] = n;
+            });
             var icons = {base: 'fa-cube', outdoor: 'fa-leaf',
                 seat: 'fa-user', screws: 'fa-wrench'};
+            var totals = {};
             var html = '';
-            (this.costData.groups || []).forEach(function (g) {
+            (this.treeGroups || []).forEach(function (g) {
+                var net = 0.0;
+                (g.items || []).forEach(function (it) {
+                    net += parseFloat(it.rolled_total_usd) || 0.0;
+                });
+                net = Math.round(net * 100) / 100;
+                totals[g.key] = net;
                 var n = self.fillN[g.key] !== undefined ?
                     self.fillN[g.key] : 50;
                 html += '<div class="msp-kpi-card kpi-' + g.key + '">' +
                     '<div class="kpi-info">' +
-                    '<div class="kpi-title">' + (g.label || g.title) +
+                    '<div class="kpi-title">' + g.title + ' Parts' +
                     '</div>' +
                     '<div class="kpi-value">$' +
-                    self._fmtNum(g.set_total, 2) + '</div>' +
+                    self._fmtNum(net, 2) + '</div>' +
                     '<div class="kpi-sub">' + g.items.length +
-                    ' parts &middot; 1-device set</div>' +
+                    ' tops &middot; net of stock</div>' +
                     '</div>' +
                     '<div class="kpi-icon"><i class="fa ' +
                     (icons[g.key] || 'fa-cube') + '"></i></div>' +
@@ -223,14 +205,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '</div>';
             });
             this.$('.mpp-cost-kpi-grid').html(html);
-            var c = this.costData.combos || {};
+            var base = (totals.base || 0) + (totals.screws || 0);
+            var outdoor = totals.outdoor || 0;
+            var seat = totals.seat || 0;
             var boxes = [
                 ['Full Set', 'Base + Screws + Outdoor + Seat',
-                    c.full, 'mpc-combo-full'],
+                    base + outdoor + seat, 'mpc-combo-full'],
                 ['Base + Outdoor', 'Base + Screws + Outdoor',
-                    c.base_outdoor, ''],
+                    base + outdoor, ''],
                 ['Base + Seat', 'Base + Screws + Seat',
-                    c.base_seat, ''],
+                    base + seat, ''],
             ];
             var combo = '';
             boxes.forEach(function (b) {
@@ -310,6 +294,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (this.$el) {
                 this._renderSlotBar();
                 this._updateRebuildBtn();
+                this._renderCostKpis();
             }
         },
 
@@ -473,7 +458,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             [pid, self.needMap, true]).then(function (res) {
                             self._applySummary(res);
                             self._renderTree();
-                            self._fetchCost();
                             self._updateRebuildBtn();
                             self.displayNotification({
                                 title: _t('Rebuilt'),
