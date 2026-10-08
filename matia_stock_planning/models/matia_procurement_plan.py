@@ -2262,7 +2262,17 @@ class MatiaProcurementPlan(models.Model):
     @api.model
     def _last_buy_vals(self, env_sudo, plan, usd, lb, order_dates):
         """Last-purchase snapshot: price in own currency, USD at the
-        historical rate of the purchase date, and date as 'Mon YYYY'."""
+        historical rate of the purchase date, and date as 'Mon YYYY'.
+
+        The USD leg is converted with round=False so sub-cent prices
+        (e.g. 0.10 TRY -> ~0.0033 USD) survive instead of rounding
+        to 0.0 under USD rounding (0.01).
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record.
+        @param usd: USD res.currency record.
+        @param lb: last-buy dict from _mpp_last_buys.
+        @param order_dates: {purchase.order id: buy datetime} fallback.
+        @return: vals dict for the plan line last-* fields."""
         vals = {'last_price': 0.0, 'last_currency_id': False,
                 'last_uom_id': False,
                 'last_price_usd': 0.0, 'last_date': False,
@@ -2294,8 +2304,11 @@ class MatiaProcurementPlan(models.Model):
         if cur_id and usd:
             cur_rec = env_sudo['res.currency'].browse(cur_id)
             if cur_id != usd.id:
+                # round=False: keep sub-cent precision (e.g. 0.10 TRY
+                # -> ~0.0033 USD); USD rounding (0.01) would store 0.0
+                # and the Prices page would show a blank USD cell.
                 usd_price = cur_rec._convert(
-                    price, usd, plan.company_id, buy_date)
+                    price, usd, plan.company_id, buy_date, round=False)
         vals.update({
             'last_price': price,
             'last_currency_id': cur_id,
@@ -3133,8 +3146,10 @@ class MatiaProcurementPlan(models.Model):
                             _MPP_TR_COMPANY_ID)
                     try:
                         if usd and cur[0] != usd.id:
+                            # round=False: keep sub-cent precision, same
+                            # as _last_buy_vals (0.10 TRY -> ~0.0033 USD).
                             lusd = cur_rec._convert(
-                                lp, usd, comp, buy_date)
+                                lp, usd, comp, buy_date, round=False)
                         ltry = cur_rec._convert(
                             lp, comp.currency_id, comp, buy_date)
                     except Exception as exc:

@@ -212,8 +212,11 @@ class MatiaProductCost(models.AbstractModel):
             if lb and price and cur_id and usd:
                 try:
                     cur_rec = env_sudo['res.currency'].browse(cur_id)
+                    # round=False: keep sub-cent precision (e.g. 0.10
+                    # TRY -> ~0.0033 USD); USD rounding (0.01) would
+                    # yield 0.0 and the Prices page shows blank USD.
                     last_usd = cur_rec._convert(
-                        price, usd, company, buy_date) \
+                        price, usd, company, buy_date, round=False) \
                         if cur_id != usd.id else price
                 except Exception as exc:
                     _logger.warning(
