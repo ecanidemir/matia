@@ -28,7 +28,14 @@ _COLUMNS_BASE = ['Group', 'Code', 'Part', 'Usage Qty', 'UoM',
 # overflow column at 12.
 _WIDTH_CAPS_BASE = [14, 20, 60, 12, 10, 14, 16]
 _LEVEL_CAP = 8
-_COMBO_OVERFLOW_CAP = 12
+
+
+def _usd0_rounded(val):
+    """Rounded USD display, no cents (e.g. $4,598)."""
+    try:
+        return '$%s' % '{:,.0f}'.format(float(val or 0))
+    except (TypeError, ValueError):
+        return '$0'
 
 
 class MatiaProductCostController(http.Controller):
@@ -61,25 +68,30 @@ class MatiaProductCostController(http.Controller):
         columns = (['Group', 'Level'] if has_level
                    else ['Group']) + _COLUMNS_BASE[1:]
         caps = ([_WIDTH_CAPS_BASE[0], _LEVEL_CAP] if has_level
-                else [_WIDTH_CAPS_BASE[0]]) + _WIDTH_CAPS_BASE[1:] + \
-            [_COMBO_OVERFLOW_CAP]
+                else [_WIDTH_CAPS_BASE[0]]) + _WIDTH_CAPS_BASE[1:]
         _C = {name: idx for idx, name in enumerate(columns)}
         bom_letter = chr(ord('A') + _C['BOM Cost USD'])
+        # Two formula paths: without Level every row is level 0, so
+        # SUBTOTAL(109, ...) ranges over BOM Cost directly (7 cols).
+        # With Level, an expanded child's cost is already rolled into
+        # its top-level row, so a hidden helper keeps the BOM cost
+        # only on blank-Level rows (0 below) and SUBTOTAL ranges
+        # over the helper instead (8 cols, helper hidden).
+        if has_level:
+            level_letter = chr(ord('A') + _C['Level'])
+            helper_col = _C['BOM Cost USD'] + 1
+            helper_letter = chr(ord('A') + helper_col)
+            sum_letter = helper_letter
+        else:
+            sum_letter = bom_letter
 
         if not xlsxwriter:
-            def _usd0(val):
-                """Rounded USD display, no cents (e.g. $4,598)."""
-                try:
-                    return '$%s' % '{:,.0f}'.format(float(val or 0))
-                except (TypeError, ValueError):
-                    return '$0'
-
             lines = ['\ufeffProduct Cost - 1-device set (USD)']
             lines.append('Full: %s | Base+Outdoor: %s | Base+Seat: %s'
                          % (
-                             _usd0(combos.get('full')),
-                             _usd0(combos.get('base_outdoor')),
-                             _usd0(combos.get('base_seat'))))
+                             _usd0_rounded(combos.get('full')),
+                             _usd0_rounded(combos.get('base_outdoor')),
+                             _usd0_rounded(combos.get('base_seat'))))
             lines.append(';'.join(columns))
             for label, keys in _PLAN:
                 for key in keys:
@@ -116,6 +128,7 @@ class MatiaProductCostController(http.Controller):
         ws = workbook.add_worksheet('Product Cost')
         title_fmt = workbook.add_format(
             {'bold': True, 'font_size': 14})
+        combo_fmt = workbook.add_format({'bold': True})
         header_fmt = workbook.add_format(
             {'bold': True, 'bg_color': '#1e40af', 'font_color': '#ffffff',
              'border': 1, 'align': 'center', 'valign': 'vcenter'})
@@ -126,8 +139,12 @@ class MatiaProductCostController(http.Controller):
             {'border': 1, 'align': 'center', 'num_format': '#,##0.00'})
         usd_fmt = workbook.add_format(
             {'border': 1, 'num_format': '"$"#,##0.00'})
-        usd0_fmt = workbook.add_format(
-            {'num_format': '"$"#,##0'})
+        # Child (L1+) prices are breakdown detail already rolled into
+        # the top-level row, so they print gray to signal they are
+        # not added into the subtotals again.
+        usd_child_fmt = workbook.add_format(
+            {'border': 1, 'num_format': '"$"#,##0.00',
+             'font_color': 'gray'})
         sub_label_fmt = workbook.add_format(
             {'bold': True, 'bg_color': '#dbeafe', 'border': 1})
         sub_usd_fmt = workbook.add_format(
@@ -142,31 +159,25 @@ class MatiaProductCostController(http.Controller):
         row = 0
         ws.write(row, 0, 'Product Cost - 1-device set (USD)', title_fmt)
         row += 1
-        combo_pairs = [
-            ('Full:', combos.get('full', 0) or 0),
-            ('Base+Outdoor:', combos.get('base_outdoor', 0) or 0),
-            ('Base+Seat:', combos.get('base_seat', 0) or 0),
-        ]
-        for idx, (lab, val) in enumerate(combo_pairs):
-            ws.write(row, idx * 2, lab)
-            ws.write_number(row, idx * 2 + 1, float(val), usd0_fmt)
+        # Single-cell bold summary (values pre-rounded as $5,276 text).
+        ws.write(row, 0, 'Full: %s | Base+Outdoor: %s | Base+Seat: %s' % (
+            _usd0_rounded(combos.get('full')),
+            _usd0_rounded(combos.get('base_outdoor')),
+            _usd0_rounded(combos.get('base_seat'))), combo_fmt)
         row += 2
         header_row = row
         ws.write_row(header_row, 0, columns, header_fmt)
+        if has_level:
+            ws.write(header_row, helper_col, 'L0 Cost', header_fmt)
         row += 1
-        # Auto-width tracking (header seeds the minimum; last slot is
-        # the combo-summary overflow column).
-        widths = [len(c) for c in columns] + [0]
+        # Auto-width tracking (header seeds the minimum).
+        widths = [len(c) for c in columns]
 
         def _bump(col, val):
             """Track the widest display value per column."""
             if val is None:
                 return
             widths[col] = max(widths[col], len(str(val)))
-
-        for idx, (lab, val) in enumerate(combo_pairs):
-            _bump(idx * 2, lab)
-            _bump(idx * 2 + 1, '$%.0f' % float(val))
 
         spans = {}  # label -> list of (first_excel_row, last_excel_row)
         filter_end = header_row
@@ -190,8 +201,22 @@ class MatiaProductCostController(http.Controller):
             ws.write(global_row, _C['Part'], name, text_fmt)
             ws.write_number(global_row, _C['Usage Qty'], usage, qty_fmt)
             ws.write(global_row, _C['UoM'], uom, text_fmt)
-            ws.write_number(global_row, _C['Unit USD'], unit, usd_fmt)
-            ws.write_number(global_row, _C['BOM Cost USD'], ext, usd_fmt)
+            money_fmt = (usd_child_fmt if lvl > 0 else usd_fmt)
+            ws.write_number(global_row, _C['Unit USD'], unit, money_fmt)
+            ws.write_number(global_row, _C['BOM Cost USD'], ext, money_fmt)
+            if has_level:
+                excel_row = global_row + 1
+                ws.write_formula(
+                    global_row, helper_col,
+                    '=IF(%s%d="",%s%d,0)' % (
+                        level_letter, excel_row, bom_letter, excel_row))
+            # Adjacent detail rows merge into one SUBTOTAL range.
+            er = global_row + 1
+            rngs = spans.setdefault(label, [])
+            if rngs and rngs[-1][1] + 1 == er:
+                rngs[-1] = (rngs[-1][0], er)
+            else:
+                rngs.append((er, er))
             _bump(_C['Group'], label)
             _bump(_C['Code'], code)
             _bump(_C['Part'], name)
@@ -204,25 +229,20 @@ class MatiaProductCostController(http.Controller):
 
         _write_detail.row = row
         for label, keys in _PLAN:
-            label_spans = []
             for key in keys:
                 grp = by_key.get(key)
                 items = (grp.get('items', []) or []) if grp else []
-                if not items:
-                    continue
-                first = _write_detail.row + 1
                 for itm in items:
                     _write_detail(label, itm)
-                label_spans.append((first, _write_detail.row))
+            label_spans = spans.get(label, [])
             if not label_spans:
                 continue
-            spans[label] = label_spans
             # Subtotal row: Group cell keeps the label so the row
             # stays visible when the table is filtered by Group.
             # SUBTOTAL(109, ...) sums only visible rows, so the
             # subtotal follows the filter instead of going stale.
             sr = _write_detail.row
-            refs = ','.join('%s%d:%s%d' % (bom_letter, a, bom_letter, b)
+            refs = ','.join('%s%d:%s%d' % (sum_letter, a, sum_letter, b)
                             for a, b in label_spans)
             ws.write(sr, _C['Group'], label, sub_label_fmt)
             for c in range(1, _C['BOM Cost USD']):
@@ -232,6 +252,8 @@ class MatiaProductCostController(http.Controller):
                     ws.write(sr, c, '', sub_label_fmt)
             ws.write_formula(sr, _C['BOM Cost USD'],
                              '=SUBTOTAL(109,%s)' % refs, sub_usd_fmt)
+            if has_level:
+                ws.write(sr, helper_col, '', sub_label_fmt)
             _bump(_C['Part'], '%s Subtotal' % label)
             _write_detail.row += 1
             filter_end = sr
@@ -239,7 +261,7 @@ class MatiaProductCostController(http.Controller):
         # Grand total lives OUTSIDE the autofilter range (blank Group
         # cell would be hidden by a Group filter otherwise) and sums
         # detail rows only (subtotal rows excluded, no double count).
-        all_refs = ','.join('%s%d:%s%d' % (bom_letter, a, bom_letter, b)
+        all_refs = ','.join('%s%d:%s%d' % (sum_letter, a, sum_letter, b)
                             for rngs in spans.values() for a, b in rngs)
         if all_refs:
             row += 1
@@ -251,11 +273,16 @@ class MatiaProductCostController(http.Controller):
             ws.write_formula(row, _C['BOM Cost USD'],
                              '=SUBTOTAL(109,%s)' % all_refs,
                              total_usd_fmt)
+            if has_level:
+                ws.write(row, helper_col, '', total_label_fmt)
             _bump(_C['Part'], 'GRAND TOTAL')
         last_row = row
         # Auto widths (measured, capped), filter, freeze, print.
         for idx, (w, cap) in enumerate(zip(widths, caps)):
             ws.set_column(idx, idx, min(w + 2, cap))
+        if has_level:
+            ws.set_column(helper_col, helper_col, None, None,
+                          {'hidden': True})
         if filter_end > header_row:
             ws.autofilter(header_row, 0, filter_end, len(columns) - 1)
         ws.freeze_panes(header_row + 1, 0)
