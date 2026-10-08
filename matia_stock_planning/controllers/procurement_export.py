@@ -71,20 +71,56 @@ def _np_txt(r):
     return '%s/%s' % (need, planned)
 
 
-def _sheet_name(base):
-    """Sanitize an xlsx sheet name (31 chars, no : \\ / ? * [ ])."""
-    bad = ':\\/?*[]'
-    for ch in bad:
-        base = base.replace(ch, ' ')
-    return base[:31] or 'Sheet'
-
-
 def _usd0num(val):
     """Whole-USD number for the combined export (no cents)."""
     try:
         return round(float(val or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _combined_supplier_table(plans):
+    """Condense per-slot supplier breakdowns for the combined sheet.
+
+    One table for all locations: rows are (location, supplier)
+    pairs, so each location block (TR, USA, ...) closes with its
+    own SUBTOTAL row and the sheet ends with a grand TOTAL. Values
+    are the slot's supplier cost, split by line Source label.
+    @return (locs, blocks, present): locations in block order
+        ('' last), {loc: {supplier: [per-slot floats]}},
+        {(supplier, plan_idx)} seen in that slot.
+    """
+    blocks = {}
+    present = set()
+    n = len(plans)
+    for i, p in enumerate(plans):
+        sup = p.get('supplier') or {}
+        for g in sup.get('groups', []) or []:
+            title = g.get('title', '') or ''
+            present.add((title, i))
+            per_loc = {}
+            for itm in g.get('items', []) or []:
+                lc = (itm.get('last_company', '') or '').strip()
+                v = itm.get('subtotal', None)
+                if v is None:
+                    v = itm.get('total_usd', 0)
+                try:
+                    v = float(v or 0)
+                except (TypeError, ValueError):
+                    v = 0
+                per_loc[lc] = per_loc.get(lc, 0) + v
+            if not per_loc:
+                try:
+                    c = float(g.get('cost') or 0)
+                except (TypeError, ValueError):
+                    c = 0
+                per_loc[''] = c
+            for lc, c in per_loc.items():
+                arr = blocks.setdefault(lc, {}).setdefault(
+                    title, [0.0] * n)
+                arr[i] += c
+    locs = sorted(blocks, key=lambda l: (l == '', l.lower()))
+    return locs, blocks, present
 
 
 def _supplier_csv_lines(plan_name, groups, total, kits, scratch_total):
@@ -478,8 +514,12 @@ class MatiaProcurementPlanController(http.Controller):
         The client posts fully expanded rows per slot, but the combined
         matrix always uses level-0 rows only (never the BOM-open
         version). All money in the Combined sheet is whole-USD
-        (rounded, no cents). With the supplier option each slot also
-        gets its own supplier sheet in the same workbook.
+        (rounded, no cents). With the supplier option a single
+        Suppliers sheet is appended: Supplier | Location | one
+        rounded total column per slot (slot description as header,
+        slot pastel). Suppliers share one table across locations:
+        each location block (TR, USA, ...) closes with a SUBTOTAL
+        row, then a grand TOTAL.
         """
         plans = []
         seen = set()
@@ -574,16 +614,36 @@ class MatiaProcurementPlanController(http.Controller):
                 total.append('%d' % v)
             lines.append(';'.join(total))
             if with_supplier:
-                for p in plans:
-                    sup = p.get('supplier')
-                    if not sup:
-                        continue
-                    lines.append('')
-                    lines.extend(_supplier_csv_lines(
-                        sup.get('plan_name', p['name']),
-                        sup.get('groups', []), sup.get('total', 0),
-                        sup.get('kits', []),
-                        sup.get('scratch_total', 0)))
+                locs, blocks, present = _combined_supplier_table(
+                    plans)
+                lines.append('')
+                lines.append('Suppliers (USD)')
+                lines.append(';'.join(
+                    ['Supplier', 'Location'] + slot_titles))
+                s_est = [0] * len(plans)
+                for loc in locs:
+                    b_est = [0] * len(plans)
+                    for name in sorted(blocks[loc],
+                                       key=lambda t: t.lower()):
+                        arr = blocks[loc][name]
+                        cells = [name, loc or '—']
+                        for i in range(len(plans)):
+                            if (name, i) in present:
+                                v = _usd0num(arr[i])
+                                cells.append('%d' % v)
+                                b_est[i] += v
+                                s_est[i] += v
+                            else:
+                                cells.append('')
+                        lines.append(';'.join(cells))
+                    slab = ['%s SUBTOTAL' % (loc or '—'), '']
+                    for v in b_est:
+                        slab.append('%d' % v)
+                    lines.append(';'.join(slab))
+                stotal = ['TOTAL', '']
+                for v in s_est:
+                    stotal.append('%d' % v)
+                lines.append(';'.join(stotal))
             content = '\r\n'.join(lines).encode('utf-8')
             filename = 'Plan_Combined_%s.csv' % datetime.now().strftime(
                 '%Y%m%d_%H%M')
@@ -713,16 +773,70 @@ class MatiaProcurementPlanController(http.Controller):
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         if with_supplier:
-            for p in plans:
-                sup = p.get('supplier')
-                if not sup:
-                    continue
-                ws2 = workbook.add_worksheet(_sheet_name(
-                    'Sup S%d %s' % (p['slot'], p['name'])))
-                self._write_supplier_sheet(
-                    workbook, ws2, sup.get('plan_name', p['name']),
-                    sup.get('groups', []), sup.get('total', 0),
-                    sup.get('kits', []), sup.get('scratch_total', 0))
+            locs, blocks, present = _combined_supplier_table(plans)
+            sheaders = ['Supplier', 'Location'] + slot_titles
+            ws2 = workbook.add_worksheet('Suppliers')
+            ws2.write(0, 0, 'Suppliers (USD)', title_fmt)
+            shrow = 2
+            ws2.write_row(shrow, 0, sheaders, header_fmt)
+            for i, title in enumerate(slot_titles):
+                ws2.write(shrow, 2 + i, title,
+                          slot_fmts[i]['header'])
+            swidths = [len(h) for h in sheaders]
+
+            def _sbump(col, val):
+                if val is None:
+                    return
+                swidths[col] = max(swidths[col], len(str(val)))
+
+            s_est = [0] * len(plans)
+            r2 = shrow + 1
+            for loc in locs:
+                b_est = [0] * len(plans)
+                for name in sorted(blocks[loc],
+                                   key=lambda t: t.lower()):
+                    arr = blocks[loc][name]
+                    ws2.write(r2, 0, name, text_fmt)
+                    ws2.write(r2, 1, loc or '—', text_fmt)
+                    _sbump(0, name)
+                    _sbump(1, loc or '—')
+                    for i in range(len(plans)):
+                        scol = 2 + i
+                        if (name, i) in present:
+                            est = _usd0num(arr[i])
+                            ws2.write_number(r2, scol, est,
+                                             slot_fmts[i]['money'])
+                            b_est[i] += est
+                            s_est[i] += est
+                            _sbump(scol, '$%d' % est)
+                        else:
+                            ws2.write(r2, scol, '',
+                                      slot_fmts[i]['text'])
+                    r2 += 1
+                slab = '%s SUBTOTAL' % (loc or '—')
+                ws2.write(r2, 0, slab, total_fmt)
+                ws2.write(r2, 1, '', total_fmt)
+                for i in range(len(plans)):
+                    ws2.write_number(r2, 2 + i, b_est[i],
+                                     slot_fmts[i]['total'])
+                _sbump(0, slab)
+                r2 += 1
+            # Grand TOTAL, kept out of the filter.
+            ws2.write(r2, 0, 'TOTAL', total_fmt)
+            ws2.write(r2, 1, '', total_fmt)
+            for i in range(len(plans)):
+                ws2.write_number(r2, 2 + i, s_est[i],
+                                 slot_fmts[i]['total'])
+            last_s = r2 - 1
+            scaps = [40, 20] + [16] * len(plans)
+            for idx in range(len(sheaders)):
+                ws2.set_column(idx, idx,
+                               min(swidths[idx] + 2, scaps[idx]))
+            if last_s > shrow:
+                ws2.autofilter(shrow, 0, last_s, len(sheaders) - 1)
+            ws2.freeze_panes(shrow + 1, 0)
+            ws2.set_landscape()
+            ws2.fit_to_pages(1, 0)
         workbook.close()
         output.seek(0)
         prefix = 'Plan_Combined_Supplier' if with_supplier \

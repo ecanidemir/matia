@@ -1600,8 +1600,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // brown #7c2d12, cream #fff7ed, ink #0f172a). Supplier is a
         // separate card on top; slots below. No slot + supplier =
         // supplier only; one slot + supplier = Plan + Suppliers
-        // sheets; several slots + supplier = Combined + per-slot
-        // supplier sheets. Inline styles: the Dialog lives outside
+        // sheets; several slots + supplier = Combined + one
+        // condensed Suppliers sheet (location blocks + subtotals). Inline styles: the Dialog lives outside
         // the page root, so the scoped scss does not reach it.
         _onExportPlanPopup: function () {
             if (!this.summary) return;
