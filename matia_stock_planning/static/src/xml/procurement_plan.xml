@@ -62,13 +62,6 @@
                      Costs are plan-independent (live purchase data). -->
                 <div class="msp-kpi-grid mpp-cost-kpi-grid mt-2"/>
                 <div class="mpc-combo-row mpp-cost-combo-row mt-2"/>
-                <div class="mpp-cost-apply">
-                    <span class="text-muted">Fill Needed with N per group, then press Rebuild to apply.</span>
-                    <button type="button" class="btn btn-secondary btn-sm mpp-btn-needfill-all"
-                        title="Fill Needed with N locally for all four groups, then press Rebuild to apply">
-                        <i class="fa fa-magic mr-1"></i>Apply
-                    </button>
-                </div>
                 <div class="msp-table-card mt-2">
                     <div class="msp-table-search">
                         <div class="search-input-box">

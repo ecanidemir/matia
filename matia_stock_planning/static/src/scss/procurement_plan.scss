@@ -161,18 +161,6 @@
             font-weight: 700;
         }
     }
-    .mpp-cost-apply {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 0.6rem;
-        margin: 0.5rem 0 0.75rem;
-
-        span {
-            font-size: 0.75rem;
-        }
-    }
-
     // Slot bar under the header: study selector 0-9 + save.
     .mpp-slot-bar {
         display: flex;

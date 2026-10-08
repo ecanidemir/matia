@@ -20,7 +20,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-nav-tab': '_onNavTab',
             'change .mpp-slot-select': '_onSlotChange',
             'click .mpp-btn-slot-save': '_onSlotSave',
-            'click .mpp-btn-needfill-all': '_onNeedFillAll',
             'click .mpp-btn-excel': '_onExportExcel',
             'click .mpp-btn-excel-tree': '_onExportTree',
             'click .mpp-btn-create-rfq': '_onCreateRfq',
@@ -28,6 +27,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-create-mo': '_onCreateMo',
             'input .mpp-need': '_onNeedInput',
             'change .mpp-need': '_onNeedBlur',
+            'input .mpp-fill-n': '_onFillNInput',
+            'change .mpp-fill-n': '_onFillNBlur',
             'input .mpp-tree-search': '_onTreeSearch',
             'click .msp-btn-expand-all': '_onExpandAll',
             'click .msp-btn-collapse-all': '_onCollapseAll',
@@ -161,8 +162,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // deducted - the server splits shared children's net cost
         // across parents with no double count). Same KPI + combo look
         // as the Product Cost page (which stays gross/1-set), with the
-        // per-group N input inside each of the 4 group cards. Inputs
-        // keep the .mpp-fill-n class, so _onNeedFillAll works unchanged.
+        // per-group N input inside each of the 4 group cards. Typing N
+        // fills that group's Needed values live via _onFillNInput.
         // Runs on every _applySummary (startup/refresh/rebuild/slot),
         // never in _renderTree, so typing never loses focus or resets.
         _renderCostKpis: function () {
@@ -224,7 +225,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<input type="number" min="0" value="' + n + '" ' +
                     'class="form-control form-control-sm mpp-fill-n" ' +
                     'data-group="' + g.key + '" ' +
-                    'title="Needed quantity for this group, then Apply"/>' +
+                    'title="Needed quantity for this group, then Rebuild"/>' +
                     '</div>';
             });
             this.$('.mpp-cost-kpi-grid').html(html);
@@ -546,62 +547,48 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._markNeedsDirty();
         },
 
-        // Cost-card N inputs (inside the Plan header cards): Needed = N
-        // (gross want) for every top in each group, applied LOCALLY
-        // (no server call).
-        // Press Rebuild afterwards to net stock and recalculate.
-        // Each of the four inputs is read independently; an
-        // empty/invalid input leaves that group untouched. Stock is
-        // netted ONCE by the server cascade (net = demand - avail), so
-        // the fill must NOT pre-subtract avail here: that
+        // Cost-card N inputs (inside the Plan header cards): typing N
+        // sets Needed = N (gross want) for every top in that group
+        // LOCALLY and immediately (no server call, no Apply button).
+        // The tree re-renders so the Needed numbers update visually,
+        // Rebuild turns red (dirty); press Rebuild to net stock and
+        // recalculate. Empty/invalid input leaves the group untouched.
+        // Stock is netted ONCE by the server cascade (net = demand -
+        // avail), so the fill must NOT pre-subtract avail here: that
         // double-counted stock (every 0 < avail < N row ordered avail
         // units short) and starved shared parts. Shared consumption by
         // other parents pools into Planned on rebuild.
-        _onNeedFillAll: function () {
+        _onFillNInput: function (ev) {
             var self = this;
-            if (!this.summary || !this._planId()) {
-                this.displayNotification({
-                    title: _t('Warning'),
-                    message: _t('The plan is still loading.'),
-                    type: 'warning',
-                });
-                return;
-            }
-            var keys = ['base', 'outdoor', 'seat', 'screws'];
-            var filled = [];
+            if (!this.summary || !this._planId()) return;
+            var key = ev.currentTarget.dataset.group;
+            if (!key) return;
+            var n = parseInt(ev.currentTarget.value, 10);
+            if (isNaN(n) || n < 0) return;
+            this.fillN[key] = n;
             var count = 0;
-            keys.forEach(function (key) {
-                var nInput = self.$('.mpp-fill-n[data-group="' + key + '"]').val();
-                var n = parseInt(nInput, 10);
-                if (isNaN(n) || n < 0) return;
-                self.fillN[key] = n;
-                filled.push(key + '=' + n);
-                self.treeGroups.forEach(function (g) {
-                    if (g.key !== key) return;
-                    (g.items || []).forEach(function (r) {
-                        self.needMap[r.product_id] =
-                            Math.max(0, Math.ceil(n));
-                        count += 1;
-                    });
+            this.treeGroups.forEach(function (g) {
+                if (g.key !== key) return;
+                (g.items || []).forEach(function (r) {
+                    self.needMap[r.product_id] =
+                        Math.max(0, Math.ceil(n));
+                    count += 1;
                 });
             });
-            if (!filled.length || !count) {
-                this.displayNotification({
-                    title: _t('Warning'),
-                    message: _t('Enter at least one quantity first.'),
-                    type: 'warning',
-                });
-                return;
-            }
+            if (!count) return;
             this._markNeedsDirty();
             this._renderTree();
-            self.displayNotification({
-                title: _t('Filled'),
-                message: filled.join(', ') +
-                    _t(' entered as Needed for ') + count + ' ' +
-                    _t('parts. Press Rebuild to apply.'),
-                type: 'success',
-            });
+        },
+
+        // Blur/enter only normalizes the card value into fillN.
+        // No server call here by design (see _onFillNInput).
+        _onFillNBlur: function (ev) {
+            var key = ev.currentTarget.dataset.group;
+            if (!key) return;
+            var n = parseInt(ev.currentTarget.value, 10);
+            if (isNaN(n) || n < 0) return;
+            ev.currentTarget.value = n;
+            this.fillN[key] = n;
         },
 
         // Cost cards live inside pane 1 (hidden with the pane).
