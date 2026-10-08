@@ -567,11 +567,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (isNaN(n) || n < 0) return;
             this.fillN[key] = n;
             var count = 0;
+            var nFill = Math.max(0, Math.ceil(n));
             this.treeGroups.forEach(function (g) {
                 if (g.key !== key) return;
                 (g.items || []).forEach(function (r) {
-                    self.needMap[r.product_id] =
-                        Math.max(0, Math.ceil(n));
+                    self.needMap[r.product_id] = nFill;
+                    // Rows render r.need first (server value) and fall
+                    // back to needMap only when it is missing, so the
+                    // row object must be updated too - otherwise the
+                    // re-rendered tree keeps showing the old numbers.
+                    r.need = nFill;
                     count += 1;
                 });
             });
