@@ -114,12 +114,17 @@ def _display_group(r):
     return r.get('group', '')
 
 
-def _usd_kind(val, small_under=0.5):
+# Below this, even 2 decimals would print $0.00, so 4 decimals
+# are kept (the never-show-0 rule wins over the 2-decimal rule).
+_TINY_USD = 0.005
+
+
+def _usd_kind(val, small_under=1.0):
     """Display rule for money cells (user rule: never show 0).
 
     @return (kind, num): 'blank' for missing/true-zero (the cell
         stays empty instead of $0), 'small' for non-zero values
-        below small_under (written unrounded with 4 decimals),
+        below small_under (2 decimals, or 4 when below _TINY_USD),
         'whole' otherwise (raw value; the xlsx number format rounds
         the display, the CSV twin rounds half-up itself).
     """
@@ -134,19 +139,27 @@ def _usd_kind(val, small_under=0.5):
     return 'whole', f
 
 
+def _small_fmt_no(num, fmt_small, fmt_tiny):
+    """2-decimal format unless the value needs 4 (tiny)."""
+    if abs(num) < _TINY_USD:
+        return fmt_tiny or fmt_small
+    return fmt_small
+
+
 def _write_usd(ws, row, col, val, fmt_whole, fmt_small, fmt_blank,
-               small_under=0.5):
+               small_under=1.0, fmt_tiny=None):
     """Write one money cell with the never-show-0 rule."""
     kind, num = _usd_kind(val, small_under)
     if kind == 'blank':
         ws.write(row, col, '', fmt_blank)
     elif kind == 'small':
-        ws.write_number(row, col, num, fmt_small)
+        ws.write_number(row, col, num,
+                        _small_fmt_no(num, fmt_small, fmt_tiny))
     else:
         ws.write_number(row, col, num, fmt_whole)
 
 
-def _usd_csv(val, small_under=0.5, dec=0):
+def _usd_csv(val, small_under=1.0, dec=0):
     """CSV twin of the never-show-0 rule.
 
     @param dec decimals for regular values (0 = whole-USD columns,
@@ -157,7 +170,7 @@ def _usd_csv(val, small_under=0.5, dec=0):
     if kind == 'blank':
         return ''
     if kind == 'small':
-        return '%.4f' % num
+        return '%.4f' % num if abs(num) < _TINY_USD else '%.2f' % num
     if dec:
         _p = 10 ** dec
         return ('%.{}f'.format(dec)
@@ -166,11 +179,11 @@ def _usd_csv(val, small_under=0.5, dec=0):
 
 
 def _usd_text(val):
-    """Prose total: '$1,234', '$0.1234' when sub-dollar, '$0'
+    """Prose total: '$1,234', '$0.12' when sub-dollar, '$0'
     only for a genuine zero total (data cells stay blank instead)."""
     kind, num = _usd_kind(val)
     if kind == 'small':
-        return '$%.4f' % num
+        return '$%.4f' % num if abs(num) < _TINY_USD else '$%.2f' % num
     if kind == 'blank':
         return '$0'
     return '$%s' % ('{:,.0f}'.format(math.floor(num + 0.5)))
@@ -1498,11 +1511,13 @@ class MatiaProcurementPlanController(http.Controller):
             {'bold': True, 'bg_color': '#7c2d12', 'font_color': '#ffffff',
              'border': 1})
         text_fmt = workbook.add_format({'border': 1})
-        # Combined money is whole-USD (rounded, no cents), except
-        # sub-$0.50 values, which print unrounded (never $0).
+        # Combined money is whole-USD, except sub-$1 values, which
+        # print with decimals (2, or 4 below $0.005 so no $0 shows).
         money_fmt = workbook.add_format(
             {'border': 1, 'num_format': '"$"#,##0'})
         money_small_fmt = workbook.add_format(
+            {'border': 1, 'num_format': '"$"#,##0.00'})
+        money_tiny_fmt = workbook.add_format(
             {'border': 1, 'num_format': '"$"#,##0.0000'})
         total_fmt = workbook.add_format({'bold': True, 'border': 1})
         total_money_fmt = workbook.add_format(
@@ -1522,8 +1537,14 @@ class MatiaProcurementPlanController(http.Controller):
                      'num_format': '"$"#,##0'}),
                 'small': workbook.add_format(
                     {'border': 1, 'bg_color': color,
+                     'num_format': '"$"#,##0.00'}),
+                'tiny': workbook.add_format(
+                    {'border': 1, 'bg_color': color,
                      'num_format': '"$"#,##0.0000'}),
                 'small_total': workbook.add_format(
+                    {'bold': True, 'border': 1, 'bg_color': color,
+                     'num_format': '"$"#,##0.00'}),
+                'tiny_total': workbook.add_format(
                     {'bold': True, 'border': 1, 'bg_color': color,
                      'num_format': '"$"#,##0.0000'}),
                 'header': workbook.add_format(
@@ -1566,7 +1587,8 @@ class MatiaProcurementPlanController(http.Controller):
                 ws.write(r, mC['Usage'], usage, text_fmt)
                 _write_usd(ws, r, mC['Unit Cost'],
                            row.get('scratch_usd'),
-                           money_fmt, money_small_fmt, text_fmt)
+                           money_fmt, money_small_fmt, text_fmt,
+                           fmt_tiny=money_tiny_fmt)
                 _mbump(mC['Group'], disp)
                 _mbump(mC['Part Code'], code)
                 _mbump(mC['Part Name'], name)
@@ -1585,7 +1607,8 @@ class MatiaProcurementPlanController(http.Controller):
                     except (TypeError, ValueError):
                         est = 0.0
                     _write_usd(ws, r, est_col, est,
-                               f['money'], f['small'], f['text'])
+                               f['money'], f['small'], f['text'],
+                               fmt_tiny=f['tiny'])
                     m_est[i] += est
                     acc[i] += est
                     _mbump(est_col, '$' + (_usd_csv(est) or ''))
@@ -1600,7 +1623,8 @@ class MatiaProcurementPlanController(http.Controller):
                 _write_usd(ws, r, len(mbase) + i, acc[i],
                            slot_fmts[i]['total'],
                            slot_fmts[i]['small_total'],
-                           slot_fmts[i]['text'])
+                           slot_fmts[i]['text'],
+                           fmt_tiny=slot_fmts[i]['tiny_total'])
             _mbump(mC['Group'], slab)
             r += 1
         # TOTAL row: per-slot Est. USD only (level-0 sums, static);
@@ -1614,7 +1638,8 @@ class MatiaProcurementPlanController(http.Controller):
             _write_usd(ws, r, len(mbase) + i, m_est[i],
                        slot_fmts[i]['total'],
                        slot_fmts[i]['small_total'],
-                       slot_fmts[i]['text'])
+                       slot_fmts[i]['text'],
+                       fmt_tiny=slot_fmts[i]['tiny_total'])
         last_m = r - 1
         mcaps = {'Group': 18, 'Part Code': 40,
                  'Part Name': 60, 'Usage': 16, 'Unit Cost': 16}
@@ -1665,7 +1690,8 @@ class MatiaProcurementPlanController(http.Controller):
                             _write_usd(ws2, r2, scol, est,
                                        slot_fmts[i]['money'],
                                        slot_fmts[i]['small'],
-                                       slot_fmts[i]['text'])
+                                       slot_fmts[i]['text'],
+                                       fmt_tiny=slot_fmts[i]['tiny'])
                             b_est[i] += est
                             s_est[i] += est
                             _sbump(scol,
@@ -1681,7 +1707,8 @@ class MatiaProcurementPlanController(http.Controller):
                     _write_usd(ws2, r2, 2 + i, b_est[i],
                                slot_fmts[i]['total'],
                                slot_fmts[i]['small_total'],
-                               slot_fmts[i]['text'])
+                               slot_fmts[i]['text'],
+                               fmt_tiny=slot_fmts[i]['tiny_total'])
                 _sbump(0, slab)
                 r2 += 1
             # Grand TOTAL, kept out of the filter.
@@ -1691,7 +1718,8 @@ class MatiaProcurementPlanController(http.Controller):
                 _write_usd(ws2, r2, 2 + i, s_est[i],
                            slot_fmts[i]['total'],
                            slot_fmts[i]['small_total'],
-                           slot_fmts[i]['text'])
+                           slot_fmts[i]['text'],
+                           fmt_tiny=slot_fmts[i]['tiny_total'])
             last_s = r2 - 1
             scaps = [40, 20] + [16] * len(plans)
             for idx in range(len(sheaders)):

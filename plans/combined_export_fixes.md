@@ -9,8 +9,9 @@ Python var -> Git Deploy + Upgrade/restart (mesai disi + backup); sonrasi Ctrl+F
    Cozum: server-side kanonik sira Base > Outdoor > Seat; Screws -> 'Base' etiketiyle Base blogunun en altinda.
    Client `_collectExportRows` + server `_port_row` satira `gkey` ekler (yoksa basliktan turetilir).
 2. **Unit Cost 0**: `_usd0num` = round() -> 0.5 alti $0. Kural: 0/None -> bos hucre;
-   0 < |v| < 0.5 -> 4 ondalik (`$#,##0.0000`); diger -> whole-USD. Ayni kural tum combined
-   para hucreleri + subtotal/total icin. Toplamlar tam hassasiyetle birikir, yazarken formatlanir.
+   0 < |v| < 1 -> 2 ondalik (`$#,##0.00`); 0.005 alti -> 4 ondalik (2 ondalik $0.00 verirdi);
+   diger -> whole-USD (combined) / 2-dec (single). Ayni kural tum combined para hucreleri +
+   subtotal/total icin. Toplamlar tam hassasiyetle birikir, yazarken formatlanir.
 3. **Grup subtotal yok**: Products sheet'e grup blogu sonuna statik SUBTOTAL satiri (slot basina),
    Group etiketiyle (filtrede gorunur, cost sheet deseni). Grand TOTAL filtre disinda kalir.
 4. **Location basligi**: deger kaynak/RFQ sirketi (TR/USA). Baslik 'Buy From' olur (screen Tab2 ile ayni dil).
