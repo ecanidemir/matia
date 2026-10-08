@@ -1502,7 +1502,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     if (!self._subtreeMatch(uid, r)) return;
                     var net = self._rowNet(r);
                     rows.push({
-                        group: gtitle, pid: r.product_id,
+                        group: gtitle, gkey: groupKey,
+                        pid: r.product_id,
                         code: r.code, name: r.name, level: level,
                         bom_qty: r.bom_qty, uom: self._uomEn(r.uom),
                         tr: parseFloat(r.avail_tr) || 0,
@@ -1541,7 +1542,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 // Same visibility rule as the screen: collapsed groups
                 // are excluded unless a search forces everything open.
                 if (!searching && self.collapsedGroups[g.key]) return;
-                rows.push({group: g.title,
+                rows.push({group: g.title, gkey: g.key,
                     code: '[' + g.title + '] ' + (g.bom_name || ''),
                     level: 0, is_header: true});
                 var items = self._sortItems((g.items || []).slice());
@@ -1564,39 +1565,70 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             document.body.removeChild(form);
         },
 
-        // Supplier breakdown payload from the current (saved) summary.
-        _supplierPayload: function () {
+        // Supplier payload from a get_supplier_summary result (USD
+        // PO-value basis, v2): per-(seller, buy-from company) groups,
+        // the same figures the Suppliers tab shows. The old plan-
+        // currency breakdown is never posted (it inflated totals ~40x
+        // by rendering TRY subtotals as USD).
+        _supplierV2: function (sup) {
             var groups = [];
-            var sups = (this.summary && this.summary.suppliers) || [];
+            var sups = (sup && sup.suppliers) || [];
             for (var i = 0; i < sups.length; i++) {
                 groups.push({
-                    title: sups[i].seller_name,
-                    cost: sups[i].cost,
-                    items: sups[i].lines,
+                    title: sups[i].seller_name || '',
+                    company: sups[i].company || '',
+                    cost: sups[i].total_usd || 0,
+                    items: sups[i].lines || [],
                 });
             }
             return {
-                plan_name: this.summary.name,
+                v: 2,
+                plan_name: (sup && sup.plan_name) ||
+                    ((this.summary && this.summary.name) || ''),
                 groups: groups,
-                total: this.summary.total_cost,
-                kits: this.summary.kits || [],
-                scratch_total:
-                    this.summary.scratch_total_usd || 0,
+                total: (sup && sup.grand_total_usd) || 0,
+                grand_rolled_usd:
+                    (sup && sup.grand_rolled_usd) || 0,
+                unpriced_count: (sup && sup.unpriced_count) || 0,
+                unsourced_count: (sup && sup.unsourced_count) || 0,
+                unknown_total_usd:
+                    (sup && sup.unknown_total_usd) || 0,
+                unknown_count: (sup && sup.unknown_count) || 0,
+                kits: (this.summary && this.summary.kits) || [],
+                scratch_total: (this.summary &&
+                    this.summary.scratch_total_usd) || 0,
             };
+        },
+
+        // Fresh Suppliers-tab data for a plan (reuses the cache only
+        // when it already belongs to that plan).
+        _withSupSummary: function (pid) {
+            var self = this;
+            if (this.supSummary && this.supSummary.plan_id === pid) {
+                return Promise.resolve(this.supSummary);
+            }
+            return this._rpcPlan('get_supplier_summary', [pid]).then(
+                function (res) {
+                    self.supSummary = res;
+                    return res;
+                });
         },
 
         // Supplier-only export (popup: supplier on, no slot picked).
         // With withCost the live Cost sheet is appended server-side.
         _onExportExcel: function (withCost) {
             if (!this.summary) return;
-            var sup = this._supplierPayload();
-            this._postExcel({
-                plan_name: sup.plan_name,
-                groups: sup.groups,
-                total: sup.total,
-                kits: sup.kits,
-                scratch_total: sup.scratch_total,
-                withCost: withCost ? 1 : 0,
+            var self = this;
+            var pid = this._planId();
+            if (!pid) return;
+            this._withSupSummary(pid).then(function (sup) {
+                self._postExcel({
+                    mode: 'supplier',
+                    supplier: self._supplierV2(sup),
+                    withCost: withCost ? 1 : 0,
+                });
+            }, function (err) {
+                self._notifyErr(err);
             });
         },
 
@@ -1666,18 +1698,28 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // no slot reload needed (Cost sheet appended when asked).
         _onExportPlanSupplier: function (withCost) {
             if (!this.summary) return;
+            var self = this;
+            var pid = this._planId();
+            if (!pid) return;
             var entry = this._slotEntry(this.activeSlot);
             var planName = (entry && entry.note) ||
                 this.summary.name || '';
-            this._postExcel({
-                plan_name: planName,
-                mode: 'plan_supplier',
-                tree_rows: this._collectExportRows(),
-                kits: this.summary.kits || [],
-                combo: this._planCombos(),
-                scratch_total: this.summary.scratch_total_usd || 0,
-                supplier: this._supplierPayload(),
-                withCost: withCost ? 1 : 0,
+            var rows = this._collectExportRows();
+            this._withSupSummary(pid).then(function (sup) {
+                self._postExcel({
+                    plan_name: planName,
+                    mode: 'plan_supplier',
+                    tree_rows: rows,
+                    kits: (self.summary &&
+                        self.summary.kits) || [],
+                    combo: self._planCombos(),
+                    scratch_total: (self.summary &&
+                        self.summary.scratch_total_usd) || 0,
+                    supplier: self._supplierV2(sup),
+                    withCost: withCost ? 1 : 0,
+                });
+            }, function (err) {
+                self._notifyErr(err);
             });
         },
 
@@ -1717,8 +1759,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                                         self._rowNet(r);
                                 });
                             });
+                            var pid = self._planId() || false;
                             return self._rpcPlan('get_full_tree',
-                                [self._planId() || false, topNets]).then(
+                                [pid, topNets]).then(
                                 function (full) {
                                     self._applyFullTree(full);
                                     if (full && full.capped) {
@@ -1730,23 +1773,37 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                                             type: 'warning',
                                         });
                                     }
-                                    plans.push({
-                                        slot: s,
-                                        name: notes[s] ||
-                                            ((self.summary &&
-                                            self.summary.name) || ''),
-                                        combo: self._planCombos(),
-                                        scratch_total: (self.summary &&
-                                            self.summary.scratch_total_usd) ||
-                                            0,
-                                        kits: (self.summary &&
-                                            self.summary.kits) || [],
-                                        tree_rows:
-                                            self._collectExportRows(),
-                                        supplier: withSupplier ?
-                                            self._supplierPayload() :
-                                            null,
-                                    });
+                                    var collect = function (sup) {
+                                        plans.push({
+                                            slot: s,
+                                            name: notes[s] ||
+                                                ((self.summary &&
+                                                self.summary.name) || ''),
+                                            combo: self._planCombos(),
+                                            scratch_total:
+                                                (self.summary &&
+                                                self.summary
+                                                    .scratch_total_usd) ||
+                                                0,
+                                            kits: (self.summary &&
+                                                self.summary.kits) || [],
+                                            tree_rows:
+                                                self
+                                                    ._collectExportRows(),
+                                            supplier: (withSupplier &&
+                                                sup) ?
+                                                self._supplierV2(sup) :
+                                                null,
+                                        });
+                                    };
+                                    if (withSupplier && pid) {
+                                        return self._withSupSummary(pid)
+                                            .then(collect,
+                                                function () {
+                                                    collect(null);
+                                                });
+                                    }
+                                    collect(null);
                                 });
                         });
                 });
