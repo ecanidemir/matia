@@ -43,6 +43,7 @@ across TR and USA warehouse locations to calculate:
             'matia_stock_planning/static/src/scss/stock_planning.scss',
             'matia_stock_planning/static/src/js/stock_planning.js',
             'matia_stock_planning/static/src/scss/procurement_plan.scss',
+            'matia_stock_planning/static/src/js/export_popup.js',
             'matia_stock_planning/static/src/js/procurement_plan.js',
             'matia_stock_planning/static/src/js/product_cost.js',
         ],

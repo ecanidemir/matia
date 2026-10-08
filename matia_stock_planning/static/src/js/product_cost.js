@@ -4,6 +4,8 @@ odoo.define('matia_product_cost.dashboard', function (require) {
     var AbstractAction = require('web.AbstractAction');
     var core = require('web.core');
     var Dialog = require('web.Dialog');
+    var ExportPopup =
+        require('matia_stock_planning.export_popup');
 
     // Product Cost dashboard: 2 tabs in ONE client action (no navigation).
     // Tab 1 (Cost): live bottom-up rolled USD per 1-device set for the 4
@@ -17,7 +19,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         template: 'MatiaProductCost.Dashboard',
         events: {
             'click .msp-btn-refresh': '_onRecalculate',
-            'click .msp-btn-excel': '_onExportExcel',
+            'click .msp-btn-excel': '_onExportPopup',
             'click .mpp-nav-tab': '_onNavTab',
             'click .msp-btn-expand-all': '_onExpandAll',
             'click .msp-btn-collapse-all': '_onCollapseAll',
@@ -887,6 +889,58 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 });
                 this.style.display =
                     (!q || anyVisible) ? '' : 'none';
+            });
+        },
+
+        // Same Excel picker as the plan page (Suppliers + Product
+        // Cost sheets plus study slots). The plan/supplier sheets are
+        // collected server-side (this page holds no plan state).
+        // Cost-only falls back to the legacy cost export below.
+        _onExportPopup: function () {
+            var self = this;
+            this._rpcPlan('get_slot_list').then(function (res) {
+                var slots = (res && res.slots) || [];
+                ExportPopup.openExportPopup($, Dialog, {
+                    parent: self,
+                    slots: slots,
+                    activeSlot: null,
+                    dirtyMsg: null,
+                    onExport: function (sel, withSup, withCost) {
+                        if (!sel.length && !withSup && !withCost) {
+                            return;
+                        }
+                        if (!sel.length) {
+                            if (withSup) {
+                                self.displayNotification({
+                                    title: 'No slot selected',
+                                    message: 'Select at least one ' +
+                                        'study slot for Suppliers.',
+                                    type: 'warning',
+                                });
+                            } else {
+                                self._onExportExcel();
+                            }
+                            return;
+                        }
+                        var form = document.createElement('form');
+                        form.method = 'POST';
+                        form.action =
+                            '/matia_procurement_plan/export_xlsx';
+                        var input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = 'data';
+                        input.value = JSON.stringify({
+                            mode: 'cost_slots',
+                            slots: sel,
+                            withSupplier: withSup,
+                            withCost: withCost,
+                        });
+                        form.appendChild(input);
+                        document.body.appendChild(form);
+                        form.submit();
+                        document.body.removeChild(form);
+                    },
+                });
             });
         },
 

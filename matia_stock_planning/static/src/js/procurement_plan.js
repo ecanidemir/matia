@@ -4,6 +4,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
     var AbstractAction = require('web.AbstractAction');
     var core = require('web.core');
     var Dialog = require('web.Dialog');
+    var ExportPopup =
+        require('matia_stock_planning.export_popup');
     var _t = core._t;
 
     // Production Plan dashboard: 2 tabs in ONE client action (no navigation).
@@ -1618,191 +1620,46 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _onExportPlanPopup: function () {
             if (!this.summary) return;
             var self = this;
-            var INK = '#0f172a', MUT = '#64748b', LINE = '#e2e8f0';
-            var $wrap = $('<div/>');
-            // Supplier card (toggle).
-            var $supInput = $('<input/>', {
-                type: 'checkbox',
-                'class': 'mpp-exp-sup',
-            }).css({'width': '18px', 'height': '18px',
-                'accent-color': '#7c2d12', 'flex-shrink': '0',
-                'cursor': 'pointer'});
-            var $sup = $('<div/>').css({
-                'display': 'flex', 'align-items': 'center',
-                'gap': '12px', 'background': '#fff7ed',
-                'border': '1px solid #fed7aa', 'border-radius': '10px',
-                'padding': '10px 14px', 'margin-bottom': '12px',
-                'cursor': 'pointer'});
-            var $supIcon = $('<span/>').css({
-                'display': 'inline-flex', 'align-items': 'center',
-                'justify-content': 'center', 'width': '34px',
-                'height': '34px', 'border-radius': '50%',
-                'background': '#7c2d12', 'color': '#fdba74',
-                'flex-shrink': '0'})
-                .append($('<i/>', {'class': 'fa fa-truck'}));
-            var $supTxt = $('<div/>').css({'flex': '1 1 auto'})
-                .append($('<div/>').text('Suppliers').css({
-                    'font-weight': '700', 'color': INK,
-                    'font-size': '0.9rem'}))
-                .append($('<div/>').text(
-                    'Supplier breakdown as a separate sheet').css({
-                    'color': MUT, 'font-size': '0.76rem'}));
-            $sup.append($supIcon).append($supTxt).append($supInput);
-            $sup.on('click', function (ev) {
-                if (ev.target.tagName !== 'INPUT') {
-                    $supInput.prop('checked',
-                        !$supInput.prop('checked')).trigger('change');
-                }
-            });
-            $supInput.on('change', function () {
-                $sup.css('border-color',
-                    $supInput.is(':checked') ? '#7c2d12' : '#fed7aa');
-                $sup.css('box-shadow',
-                    $supInput.is(':checked') ?
-                    '0 0 0 1px #7c2d12' : 'none');
-            });
-            $wrap.append($sup);
-            // Product Cost card (toggle, same pattern as supplier).
-            var $costInput = $('<input/>', {
-                type: 'checkbox',
-                'class': 'mpp-exp-cost',
-            }).css({'width': '18px', 'height': '18px',
-                'accent-color': '#7c2d12', 'flex-shrink': '0',
-                'cursor': 'pointer'});
-            var $cost = $('<div/>').css({
-                'display': 'flex', 'align-items': 'center',
-                'gap': '12px', 'background': '#fff7ed',
-                'border': '1px solid #fed7aa', 'border-radius': '10px',
-                'padding': '10px 14px', 'margin-bottom': '12px',
-                'cursor': 'pointer'});
-            var $costIcon = $('<span/>').css({
-                'display': 'inline-flex', 'align-items': 'center',
-                'justify-content': 'center', 'width': '34px',
-                'height': '34px', 'border-radius': '50%',
-                'background': '#7c2d12', 'color': '#fdba74',
-                'flex-shrink': '0'})
-                .append($('<i/>', {'class': 'fa fa-cubes'}));
-            var $costTxt = $('<div/>').css({'flex': '1 1 auto'})
-                .append($('<div/>').text('Product Cost').css({
-                    'font-weight': '700', 'color': INK,
-                    'font-size': '0.9rem'}))
-                .append($('<div/>').text(
-                    'Live cost sheet as a separate sheet').css({
-                    'color': MUT, 'font-size': '0.76rem'}));
-            $cost.append($costIcon).append($costTxt).append($costInput);
-            $cost.on('click', function (ev) {
-                if (ev.target.tagName !== 'INPUT') {
-                    $costInput.prop('checked',
-                        !$costInput.prop('checked')).trigger('change');
-                }
-            });
-            $costInput.on('change', function () {
-                $cost.css('border-color',
-                    $costInput.is(':checked') ? '#7c2d12' : '#fed7aa');
-                $cost.css('box-shadow',
-                    $costInput.is(':checked') ?
-                    '0 0 0 1px #7c2d12' : 'none');
-            });
-            $wrap.append($cost);
-            // Slot rows.
-            $wrap.append($('<div/>').text('STUDY SLOTS').css({
-                'font-size': '0.7rem', 'font-weight': '700',
-                'letter-spacing': '0.06em', 'color': MUT,
-                'margin-bottom': '6px'}));
-            var $slots = $('<div/>').css({'max-height': '260px',
-                'overflow-y': 'auto', 'padding-right': '2px'});
-            (this.slots || []).forEach(function (s) {
-                var has = !!s.plan_id;
-                var isActive = s.slot === self.activeSlot;
-                var $row = $('<label/>').css({
-                    'display': 'flex', 'align-items': 'center',
-                    'gap': '10px', 'background':
-                    has ? '#ffffff' : '#f8fafc',
-                    'border': '1px solid ' + LINE,
-                    'border-radius': '8px', 'padding': '7px 12px',
-                    'margin-bottom': '6px',
-                    'cursor': has ? 'pointer' : 'default',
-                    'color': has ? INK : '#94a3b8'});
-                var $cb = $('<input/>', {
-                    type: 'checkbox',
-                    value: s.slot,
-                    'class': 'mpp-exp-slot',
-                    disabled: has ? null : 'disabled',
-                    checked: (has && isActive) ? 'checked' : null,
-                }).css({'width': '16px', 'height': '16px',
-                    'accent-color': '#7c2d12', 'flex-shrink': '0',
-                    'cursor': has ? 'pointer' : 'default'});
-                var $txt = $('<span/>').css({'flex': '1 1 auto',
-                    'font-size': '0.85rem'})
-                    .append($('<strong/>').text('Slot ' + s.slot + '  '))
-                    .append($('<span/>').text(has ?
-                        ((s.name || '') +
-                        (s.note ? '  ·  ' + s.note : '')) :
-                        'empty').css({'color': MUT}));
-                $row.append($cb).append($txt);
-                if (has && isActive) {
-                    $row.append($('<span/>').text('current').css({
-                        'font-size': '0.68rem', 'font-weight': '700',
-                        'color': '#ffffff', 'background': '#7c2d12',
-                        'border-radius': '20px',
-                        'padding': '2px 10px', 'flex-shrink': '0'}));
-                }
-                $slots.append($row);
-            });
-            $wrap.append($slots);
+            var dirtyMsg = null;
             if (this.dirtyNeeds || this.dirtySlotNote) {
-                $wrap.append($('<div/>').text(
+                dirtyMsg = $('<div/>').text(
                     'Unsaved Needed/description changes are NOT ' +
                     'included for other slots - Save first.').css({
                     'background': '#fef3c7', 'color': '#b45309',
                     'border': '1px solid #fde68a',
                     'border-radius': '8px', 'padding': '8px 12px',
-                    'font-size': '0.78rem', 'margin-top': '4px'}));
+                    'font-size': '0.78rem', 'margin-top': '4px'});
             }
-            new Dialog(this, {
-                title: 'Export to Excel',
-                size: 'medium',
-                $content: $wrap,
-                buttons: [
-                    {
-                        text: 'Export',
-                        classes: 'btn-primary',
-                        close: true,
-                        click: function () {
-                            var sel = [];
-                            $wrap.find('.mpp-exp-slot:checked').each(
-                                function () {
-                                    sel.push(parseInt(this.value, 10));
-                                });
-                            var withSup = $supInput.is(':checked');
-                            var withCost = $costInput.is(':checked');
-                            if (!sel.length && !withSup && !withCost) {
-                                return;
-                            }
-                            if (!sel.length) {
-                                if (withSup) {
-                                    self._onExportExcel(withCost);
-                                } else {
-                                    self._onExportCost();
-                                }
-                                return;
-                            }
-                            if (sel.length === 1 &&
-                                sel[0] === self.activeSlot) {
-                                if (withSup) {
-                                    self._onExportPlanSupplier(withCost);
-                                } else {
-                                    self._onExportTree(withCost);
-                                }
-                                return;
-                            }
-                            self._exportSlotsCollect(
-                                sel, withSup, withCost);
-                        },
-                    },
-                    {text: 'Cancel', close: true},
-                ],
-            }).open();
+            ExportPopup.openExportPopup($, Dialog, {
+                parent: this,
+                slots: this.slots || [],
+                activeSlot: this.activeSlot,
+                dirtyMsg: dirtyMsg,
+                onExport: function (sel, withSup, withCost) {
+                    if (!sel.length && !withSup && !withCost) {
+                        return;
+                    }
+                    if (!sel.length) {
+                        if (withSup) {
+                            self._onExportExcel(withCost);
+                        } else {
+                            self._onExportCost();
+                        }
+                        return;
+                    }
+                    if (sel.length === 1 &&
+                        sel[0] === self.activeSlot) {
+                        if (withSup) {
+                            self._onExportPlanSupplier(withCost);
+                        } else {
+                            self._onExportTree(withCost);
+                        }
+                        return;
+                    }
+                    self._exportSlotsCollect(
+                        sel, withSup, withCost);
+                },
+            });
         },
 
         // Single active slot + suppliers: Plan + Suppliers sheets,

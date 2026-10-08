@@ -2,6 +2,7 @@
 """Preview Excel export (separate route; existing Capacity export untouched)."""
 import io
 import json
+import math
 from datetime import datetime
 
 from odoo import http
@@ -187,6 +188,174 @@ def _plan_csv_lines(plan_name, scratch_total, rows, combo=None):
     return lines
 
 
+def _js_round(val):
+    """JS Math.round port (half-up; export money is non-negative)."""
+    try:
+        return math.floor(float(val or 0) + 0.5)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _first_num(*vals):
+    """parseFloat(v)||0 of the first set value (None/'' skipped)."""
+    for v in vals:
+        if v is None or v == '':
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _row_net(r):
+    """_rowNet port: net ?? planned ?? gross (0.0 counts as set)."""
+    return _first_num(r.get('net'), r.get('planned'), r.get('gross'))
+
+
+def _avail_total(r):
+    """_availTotal port: avail_total ?? avail_tr."""
+    a = r.get('avail_total')
+    if a is None or a == '':
+        return _fnum(r.get('avail_tr'))
+    try:
+        return float(a)
+    except (TypeError, ValueError):
+        return _fnum(r.get('avail_tr'))
+
+
+def _producible_of(r, avail):
+    """_producible port: field, else floor(avail/bom_qty), else avail."""
+    p = r.get('producible')
+    if p is None or p == '':
+        bq = _fnum(r.get('bom_qty'))
+        if bq > 0:
+            return max(0, math.floor(avail / bq))
+        return max(0, avail)
+    return _fnum(p)
+
+
+def _est_usd(r, row_net):
+    """_estUsd port: rolled_usd x (order_qty when set, else row net)."""
+    try:
+        ru = float(r.get('rolled_usd') or 0)
+    except (TypeError, ValueError):
+        ru = 0.0
+    q = r.get('order_qty')
+    if q is None or q == '':
+        q = row_net
+    try:
+        q = float(q)
+    except (TypeError, ValueError):
+        q = 0.0
+    return ru * q
+
+
+def _jsnum(val):
+    """int when integral (JS JSON number shape: 200.0 serializes 200)."""
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return val
+    return int(f) if f.is_integer() else f
+
+
+def _fmt_en2(val):
+    """_fmtNum(v, 2) port (en-style; browser locale may differ)."""
+    try:
+        return '{:,.2f}'.format(float(val or 0))
+    except (TypeError, ValueError):
+        return '0.00'
+
+
+def _fmt_last(itm):
+    """_fmtLast port: '12.50 USD' (no trailing space without currency)."""
+    if not itm.get('last_price'):
+        return ''
+    cur = itm.get('last_currency') or ''
+    return '%s%s' % (_fmt_en2(itm.get('last_price')),
+                     (' ' + cur) if cur else '')
+
+
+def _port_row(r, group, level, targets=None):
+    """One client-shape export row from a server tree item.
+
+    Mirrors _collectExportRows mapping (group/pid/code/name/level/
+    bom_qty/uom/tr/us/producible/need/planned/seller/source/last/
+    usd/date/rolled_usd/scratch_usd/est_usd). UoM values arrive
+    server-mapped; the client _uomEn leaves them unchanged.
+    """
+    pid = r.get('product_id')
+    net = _row_net(r)
+    avail = _avail_total(r)
+    if level == 0:
+        need = r.get('need')
+        if need is None or need == '':
+            need = 0
+            if targets:
+                need = targets.get(pid, targets.get(str(pid), 0))
+        need = _jsnum(_fnum(need))
+    else:
+        need = ''
+    return {
+        'group': group, 'pid': pid,
+        'code': r.get('code', '') or '',
+        'name': r.get('name', '') or '',
+        'level': level,
+        'bom_qty': r.get('bom_qty', ''),
+        'uom': r.get('uom', '') or '',
+        'tr': _jsnum(_fnum(r.get('avail_tr'))),
+        'us': _jsnum(_fnum(r.get('avail_us'))),
+        'producible': _jsnum(_producible_of(r, avail)),
+        'need': need,
+        'planned': _jsnum(net),
+        'seller': r.get('seller', '') or '',
+        'source': r.get('last_company', '') or '',
+        'last': _fmt_last(r),
+        'usd': r.get('last_usd') or '',
+        'date': r.get('last_date') or '',
+        'rolled_usd': r.get('rolled_usd') or '',
+        'scratch_usd': r.get('scratch_usd') or '',
+        'est_usd': _jsnum(_est_usd(r, net)),
+    }
+
+
+def _server_combo(tree_groups):
+    """_planCombos port: rolled_total_usd sums {full, outdoor, seat}."""
+    tot = {}
+    for g in tree_groups or []:
+        s = 0.0
+        for it in g.get('items', []) or []:
+            s += _fnum(it.get('rolled_total_usd'))
+        tot[g.get('key')] = s
+    base = tot.get('base', 0) + tot.get('screws', 0)
+    outdoor = tot.get('outdoor', 0)
+    seat = tot.get('seat', 0)
+    return {
+        'full': _js_round(base + outdoor + seat),
+        'outdoor': _js_round(base + outdoor),
+        'seat': _js_round(base + seat),
+    }
+
+
+def _server_supplier(res, fallback_name):
+    """_supplierPayload port: seller-keyed groups for one slot."""
+    groups = []
+    for s in res.get('suppliers') or []:
+        groups.append({
+            'title': s.get('seller_name', '') or '',
+            'cost': s.get('cost', 0),
+            'items': s.get('lines', []) or [],
+        })
+    return {
+        'plan_name': res.get('name') or fallback_name,
+        'groups': groups,
+        'total': res.get('total_cost', 0),
+        'kits': res.get('kits', []) or [],
+        'scratch_total': res.get('scratch_total_usd', 0),
+    }
+
+
 class MatiaProcurementPlanController(http.Controller):
 
     @staticmethod
@@ -281,6 +450,8 @@ class MatiaProcurementPlanController(http.Controller):
             return self._export_slots(data)
         if data.get('mode') == 'plan_supplier':
             return self._export_plan_supplier(data)
+        if data.get('mode') == 'cost_slots':
+            return self._export_cost_slots(data)
         if data.get('mode') == 'cost_only':
             return self._export_cost_only(data)
         groups = data.get('groups', [])
@@ -598,22 +769,12 @@ class MatiaProcurementPlanController(http.Controller):
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
 
-    def _export_slots(self, data):
-        """Combined multi-slot export: single Combined sheet, BOM closed.
-
-        The client posts fully expanded rows per slot, but the combined
-        matrix always uses level-0 rows only (never the BOM-open
-        version). All money in the Combined sheet is whole-USD
-        (rounded, no cents). With the supplier option a single
-        Suppliers sheet is appended: Supplier | Location | one
-        rounded total column per slot (slot description as header,
-        slot pastel). Suppliers share one table across locations:
-        each location block (TR, USA, ...) closes with a SUBTOTAL
-        row, then a grand TOTAL.
-        """
+    @staticmethod
+    def _parse_slot_plans(raw):
+        """Normalize client-posted slot dicts (slot/name/combo/rows)."""
         plans = []
         seen = set()
-        for p in (data.get('plans', []) or [])[:10]:
+        for p in (raw or [])[:10]:
             if not isinstance(p, dict):
                 continue
             try:
@@ -634,8 +795,119 @@ class MatiaProcurementPlanController(http.Controller):
                 'supplier': p.get('supplier')
                 if isinstance(p.get('supplier'), dict) else None,
             })
+        return plans
+
+    def _export_slots(self, data):
+        plans = self._parse_slot_plans(data.get('plans', []))
+        return self._export_slots_from_plans(plans, data)
+
+    def _export_cost_slots(self, data):
+        """Cost-page export: collect slots server-side, reuse writers.
+
+        The Cost page holds no plan state, so rows/combos/suppliers
+        are rebuilt here (_mpp_slot_plan + get_tree_with_cost +
+        get_full_tree with the same mapping as _collectExportRows).
+        Single slot delegates to the tree/plan_supplier writers,
+        several slots to the combined matrix. Tops use the default
+        Planned-desc order (the Cost page has no sort state).
+        """
+        raw = data.get('slots', []) or []
+        slots = []
+        for s in raw:
+            try:
+                s = int(s)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= s <= 9 and s not in slots:
+                slots.append(s)
+        slots = slots[:10]
+        if not slots:
+            return request.not_found()
+        with_supplier = bool(data.get('withSupplier'))
+        Plan = request.env['matia.procurement.plan']
+        company_ids = request.env['res.company'].with_context(
+            active_test=False).sudo().search([]).ids
+        env_sudo = Plan.with_context(
+            allowed_company_ids=company_ids,
+            active_test=False).sudo().env
+        plans = []
+        for s in slots:
+            plan = Plan._mpp_slot_plan(env_sudo, s)
+            if not plan or not plan.exists():
+                continue
+            res = Plan.get_tree_with_cost(
+                plan.id, force=False) or {}
+            groups = res.get('tree_groups') or []
+            targets = res.get('targets') or {}
+            tops = []
+            for g in groups:
+                gkey = g.get('key', '')
+                title = g.get('title', '')
+                for it in g.get('items', []) or []:
+                    tops.append((gkey, title, it))
+            # Default treeSort (planned/-1), stable over code order.
+            tops.sort(key=lambda t: _row_net(t[2]), reverse=True)
+            top_nets = {}
+            rows = []
+            infos = []
+            for gkey, title, it in tops:
+                row = _port_row(it, title, 0, targets)
+                rows.append(row)
+                infos.append((gkey, title, row))
+                top_nets['%s:%s' % (gkey, it.get('product_id'))] = \
+                    _row_net(it)
+            full = Plan.get_full_tree(plan.id, top_nets) or {}
+            trees = full.get('trees') or {}
+
+            def _walk(uid, level, group_title, out):
+                for ch in trees.get(uid, []) or []:
+                    out.append(_port_row(
+                        ch, group_title, level, targets))
+                    pid = ch.get('product_id')
+                    cu = '%s%s' % (uid, pid) if uid.endswith(':') \
+                        else '%s/%s' % (uid, pid)
+                    _walk(cu, level + 1, group_title, out)
+
+            for gkey, title, row in infos:
+                uid = '%s:%s' % (gkey, row.get('pid'))
+                _walk(uid, 1, title, rows)
+            name = (plan.note or '').strip() or res.get('name') \
+                or plan.name
+            combo = _server_combo(groups)
+            kits = res.get('kits', []) or []
+            scratch = res.get('scratch_total_usd', 0)
+            plans.append({
+                'slot': s,
+                'name': name,
+                'combo': combo,
+                'scratch_total': scratch,
+                'rows': rows,
+                'kits': kits,
+                'supplier': _server_supplier(res, name)
+                if with_supplier else None,
+            })
         if not plans:
             return request.not_found()
+        if len(plans) == 1:
+            p = plans[0]
+            single = {
+                'tree_rows': p['rows'],
+                'combo': p['combo'],
+                'withCost': data.get('withCost'),
+            }
+            if p.get('supplier'):
+                single['plan_name'] = p['name']
+                single['kits'] = p['kits']
+                single['scratch_total'] = p['scratch_total']
+                single['supplier'] = p['supplier']
+                return self._export_plan_supplier(single)
+            return self._export_tree(
+                single, p['name'], p['kits'], p['scratch_total'])
+        return self._export_slots_from_plans(
+            plans, {'withCost': data.get('withCost')})
+
+    def _export_slots_from_plans(self, plans, data):
+        """Combined matrix from normalized plans (client or server)."""
         # Canonical rows from the first slot; per-slot overlays key on
         # (group, pid-or-code, level, occurrence).
         def _mbase_key(r):
