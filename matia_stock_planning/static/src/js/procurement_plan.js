@@ -1570,7 +1570,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _onExportTree: function () {
             if (!this.summary) return;
             this._postExcel({
-                plan_name: (this.summary.name || '') + ' tree',
+                plan_name: this.summary.name || '',
                 mode: 'tree',
                 tree_rows: this._collectExportRows(),
                 kits: this.summary.kits || [],

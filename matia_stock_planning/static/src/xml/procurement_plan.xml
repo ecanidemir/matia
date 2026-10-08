@@ -35,8 +35,8 @@
                     <button class="btn btn-success btn-sm mpp-btn-excel" title="Export suppliers to Excel">
                         <i class="fa fa-file-excel-o mr-1"></i> Excel (suppliers)
                     </button>
-                    <button class="btn btn-success btn-sm mpp-btn-excel-tree" title="Export tree to Excel">
-                        <i class="fa fa-file-excel-o mr-1"></i> Excel (tree)
+                    <button class="btn btn-success btn-sm mpp-btn-excel-tree" title="Export plan to Excel">
+                        <i class="fa fa-file-excel-o mr-1"></i> Excel (Plan)
                     </button>
                 </div>
             </div>
