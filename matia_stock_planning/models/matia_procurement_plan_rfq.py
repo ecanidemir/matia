@@ -19,11 +19,12 @@ Rules:
   explicit ``confirm=True`` from the client.
 """
 from odoo import api, fields, models, _
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 import logging
 
 from .matia_procurement_plan import (
     _MPP_OVERRIDE_COMPANY,
+    _mpp_can_create_docs,
     _mpp_env_sudo,
     _mpp_line_uom_factor,
     _mpp_price_overrides,
@@ -229,6 +230,9 @@ class MatiaProcurementPlanRfq(models.Model):
             amount) or {'needs_confirm': True} when RFQs already exist.
         """
         # No ensure_one: called model-style (empty recordset) from JS.
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can create draft RFQs.'))
         env_sudo, plan = self._rfq_plan(plan_id)
         existing = plan.purchase_order_ids
         if existing and not confirm:
@@ -347,6 +351,9 @@ class MatiaProcurementPlanRfq(models.Model):
             a fresh supplier summary for tab 3.
         """
         # No ensure_one: called model-style (empty recordset) from JS.
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can create draft RFQs.'))
         env_sudo, plan = self._rfq_plan(plan_id)
         try:
             seller_id = int(seller_id)

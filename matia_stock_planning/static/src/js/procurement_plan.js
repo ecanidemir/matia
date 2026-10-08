@@ -71,6 +71,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
             this.activeTab = 1;
             this.supSummary = null;
+            // Admin gate for RFQ/MO buttons (server sends can_create_docs
+            // with every supplier summary; server enforces it too).
+            this.canCreateDocs = false;
             this.pendingRfqSeller = null;
             this.expandedSup = {};
             this.collapsedSupGroups = {};
@@ -1578,6 +1581,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // ---------------- tab 2: suppliers + production ----------------
         _renderSup: function () {
             var s = this.supSummary;
+            this.canCreateDocs = !!(s && s.can_create_docs);
             // Async fills (RFQ/MO creation, summary fetch) replace the
             // tables: keep the scroll offsets so the page stays put.
             var $root = this.$el ? this.$('.o_matia_procurement_plan') :
@@ -1889,7 +1893,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var supKey = this._supKey(sp);
             var isOpen = !!this.expandedSup[supKey];
             var lineCount = (sp.lines || []).length || sp.line_count;
-            var rfqBtn = sp.seller_id ?
+            // RFQ buttons are admin-only; other users see a hint.
+            var rfqBtn = !sp.seller_id ?
+                '<span class="text-muted" style="font-size:0.75rem;">Assign a seller first</span>' :
+                !self.canCreateDocs ?
+                '<span class="text-muted" style="font-size:0.75rem;">Admin only</span>' :
                 '<button type="button" class="btn btn-success btn-sm mpp-btn-create-rfq" ' +
                 'data-seller="' + sp.seller_id + '" data-company="' +
                 (sp.company_id || '') + '">' +
@@ -1899,8 +1907,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'Draft RFQ(s) already exist for this supplier + company. ' +
                     '<button type="button" class="btn btn-warning btn-sm mpp-btn-confirm-rfq" ' +
                     'data-seller="' + sp.seller_id + '" data-company="' +
-                    (sp.company_id || '') + '">Create Again</button></div>' : '') :
-                '<span class="text-muted" style="font-size:0.75rem;">Assign a seller first</span>';
+                    (sp.company_id || '') + '">Create Again</button></div>' : '');
             var unpricedNote = (sp.unpriced_count || 0) > 0 ?
                 ' <span class="badge badge-warning" title="Lines without price are counted as 0 USD">' +
                 sp.unpriced_count + ' no price</span>' : '';
@@ -1955,10 +1962,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             r.mo.state + ')';
                     } else if (!r.mo_creatable) {
                         doc = '<span class="badge-req-need">No normal BOM</span>';
-                    } else {
+                    } else if (self.canCreateDocs) {
                         act = '<button type="button" class="btn btn-primary btn-sm mpp-btn-create-mo" ' +
                             'data-line="' + r.line_id + '">' +
                             '<i class="fa fa-cogs mr-1"></i>Create MO</button>';
+                    } else {
+                        act = '<span class="text-muted" style="font-size:0.75rem;">Admin only</span>';
                     }
                 } else {
                     if (r.po) {
@@ -1992,6 +2001,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onCreateRfq: function (ev) {
             var self = this;
+            if (!this.canCreateDocs) {
+                this.displayNotification({
+                    title: _t('Forbidden'),
+                    message: _t('Only administrators can create draft RFQs.'),
+                    type: 'warning',
+                });
+                return;
+            }
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
@@ -2024,6 +2041,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onConfirmRfq: function (ev) {
             var self = this;
+            if (!this.canCreateDocs) {
+                this.displayNotification({
+                    title: _t('Forbidden'),
+                    message: _t('Only administrators can create draft RFQs.'),
+                    type: 'warning',
+                });
+                return;
+            }
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
@@ -2045,6 +2070,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onCreateMo: function (ev) {
             var self = this;
+            if (!this.canCreateDocs) {
+                this.displayNotification({
+                    title: _t('Forbidden'),
+                    message: _t('Only administrators can create manufacturing orders.'),
+                    type: 'warning',
+                });
+                return;
+            }
             var line = parseInt(ev.currentTarget.dataset.line, 10);
             if (!line || !this._planId()) return;
             this._rpcPlan('action_create_mos',

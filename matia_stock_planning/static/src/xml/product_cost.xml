@@ -8,28 +8,28 @@
                 <div class="msp-title-area">
                     <i class="fa fa-usd"></i>
                     <div>
-                        <h2>Product Cost</h2>
-                        <p>Admin only. Live bottom-up cost per 1-device set; corrected prices win over the last purchase.</p>
+                        <h2 t-translation="off">Product Cost</h2>
+                        <p t-translation="off">Admin only. Live bottom-up cost per 1-device set; corrected prices win over the last purchase.</p>
                     </div>
                 </div>
                 <div class="msp-actions">
                     <ul class="nav mpp-nav-tabs mpp-nav-tabs--header">
                         <li class="nav-item">
-                            <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">
+                                <a href="#" class="nav-link mpp-nav-tab active" data-tab="1" t-translation="off">
                                 <i class="fa fa-sitemap mr-1"></i>1. Cost
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a href="#" class="nav-link mpp-nav-tab" data-tab="2">
+                                <a href="#" class="nav-link mpp-nav-tab" data-tab="2" t-translation="off">
                                 <i class="fa fa-usd mr-1"></i>2. Prices
                             </a>
                         </li>
                     </ul>
                     <span class="mpp-header-sep"/>
-                    <button class="btn btn-outline-light btn-sm msp-btn-refresh" title="Recompute everything live">
+                    <button class="btn btn-outline-light btn-sm msp-btn-refresh" title="Recompute everything live" t-translation="off">
                         <i class="fa fa-refresh mr-1"></i> Recalculate
                     </button>
-                    <button class="btn btn-success btn-sm msp-btn-excel" title="Export the cost tree to Excel">
+                    <button class="btn btn-success btn-sm msp-btn-excel" title="Export the cost tree to Excel" t-translation="off">
                         <i class="fa fa-file-excel-o mr-1"></i> Excel
                     </button>
                 </div>
@@ -46,16 +46,16 @@
                             <input type="text" class="mpc-tree-search" placeholder="Search part code or name (all BOMs)..."/>
                         </div>
                         <div class="table-legend">
-                            <span style="font-weight:700; color:#0f172a;">
+                            <span style="font-weight:700; color:#0f172a;" t-translation="off">
                                 <i class="fa fa-usd mr-1"></i> BOM Cost (rolled USD, per 1-device set)
                             </span>
-                            <span class="text-muted" style="font-size:0.7rem;"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
+                            <span class="text-muted" style="font-size:0.7rem;" t-translation="off"><i class="fa fa-sort mr-1"></i> Click column headers to sort</span>
                         </div>
                         <div class="msp-tool-buttons">
-                            <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs">
+                            <button class="btn btn-outline-primary btn-sm msp-btn-expand-all" title="Expand all sub-assembly BOMs" t-translation="off">
                                 <i class="fa fa-plus-square-o mr-1"></i> Expand All BOMs
                             </button>
-                            <button class="btn btn-secondary btn-sm msp-btn-collapse-all" title="Collapse all sub-assembly BOMs">
+                            <button class="btn btn-secondary btn-sm msp-btn-collapse-all" title="Collapse all sub-assembly BOMs" t-translation="off">
                                 <i class="fa fa-minus-square-o mr-1"></i> Collapse All BOMs
                             </button>
                         </div>
@@ -69,34 +69,37 @@
                 <div class="msp-table-card mt-2">
                     <div class="msp-table-search">
                         <div class="table-legend">
-                            <span style="font-weight:700; color:#0f172a;">
+                            <span style="font-weight:700; color:#0f172a;" t-translation="off">
                                 <i class="fa fa-usd mr-1"></i> Prices (manual overrides)
                             </span>
-                            <span class="text-muted" style="font-size:0.7rem;">Every product in the 4 groups, no quantities. Corrected USD replaces the last-buy price in rolled costs, supplier totals and draft RFQs.</span>
+                            <span class="text-muted" style="font-size:0.7rem;" t-translation="off">Every product in the 4 groups, no quantities. Corrected USD replaces the last-buy price in rolled costs, supplier totals and draft RFQs.</span>
                         </div>
                         <div class="msp-tool-buttons">
-                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-reload" title="Reload the price list">
+                            <button class="btn btn-outline-success btn-sm mpp-btn-price-save-all" title="Save all edited Corrected prices and Locations in one go" t-translation="off">
+                                <i class="fa fa-save mr-1"></i> Save All (<span class="mpp-price-dirtycount">0</span>)
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-reload" title="Reload the price list" t-translation="off">
                                 <i class="fa fa-refresh mr-1"></i> Reload
                             </button>
-                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-tr" title="Set purchase location TR for the checked rows">
+                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-tr" title="Set purchase location TR for the checked rows" t-translation="off">
                                 Set TR (<span class="mpp-price-selcount">0</span>)
                             </button>
-                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-us" title="Set purchase location US for the checked rows">
+                            <button class="btn btn-outline-primary btn-sm mpp-btn-price-us" title="Set purchase location US for the checked rows" t-translation="off">
                                 Set US (<span class="mpp-price-selcount">0</span>)
                             </button>
-                            <button class="btn btn-secondary btn-sm mpp-btn-price-clear" title="Delete the overrides of the checked rows">
+                            <button class="btn btn-secondary btn-sm mpp-btn-price-clear" title="Delete the overrides of the checked rows" t-translation="off">
                                 <i class="fa fa-eraser mr-1"></i> Clear
                             </button>
-                            <button class="btn btn-outline-warning btn-sm mpp-btn-price-reset" title="Copy the computed USD into Corrected for the checked rows (overwrites)">
+                            <button class="btn btn-outline-warning btn-sm mpp-btn-price-reset" title="Copy the computed USD into Corrected for the checked rows (overwrites)" t-translation="off">
                                 <i class="fa fa-copy mr-1"></i> Reset to USD (<span class="mpp-price-selcount">0</span>)
                             </button>
-                            <button class="btn btn-outline-warning btn-sm mpp-btn-price-copy-std" title="Copy the standard-price USD into Corrected for the checked rows (overwrites)">
+                            <button class="btn btn-outline-warning btn-sm mpp-btn-price-copy-std" title="Copy the standard-price USD into Corrected for the checked rows (overwrites)" t-translation="off">
                                 <i class="fa fa-copy mr-1"></i> Copy Std (<span class="mpp-price-selcount">0</span>)
                             </button>
-                            <button class="btn btn-outline-success btn-sm mpp-btn-price-export" title="Export the filtered rows to CSV (code, corrected USD, location)">
+                            <button class="btn btn-outline-success btn-sm mpp-btn-price-export" title="Export the filtered rows to CSV (code, corrected USD, location)" t-translation="off">
                                 <i class="fa fa-download mr-1"></i> Export
                             </button>
-                            <button class="btn btn-outline-success btn-sm mpp-btn-price-import" title="Import an edited CSV back (empty cells keep stored values)">
+                            <button class="btn btn-outline-success btn-sm mpp-btn-price-import" title="Import an edited CSV back (empty cells keep stored values)" t-translation="off">
                                 <i class="fa fa-upload mr-1"></i> Import
                             </button>
                             <input type="file" class="mpp-price-import-file d-none" accept=".csv"/>

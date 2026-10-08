@@ -9,7 +9,7 @@
                     <i class="fa fa-industry"></i>
                     <div>
                         <h2>Production Plan</h2>
-                        <p>Admin only. RFQs/MOs are created as drafts; nothing is confirmed automatically.</p>
+                        <p>RFQs/MOs are created as drafts; nothing is confirmed automatically. Creating them requires admin rights.</p>
                     </div>
                 </div>
                 <div class="mpp-actions">

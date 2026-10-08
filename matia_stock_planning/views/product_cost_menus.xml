@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Product Cost: single page under the same app, visible to admin ONLY.
-         Opens the dashboard directly (like Capacity/Production Plan). -->
+    <!-- Product Cost: single page under the same app, visible to ALL
+         internal users. Opens the dashboard directly
+         (like Capacity/Production Plan). Price edits stay open to all
+         users by design (user rule); only RFQ/MO creation is admin-only
+         (on the Production Plan page). -->
     <menuitem id="menu_matia_product_cost_dashboard"
               name="Product Cost"
               parent="matia_stock_planning.menu_matia_stock_planning_app"
               action="action_matia_product_cost_dashboard"
-              groups="base.group_system"
+              groups="base.group_user"
               sequence="30"/>
 
 </odoo>

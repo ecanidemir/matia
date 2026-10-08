@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Production Plan: single page under the same app, visible to admin ONLY.
-         Opens the dashboard directly (like Capacity Plan); no sub-pages.
+    <!-- Production Plan: single page under the same app, visible to ALL
+         internal users. Opens the dashboard directly (like Capacity
+         Plan); no sub-pages. Only the RFQ/MO creation buttons inside
+         are admin-gated (client hides them, server enforces the group).
          The existing "TekRMD Device Capacity" menu is unchanged. -->
     <menuitem id="menu_matia_procurement_plan_dashboard"
               name="Production Plan"
               parent="matia_stock_planning.menu_matia_stock_planning_app"
               action="action_matia_procurement_plan_dashboard"
-              groups="base.group_system"
+              groups="base.group_user"
               sequence="20"/>
 
 </odoo>

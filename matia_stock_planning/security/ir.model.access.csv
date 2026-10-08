@@ -6,3 +6,7 @@ access_matia_procurement_plan_admin,matia.procurement.plan.admin,model_matia_pro
 access_matia_procurement_plan_line_admin,matia.procurement.plan.line.admin,model_matia_procurement_plan_line,base.group_system,1,1,1,1
 access_matia_procurement_price_override_admin,matia.procurement.price.override.admin,model_matia_procurement_price_override,base.group_system,1,1,1,1
 access_matia_product_cost_admin,matia.product.cost.admin,model_matia_product_cost,base.group_system,1,1,1,1
+access_matia_procurement_plan_user,matia.procurement.plan.user,model_matia_procurement_plan,base.group_user,1,1,1,1
+access_matia_procurement_plan_line_user,matia.procurement.plan.line.user,model_matia_procurement_plan_line,base.group_user,1,1,1,1
+access_matia_procurement_price_override_user,matia.procurement.price.override.user,model_matia_procurement_price_override,base.group_user,1,1,1,1
+access_matia_product_cost_user,matia.product.cost.user,model_matia_product_cost,base.group_user,1,1,1,1

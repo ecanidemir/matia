@@ -438,6 +438,26 @@
         tbody tr.mpp-row-checked td {
             background-color: #eff6ff;
         }
+        // Row hover: td-level so it wins over the manual/
+        // checked cell backgrounds (the generic tr hover sits
+        // underneath them and stays invisible there).
+        tbody tr.item-row:hover td {
+            background-color: #f1f5f9;
+        }
+        tbody tr.mpp-row-manual:hover td {
+            background-color: #fef3c7;
+        }
+        tbody tr.mpp-row-checked:hover td {
+            background-color: #dbeafe;
+        }
+        tbody tr.mpp-row-manual.mpp-row-checked:hover td {
+            background-color: #fde68a;
+        }
+        // Unsaved edits: amber left bar, same warning language
+        // as the Plan rebuild dot (.mpp-btn-rebuild.mpp-dirty).
+        tbody tr.mpp-row-dirty td:first-child {
+            box-shadow: inset 3px 0 0 #f59e0b;
+        }
         .mpp-prod-link {
             cursor: pointer;
         }

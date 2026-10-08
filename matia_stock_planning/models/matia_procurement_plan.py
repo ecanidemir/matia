@@ -17,7 +17,7 @@ import logging
 import math
 
 from odoo import api, fields, models, _
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 
 
 _logger = logging.getLogger(__name__)
@@ -106,6 +106,17 @@ def _mpp_env_sudo(self):
         allowed_company_ids=all_company_ids,
         active_test=False,
     ).sudo().env
+
+
+def _mpp_can_create_docs(model):
+    """True when the calling user may create RFQs/MOs (admins only).
+
+    MUST be evaluated on the caller's own env (self.env), never on the
+    sudo env: sudo would report the admin result for everybody.
+    @param model: any recordset of this module, caller env.
+    @return: True for base.group_system members, else False.
+    """
+    return bool(model.env.user.has_group('base.group_system'))
 
 
 def _mpp_line_uom_factor(line):
@@ -4045,6 +4056,10 @@ class MatiaProcurementPlan(models.Model):
             'plan_id': plan.id,
             'plan_name': plan.name,
             'state': plan.state,
+            # Drives the client-side RFQ/MO button visibility (admins
+            # only). Read from the CALLER env: the sudo env would be
+            # True for everybody. Server methods enforce this too.
+            'can_create_docs': _mpp_can_create_docs(self),
             'suppliers': sup_list,
             'supplier_count': len({s['seller_id']
                                    for s in sup_list if s['seller_id']}),
@@ -4073,6 +4088,9 @@ class MatiaProcurementPlan(models.Model):
         @param line_ids Optional line IDs (None = all make lines).
         @return Dict with created/skipped plus a fresh supplier summary.
         """
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can create manufacturing orders.'))
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
@@ -4533,6 +4551,95 @@ class MatiaProcurementPlan(models.Model):
                 'price_uom': _puom_txt,
                 'price_factor': _pf,
                 'location': rec.location or ''}
+
+    @api.model
+    def bulk_save_price_overrides(self, rows=False):
+        """Save many manual price/location overrides in one RPC.
+
+        One row per edited product: {'product_id': int,
+        'corrected': float/False/'' (False/empty keeps stored),
+        'location': 'tr'/'us'/''/False ('' clears, False keeps)}.
+        Each row follows the same guards as save_price_override
+        (manufactured/kit price rejection, negative/invalid values);
+        per-row failures are collected instead of aborting the batch.
+
+        @param rows: list of row dicts (max 2000).
+        @return: {'updated': int, 'skipped': [codes],
+            'errors': [messages]}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        env_sudo = _mpp_env_sudo(self)
+        rows = list(rows or [])
+        if not rows:
+            raise UserError(_('No rows to save.'))
+        if len(rows) > 2000:
+            raise UserError(_('Too many rows (max 2000).'))
+        pids = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                _pid = int(row.get('product_id'))
+            except (TypeError, ValueError):
+                continue
+            if _pid > 0:
+                pids.append(_pid)
+        if not pids:
+            raise UserError(_('No rows to save.'))
+        code_of = {}
+        for pr in env_sudo['product.product'].browse(pids).read(
+                ['default_code', 'name']):
+            code_of[pr['id']] = pr.get('default_code') or \
+                pr.get('name') or str(pr['id'])
+        updated = 0
+        skipped = []
+        errors = []
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                errors.append('Row %d: not a mapping.' % (idx + 1))
+                continue
+            try:
+                pid = int(row.get('product_id'))
+            except (TypeError, ValueError):
+                errors.append('Row %d: invalid product.' % (idx + 1))
+                continue
+            if pid <= 0:
+                errors.append('Row %d: invalid product.' % (idx + 1))
+                continue
+            label = code_of.get(pid, str(pid))
+            raw_corr = row.get('corrected', False)
+            corr = False
+            if raw_corr is not False and raw_corr is not None \
+                    and str(raw_corr).strip() != '':
+                try:
+                    corr = float(str(raw_corr).strip())
+                except (TypeError, ValueError):
+                    errors.append('Row %d [%s]: invalid price.' % (
+                        idx + 1, label))
+                    continue
+                if corr < 0:
+                    errors.append('Row %d [%s]: negative price.' % (
+                        idx + 1, label))
+                    continue
+            loc = row.get('location', False)
+            if loc is not None and not isinstance(loc, bool):
+                loc = str(loc).strip().lower()
+                if loc not in ('', 'tr', 'us'):
+                    errors.append('Row %d [%s]: invalid location.' % (
+                        idx + 1, label))
+                    continue
+            else:
+                loc = False
+            try:
+                self.save_price_override(pid, corr, loc)
+                updated += 1
+            except Exception as exc:
+                _logger.warning(
+                    'Bulk price save skipped product %s: %s',
+                    pid, exc)
+                skipped.append(label)
+        return {'updated': updated, 'skipped': skipped,
+                'errors': errors[:50]}
 
     @api.model
     def bulk_set_location(self, product_ids, location):

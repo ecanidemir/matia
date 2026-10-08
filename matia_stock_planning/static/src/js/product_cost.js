@@ -36,6 +36,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             'click .mpp-btn-price-import': '_onPriceImport',
             'change .mpp-price-import-file': '_onPriceImportFile',
             'click .mpp-btn-price-save': '_onPriceSave',
+            'click .mpp-btn-price-save-all': '_onPriceSaveAll',
+            'input .mpp-corr-input': '_onPriceDirty',
+            'change .mpp-loc-select': '_onPriceLocDirty',
             'click .mpp-th-price-sort': '_onPriceSort',
             'input .mpp-price-filter': '_onPriceFilter',
             'change .mpp-price-filter': '_onPriceFilter',
@@ -67,6 +70,12 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             this.priceOverrideCount = 0;
             this.priceLoaded = false;
             this.priceSel = {};
+            // Unsaved Corrected/Location edits, keyed by product_id:
+            // {corrected: <raw string or undefined>,
+            //  location: <raw string or undefined>}. Only changed
+            // fields are stored, so re-renders (sort/filter) keep
+            // the edits and Save All sends exactly what changed.
+            this.priceDirty = {};
             this.priceFilters = {part: '', type: '', seller: '',
                 last: '', usd: '', date: '', std: '', corr: '',
                 loc: ''};
@@ -114,6 +123,28 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 message: msg || 'Operation failed.',
                 type: 'danger',
             });
+        },
+
+        // English-only confirm dialog. Dialog.confirm is not used
+        // on purpose: its Cancel button follows the user UI
+        // language, while this page stays English everywhere.
+        // Plain strings (no _t) are never translated.
+        _confirmEn: function (title, message, okLabel, onOk) {
+            return new Dialog(this, {
+                title: title,
+                size: 'medium',
+                $content: $('<main/>', {role: 'alert'})
+                    .append($('<p/>', {text: message})),
+                buttons: [
+                    {
+                        text: okLabel,
+                        classes: 'btn-primary',
+                        close: true,
+                        click: onOk,
+                    },
+                    {text: 'Cancel', close: true},
+                ],
+            }).open();
         },
 
         // ---------------- tabs ----------------
@@ -958,6 +989,10 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                     }
                 });
                 self.priceSel = keep;
+                // Fresh server data is the source of truth: any
+                // unsaved edits were either just stored or belong
+                // to stale rows, so the dirty map is dropped.
+                self.priceDirty = {};
                 if (self.activeTab === 2) self._renderPrices();
             }, function (err) {
                 self._notifyErr(err);
@@ -1228,18 +1263,43 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             this._renderPriceRows();
         },
 
-        _priceRowHtml: function (r) {
-            var checked = this.priceSel[r.product_id] ?
-                ' checked="checked"' : '';
-            // Corrected input is entered per purchase (commercial)
-            // UoM (r.price_uom, e.g. meter for cable); the server
-            // stores it converted to per stock/line UoM.
+        // Original (stored) input values of one price row, as
+        // strings, so dirty tracking can compare against them.
+        _priceOrigVals: function (r) {
             var corrDisp = (r.corrected_display !== undefined &&
                 r.corrected_display !== null &&
                 r.corrected_display !== '') ?
                 r.corrected_display : r.corrected;
             var corrVal = (parseFloat(corrDisp) || 0) > 0 ?
-                corrDisp : '';
+                String(corrDisp) : '';
+            return {
+                corr: corrVal,
+                loc: (r.location || '').toLowerCase(),
+            };
+        },
+
+        _priceRowHtml: function (r) {
+            var checked = this.priceSel[r.product_id] ?
+                ' checked="checked"' : '';
+            var dirty = this.priceDirty[r.product_id];
+            // Corrected input is entered per purchase (commercial)
+            // UoM (r.price_uom, e.g. meter for cable); the server
+            // stores it converted to per stock/line UoM.
+            // Unsaved edits win over the stored values so they
+            // survive re-renders (sort/filter) until saved.
+            var corrDisp = (r.corrected_display !== undefined &&
+                r.corrected_display !== null &&
+                r.corrected_display !== '') ?
+                r.corrected_display : r.corrected;
+            var corrVal = (parseFloat(corrDisp) || 0) > 0 ?
+                String(corrDisp) : '';
+            var origLoc = (r.location || '').toLowerCase();
+            if (dirty && dirty.corrected !== undefined) {
+                corrVal = dirty.corrected;
+            }
+            if (dirty && dirty.location !== undefined) {
+                origLoc = dirty.location;
+            }
             var priceUom = r.price_uom || r.uom || '';
             // No UoM column: the last-buy unit rides on the Last
             // Price cell (e.g. "0.5700 TRY/m") when it differs from
@@ -1248,7 +1308,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 ' <span style="opacity:0.65;" title="Last ' +
                 'purchase unit">/' +
                 this._escHtml(this._uomEn(r.last_uom)) + '</span>' : '';
-            var loc = (r.location || '').toLowerCase();
+            var loc = origLoc;
             var lastTxt = r.last_price ?
                 this._fmtNum(r.last_price, 4) +
                 (r.last_currency ? ' ' + r.last_currency : '') : '';
@@ -1316,6 +1376,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             }
             return '<tr class="item-row' +
                 (r.has_override ? ' mpp-row-manual' : '') +
+                (dirty ? ' mpp-row-dirty' : '') +
                 '" data-pid="' + r.product_id + '">' +
                 '<td><input type="checkbox" class="mpp-price-check" ' +
                 'data-pid="' + r.product_id + '"' + checked + '/></td>' +
@@ -1338,7 +1399,8 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 stdCell +
                 '<td style="white-space:nowrap;"><input type="number" class="form-control ' +
                 'form-control-sm mpp-corr-input" data-pid="' +
-                r.product_id + '" value="' + corrVal + '" min="0" ' +
+                r.product_id + '" value="' + this._escHtml(corrVal) +
+                '" min="0" ' +
                 'step="0.0001" title="' + disTitle + '"' +
                 disAttr + '/> <span style="font-size:11px;opacity:0.75;" ' +
                 'title="Enter the price per this unit">per ' +
@@ -1394,6 +1456,17 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         _updatePriceSelCount: function () {
             var n = Object.keys(this.priceSel).length;
             this.$('.mpp-price-selcount').text(n);
+            this._updatePriceDirtyCount();
+        },
+
+        _updatePriceDirtyCount: function () {
+            var n = Object.keys(this.priceDirty).length;
+            this.$('.mpp-price-dirtycount').text(n);
+            var btn = this.$('.mpp-btn-price-save-all');
+            if (btn.length) {
+                btn.toggleClass('btn-success', n > 0);
+                btn.toggleClass('btn-outline-success', n === 0);
+            }
         },
 
         _priceSelIds: function () {
@@ -1407,6 +1480,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         _onPriceFilter: function (ev) {
             var el = ev.currentTarget;
             this.priceFilters[el.dataset.f] = el.value || '';
+            // A new filter shows different rows: drop the checkbox
+            // selection so bulk actions cannot hit hidden products.
+            this.priceSel = {};
             this._renderPriceRows();
         },
 
@@ -1513,6 +1589,131 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             });
         },
 
+        // Mark a row dirty when its Corrected input or Location
+        // select differs from the stored values; reverting to the
+        // stored values unmarks it. The dirty map (not the DOM)
+        // is the source of truth, so edits survive re-renders.
+        _markPriceDirty: function (pid) {
+            var row = null;
+            for (var i = 0; i < this.priceRows.length; i++) {
+                if (this.priceRows[i].product_id === pid) {
+                    row = this.priceRows[i];
+                    break;
+                }
+            }
+            if (!row) return;
+            var orig = this._priceOrigVals(row);
+            var corrEl = this.$('.mpp-corr-input[data-pid="' +
+                pid + '"]');
+            var locEl = this.$('.mpp-loc-select[data-pid="' +
+                pid + '"]');
+            var curCorr = corrEl.length ?
+                String(corrEl.val() || '').trim() : orig.corr;
+            var curLoc = locEl.length ?
+                String(locEl.val() || '').toLowerCase() : orig.loc;
+            var entry = this.priceDirty[pid] || {};
+            if (curCorr !== orig.corr) {
+                entry.corrected = curCorr;
+            } else {
+                delete entry.corrected;
+            }
+            if (curLoc !== orig.loc) {
+                entry.location = curLoc;
+            } else {
+                delete entry.location;
+            }
+            if (entry.corrected !== undefined ||
+                    entry.location !== undefined) {
+                this.priceDirty[pid] = entry;
+            } else {
+                delete this.priceDirty[pid];
+            }
+            var tr = this.$('tr.item-row[data-pid="' + pid + '"]');
+            if (tr.length) {
+                tr.toggleClass('mpp-row-dirty',
+                    !!this.priceDirty[pid]);
+            }
+            this._updatePriceDirtyCount();
+        },
+
+        _onPriceDirty: function (ev) {
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            if (!pid) return;
+            this._markPriceDirty(pid);
+        },
+
+        _onPriceLocDirty: function (ev) {
+            var pid = parseInt(ev.currentTarget.dataset.pid, 10);
+            if (!pid) return;
+            this._markPriceDirty(pid);
+        },
+
+        // Save All: one RPC for every edited row (Corrected
+        // and/or Location). Unchanged rows are not sent.
+        _onPriceSaveAll: function () {
+            var self = this;
+            var rows = [];
+            Object.keys(this.priceDirty).forEach(function (k) {
+                var pid = parseInt(k, 10);
+                if (!pid) return;
+                var entry = self.priceDirty[pid] || {};
+                var corr = false;
+                if (entry.corrected !== undefined) {
+                    if (String(entry.corrected).trim() !== '') {
+                        corr = parseFloat(entry.corrected);
+                        if (isNaN(corr) || corr < 0) {
+                            corr = null;
+                        }
+                    }
+                }
+                if (corr === null) return;
+                var loc = false;
+                if (entry.location !== undefined) {
+                    loc = entry.location;
+                }
+                rows.push({
+                    product_id: pid,
+                    corrected: corr,
+                    location: loc,
+                });
+            });
+            if (!rows.length) {
+                var invalid = Object.keys(this.priceDirty).length > 0;
+                this.displayNotification({
+                    title: invalid ? 'Invalid price' : 'Nothing to save',
+                    message: invalid ?
+                        'Corrected price must be zero or more.' :
+                        'Edit a Corrected price or Location first.',
+                    type: 'warning',
+                });
+                return;
+            }
+            this._rpcPlan('bulk_save_price_overrides',
+                [rows]).then(function (res) {
+                self.priceDirty = {};
+                self._fetchPrices();
+                var msg = (res && res.updated ? res.updated : 0) +
+                    ' row(s) saved in one go.';
+                if (res && res.skipped && res.skipped.length) {
+                    msg += ' Skipped (manufactured/kit): ' +
+                        res.skipped.slice(0, 10).join(', ') +
+                        (res.skipped.length > 10 ? ' (+' +
+                            (res.skipped.length - 10) + ' more)' : '');
+                }
+                if (res && res.errors && res.errors.length) {
+                    msg += ' Errors: ' +
+                        res.errors.slice(0, 5).join(' ');
+                }
+                self.displayNotification({
+                    title: 'All saved',
+                    message: msg,
+                    type: 'success',
+                });
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
         _onPriceBulkTr: function () {
             this._onPriceBulk('tr');
         },
@@ -1534,6 +1735,9 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             }
             this._rpcPlan('bulk_set_location',
                 [ids, loc]).then(function (res) {
+                // Bulk action done: clear the checkboxes so the
+                // next operation starts from an empty selection.
+                self.priceSel = {};
                 self._fetchPrices();
                 self.displayNotification({
                     title: 'Saved',
@@ -1560,6 +1764,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             }
             this._rpcPlan('clear_price_overrides',
                 [ids]).then(function (res) {
+                self.priceSel = {};
                 self._fetchPrices();
                 self.displayNotification({
                     title: 'Cleared',
@@ -1586,37 +1791,34 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 });
                 return;
             }
-            // Odoo 15: Dialog.confirm is callback-based
-            // (no promise); the reset runs in confirm_callback.
-            Dialog.confirm(this,
+            this._confirmEn(
+                'Reset to USD',
                 'Copy the computed USD into Corrected for ' + ids.length +
                 ' product(s)? Existing corrected values are overwritten.',
-                {
-                    title: 'Reset to USD',
-                    confirmButtonText: 'Reset',
-                    confirm_callback: function () {
-                        self._rpcCost('reset_prices_to_usd',
-                            [ids]).then(function (res) {
-                            self._fetchPrices();
-                            var msg = (res && res.updated ?
-                                res.updated : 0) +
-                                ' corrected price(s) set from ' +
-                                'computed USD.';
-                            if (res && res.skipped &&
-                                res.skipped.length) {
-                                msg += ' Skipped ' +
-                                    '(manufactured/kit): ' +
-                                    res.skipped.join(', ');
-                            }
-                            self.displayNotification({
-                                title: 'Reset done',
-                                message: msg,
-                                type: 'success',
-                            });
-                        }, function (err) {
-                            self._notifyErr(err);
+                'Reset',
+                function () {
+                    self._rpcCost('reset_prices_to_usd',
+                        [ids]).then(function (res) {
+                        self.priceSel = {};
+                        self._fetchPrices();
+                        var msg = (res && res.updated ?
+                            res.updated : 0) +
+                            ' corrected price(s) set from ' +
+                            'computed USD.';
+                        if (res && res.skipped &&
+                            res.skipped.length) {
+                            msg += ' Skipped ' +
+                                '(manufactured/kit): ' +
+                                res.skipped.join(', ');
+                        }
+                        self.displayNotification({
+                            title: 'Reset done',
+                            message: msg,
+                            type: 'success',
                         });
-                    },
+                    }, function (err) {
+                        self._notifyErr(err);
+                    });
                 });
         },
 
@@ -1636,39 +1838,36 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                 });
                 return;
             }
-            // Odoo 15: Dialog.confirm is callback-based
-            // (no promise); the copy runs in confirm_callback.
-            Dialog.confirm(this,
+            this._confirmEn(
+                'Copy Std to Corrected',
                 'Copy the standard-price USD into Corrected for ' +
                 ids.length + ' product(s)? Existing corrected ' +
                 'values are overwritten.',
-                {
-                    title: 'Copy Std to Corrected',
-                    confirmButtonText: 'Copy',
-                    confirm_callback: function () {
-                        self._rpcCost('copy_std_to_corrected',
-                            [ids]).then(function (res) {
-                            self._fetchPrices();
-                            var msg = (res && res.updated ?
-                                res.updated : 0) +
-                                ' corrected price(s) set from ' +
-                                'standard-price USD.';
-                            if (res && res.skipped &&
-                                res.skipped.length) {
-                                msg += ' Skipped ' +
-                                    '(manufactured/kit or no ' +
-                                    'standard price): ' +
-                                    res.skipped.join(', ');
-                            }
-                            self.displayNotification({
-                                title: 'Copy done',
-                                message: msg,
-                                type: 'success',
-                            });
-                        }, function (err) {
-                            self._notifyErr(err);
+                'Copy',
+                function () {
+                    self._rpcCost('copy_std_to_corrected',
+                        [ids]).then(function (res) {
+                        self.priceSel = {};
+                        self._fetchPrices();
+                        var msg = (res && res.updated ?
+                            res.updated : 0) +
+                            ' corrected price(s) set from ' +
+                            'standard-price USD.';
+                        if (res && res.skipped &&
+                            res.skipped.length) {
+                            msg += ' Skipped ' +
+                                '(manufactured/kit or no ' +
+                                'standard price): ' +
+                                res.skipped.join(', ');
+                        }
+                        self.displayNotification({
+                            title: 'Copy done',
+                            message: msg,
+                            type: 'success',
                         });
-                    },
+                    }, function (err) {
+                        self._notifyErr(err);
+                    });
                 });
         },
 
@@ -1780,55 +1979,54 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                         });
                         return;
                     }
-                    Dialog.confirm(self,
+                    self._confirmEn(
+                        'Import Prices',
                         'Update ' + parsed.length + ' product(s) ' +
                         'from this file? Empty cells keep the ' +
                         'stored values.',
-                        {
-                            title: 'Import Prices',
-                            confirmButtonText: 'Import',
-                            confirm_callback: function () {
-                                self._rpcCost(
-                                    'import_price_overrides',
-                                    [parsed]).then(function (res) {
-                                    self._fetchPrices();
-                                    var msg = (res && res.updated ?
-                                        res.updated : 0) +
-                                        ' product(s) updated.';
-                                    if (res && res.skipped &&
-                                        res.skipped.length) {
-                                        msg += ' Skipped (no ' +
-                                            'change or no ' +
-                                            'purchase price): ' +
-                                            res.skipped.slice(0, 10)
-                                                .join(', ') +
-                                            (res.skipped.length > 10 ?
-                                                ' (+' +
-                                                (res.skipped.length -
-                                                    10) + ' more)' :
-                                                '');
-                                    }
-                                    if (res && res.warnings &&
-                                        res.warnings.length) {
-                                        msg += ' Warnings: ' +
-                                            res.warnings.slice(0, 5)
-                                                .join(' ');
-                                    }
-                                    if (res && res.errors &&
-                                        res.errors.length) {
-                                        msg += ' Errors: ' +
-                                            res.errors.slice(0, 5)
-                                                .join(' ');
-                                    }
-                                    self.displayNotification({
-                                        title: 'Import done',
-                                        message: msg,
-                                        type: 'success',
-                                    });
-                                }, function (err) {
-                                    self._notifyErr(err);
+                        'Import',
+                        function () {
+                            self._rpcCost(
+                                'import_price_overrides',
+                                [parsed]).then(function (res) {
+                                self.priceSel = {};
+                                self._fetchPrices();
+                                var msg = (res && res.updated ?
+                                    res.updated : 0) +
+                                    ' product(s) updated.';
+                                if (res && res.skipped &&
+                                    res.skipped.length) {
+                                    msg += ' Skipped (no ' +
+                                        'change or no ' +
+                                        'purchase price): ' +
+                                        res.skipped.slice(0, 10)
+                                            .join(', ') +
+                                        (res.skipped.length > 10 ?
+                                            ' (+' +
+                                            (res.skipped.length -
+                                                10) + ' more)' :
+                                            '');
+                                }
+                                if (res && res.warnings &&
+                                    res.warnings.length) {
+                                    msg += ' Warnings: ' +
+                                        res.warnings.slice(0, 5)
+                                            .join(' ');
+                                }
+                                if (res && res.errors &&
+                                    res.errors.length) {
+                                    msg += ' Errors: ' +
+                                        res.errors.slice(0, 5)
+                                            .join(' ');
+                                }
+                                self.displayNotification({
+                                    title: 'Import done',
+                                    message: msg,
+                                    type: 'success',
                                 });
-                            },
+                            }, function (err) {
+                                self._notifyErr(err);
+                            });
                         });
                 } catch (e) {
                     self.displayNotification({
