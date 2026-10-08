@@ -22,7 +22,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-slot-save': '_onSlotSave',
             'input .mpp-slot-note': '_onSlotNoteInput',
             'click .mpp-btn-excel': '_onExportExcel',
-            'click .mpp-btn-excel-tree': '_onExportTree',
+            'click .mpp-btn-excel-tree': '_onExportPlanPopup',
             'click .mpp-btn-create-rfq': '_onCreateRfq',
             'click .mpp-btn-confirm-rfq': '_onConfirmRfq',
             'click .mpp-btn-create-mo': '_onCreateMo',
@@ -859,7 +859,24 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 });
         },
 
-        // Bulk expand in ONE RPC (get_full_tree): the server walks the
+        // Shared bulk-fill: stores get_full_tree sub-trees in the real
+        // caches with the canonical uid scheme. Returns loaded uid count.
+        _applyFullTree: function (res) {
+            var self = this;
+            var trees = (res && res.trees) || {};
+            var uids = Object.keys(trees);
+            uids.forEach(function (uid) {
+                var items = trees[uid] || [];
+                self._markCycles(uid, items);
+                self.subCache[uid] = {
+                    items: items,
+                    level: uid.split('/').length,
+                    groupKey: uid.split(':')[0],
+                };
+                self.expanded[uid] = true;
+            });
+            return uids.length;
+        },
         // whole forest with a flat query cost, so N nodes no longer mean
         // N round-trips (plus server queueing on workers=2), and the
         // table renders exactly once. Cache/expanded maps keep the same
@@ -913,21 +930,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._rpcPlan('get_full_tree',
                 [this._planId() || false, topNets]).then(
                 function (res) {
-                    var trees = (res && res.trees) || {};
-                    var uids = Object.keys(trees);
-                    uids.forEach(function (uid) {
-                        var items = trees[uid] || [];
-                        self._markCycles(uid, items);
-                        self.subCache[uid] = {
-                            items: items,
-                            level: uid.split('/').length,
-                            groupKey: uid.split(':')[0],
-                        };
-                        self.expanded[uid] = true;
-                    });
+                    var n = self._applyFullTree(res);
                     done();
                     self._renderTree();
-                    if (!uids.length) {
+                    if (!n) {
                         self.displayNotification({
                             title: _t('Nothing to expand'),
                             message: _t('No expandable sub-BOM rows in this plan.'),
@@ -1564,6 +1570,139 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 total: this.summary.total_cost,
                 kits: this.summary.kits || [],
                 scratch_total: this.summary.scratch_total_usd || 0,
+            });
+        },
+
+        // Excel button opens the slot picker: only the active slot
+        // alone keeps today's single-sheet export; any other choice
+        // collects the selected slots (fully expanded, SAVED data)
+        // into one combined workbook (Compare + one sheet per slot).
+        _onExportPlanPopup: function () {
+            if (!this.summary) return;
+            var self = this;
+            var $list = $('<div/>');
+            (this.slots || []).forEach(function (s) {
+                var has = !!s.plan_id;
+                var label = 'Slot ' + s.slot + (has ?
+                    ' - ' + (s.name || '') +
+                    (s.note ? ' (' + s.note + ')' : '') :
+                    ' - empty');
+                $list.append($('<label/>', {class: 'd-block'}).append(
+                    $('<input/>', {
+                        type: 'checkbox',
+                        value: s.slot,
+                        disabled: has ? null : 'disabled',
+                        checked: (has && s.slot === self.activeSlot) ?
+                            'checked' : null,
+                    }),
+                    ' ' + label));
+            });
+            if (this.dirtyNeeds || this.dirtySlotNote) {
+                $list.append($('<p/>', {class: 'text-warning'}).text(
+                    'Unsaved Needed/description changes are NOT ' +
+                    'included when other slots are exported - ' +
+                    'Save first.'));
+            }
+            new Dialog(this, {
+                title: 'Export Plan to Excel',
+                size: 'medium',
+                $content: $list,
+                buttons: [
+                    {
+                        text: 'Export',
+                        classes: 'btn-primary',
+                        close: true,
+                        click: function () {
+                            var sel = [];
+                            $list.find('input:checked').each(function () {
+                                sel.push(parseInt(this.value, 10));
+                            });
+                            if (!sel.length) return;
+                            if (sel.length === 1 &&
+                                sel[0] === self.activeSlot) {
+                                self._onExportTree();
+                            } else {
+                                self._exportSlotsCollect(sel);
+                            }
+                        },
+                    },
+                    {text: 'Cancel', close: true},
+                ],
+            }).open();
+        },
+
+        // Sequentially loads every selected slot, fully expands it via
+        // the bulk get_full_tree RPC and collects its export rows, then
+        // restores the original slot view before posting the payload.
+        _exportSlotsCollect: function (slots) {
+            var self = this;
+            if (this._exporting || !this.summary) return;
+            this._exporting = true;
+            var orig = this.activeSlot;
+            var plans = [];
+            this.displayNotification({
+                title: 'Export',
+                message: 'Collecting ' + slots.length + ' slots...',
+                type: 'info',
+            });
+            var chain = Promise.resolve();
+            slots.forEach(function (s) {
+                chain = chain.then(function () {
+                    return self._rpcPlan('load_slot', [s]).then(
+                        function (res) {
+                            self._applySummary(res);
+                            self.collapsedGroups = {};
+                            var topNets = {};
+                            self.treeGroups.forEach(function (g) {
+                                (g.items || []).forEach(function (r) {
+                                    topNets[g.key + ':' + r.product_id] =
+                                        self._rowNet(r);
+                                });
+                            });
+                            return self._rpcPlan('get_full_tree',
+                                [self._planId() || false, topNets]).then(
+                                function (full) {
+                                    self._applyFullTree(full);
+                                    if (full && full.capped) {
+                                        self.displayNotification({
+                                            title: 'Expand capped',
+                                            message: 'Slot ' + s +
+                                                ': stopped after 2000 ' +
+                                                'sub-BOM loads.',
+                                            type: 'warning',
+                                        });
+                                    }
+                                    plans.push({
+                                        slot: s,
+                                        name: (self.summary &&
+                                            self.summary.name) || '',
+                                        scratch_total: (self.summary &&
+                                            self.summary.scratch_total_usd) ||
+                                            0,
+                                        tree_rows:
+                                            self._collectExportRows(),
+                                    });
+                                });
+                        });
+                });
+            });
+            var restore = function () {
+                self._exporting = false;
+                self._rpcPlan('load_slot', [orig]).then(function (res) {
+                    self._applySummary(res);
+                    self._renderSlotBar();
+                    self._showTab(self.activeTab);
+                    if (self.activeTab === 2) self._fetchSupSummary();
+                }, function (err) {
+                    self._notifyErr(err);
+                });
+            };
+            chain.then(function () {
+                restore();
+                self._postExcel({mode: 'slots', plans: plans});
+            }, function (err) {
+                restore();
+                self._notifyErr(err);
             });
         },
 
