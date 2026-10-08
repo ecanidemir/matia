@@ -281,6 +281,8 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             var boxes = [
                 ['Full Set', 'Base + Screws + Outdoor + Seat',
                     c.full, 'mpc-combo-full'],
+                ['Base', 'Base + Screws',
+                    c.base, ''],
                 ['Base + Outdoor', 'Base + Screws + Outdoor',
                     c.base_outdoor, ''],
                 ['Base + Seat', 'Base + Screws + Seat',

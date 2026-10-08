@@ -12,6 +12,8 @@ try:
 except ImportError:
     xlsxwriter = None
 
+from .product_cost_export import cost_csv_lines, write_cost_sheet
+
 # Slot identity colors for the combined export (pastel, pairwise
 # distinguishable side by side): slot N -> SLOT_COLORS[N].
 SLOT_COLORS = ['#FCE4EC', '#FFE0B2', '#FFF9C4', '#DCEDC8', '#B2DFDB',
@@ -187,6 +189,66 @@ def _plan_csv_lines(plan_name, scratch_total, rows, combo=None):
 
 class MatiaProcurementPlanController(http.Controller):
 
+    @staticmethod
+    def _live_cost():
+        """Live Product Cost data for the optional Cost sheet.
+
+        Top-level groups only (same writer as the Cost page export).
+        """
+        cost = request.env['matia.product.cost'].get_cost_tree() or {}
+        return cost.get('combos') or {}, cost.get('groups') or []
+
+    @staticmethod
+    def _cost_suffix(data):
+        return '_Cost' if data.get('withCost') else ''
+
+    def _append_cost_sheet(self, workbook, data):
+        if not data.get('withCost'):
+            return
+        combos, groups = self._live_cost()
+        ws = workbook.add_worksheet('Cost')
+        write_cost_sheet(workbook, ws, combos, groups)
+
+    def _append_cost_csv(self, lines, data):
+        if not data.get('withCost'):
+            return
+        combos, groups = self._live_cost()
+        lines.append('')
+        lines.extend(cost_csv_lines(combos, groups))
+
+    def _export_cost_only(self, data):
+        """Cost sheet alone (popup: only Product Cost checked)."""
+        if not xlsxwriter:
+            combos, groups = self._live_cost()
+            lines = cost_csv_lines(combos, groups)
+            content = '\r\n'.join(lines).encode('utf-8')
+            filename = 'Product_Cost_%s.csv' % datetime.now().strftime(
+                '%Y%m%d_%H%M')
+            return request.make_response(
+                content,
+                headers=[
+                    ('Content-Type', 'text/csv; charset=utf-8'),
+                    ('Content-Disposition',
+                      'attachment; filename=%s' % filename),
+                ])
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        combos, groups = self._live_cost()
+        ws = workbook.add_worksheet('Cost')
+        write_cost_sheet(workbook, ws, combos, groups)
+        workbook.close()
+        output.seek(0)
+        filename = 'Product_Cost_%s.xlsx' % datetime.now().strftime(
+            '%Y%m%d_%H%M')
+        return request.make_response(
+            output.getvalue(),
+            headers=[
+                ('Content-Type', 'application/vnd.openxmlformats-officedocument'
+                 '.spreadsheetml.sheet'),
+                ('Content-Disposition',
+                  'attachment; filename=%s' % filename),
+            ])
+
     @http.route('/matia_procurement_plan/export_xlsx', type='http',
                 auth='user', methods=['POST'], csrf=False)
     def export_xlsx(self, **kwargs):
@@ -209,16 +271,19 @@ class MatiaProcurementPlanController(http.Controller):
             return self._export_slots(data)
         if data.get('mode') == 'plan_supplier':
             return self._export_plan_supplier(data)
+        if data.get('mode') == 'cost_only':
+            return self._export_cost_only(data)
         groups = data.get('groups', [])
         total = data.get('total', 0)
 
         if not xlsxwriter:
-            content = '\r\n'.join(
-                _supplier_csv_lines(
-                    plan_name, groups, total, kits, scratch_total)
-            ).encode('utf-8')
-            filename = 'Supplier_Preview_%s.csv' % datetime.now().strftime(
-                '%Y%m%d_%H%M')
+            lines = _supplier_csv_lines(
+                plan_name, groups, total, kits, scratch_total)
+            self._append_cost_csv(lines, data)
+            content = '\r\n'.join(lines).encode('utf-8')
+            filename = 'Supplier_Preview%s_%s.csv' % (
+                self._cost_suffix(data),
+                datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
                 headers=[
@@ -231,10 +296,12 @@ class MatiaProcurementPlanController(http.Controller):
         ws = workbook.add_worksheet('Supplier Preview')
         self._write_supplier_sheet(workbook, ws, plan_name, groups,
                                    total, kits, scratch_total)
+        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Supplier_Preview_%s.xlsx' % datetime.now().strftime(
-            '%Y%m%d_%H%M')
+        filename = 'Supplier_Preview%s_%s.xlsx' % (
+            self._cost_suffix(data),
+            datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
             headers=[
@@ -309,9 +376,11 @@ class MatiaProcurementPlanController(http.Controller):
             lines.extend(_supplier_csv_lines(
                 sup.get('plan_name', plan_name), groups, total,
                 sup_kits, sup_scratch))
+            self._append_cost_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Plan_Supplier_%s.csv' % datetime.now().strftime(
-                '%Y%m%d_%H%M')
+            filename = 'Plan_Supplier%s_%s.csv' % (
+                self._cost_suffix(data),
+                datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
                 headers=[
@@ -328,10 +397,12 @@ class MatiaProcurementPlanController(http.Controller):
         self._write_supplier_sheet(
             workbook, ws2, sup.get('plan_name', plan_name), groups,
             total, sup_kits, sup_scratch)
+        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Plan_Supplier_%s.xlsx' % datetime.now().strftime(
-            '%Y%m%d_%H%M')
+        filename = 'Plan_Supplier%s_%s.xlsx' % (
+            self._cost_suffix(data),
+            datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
             headers=[
@@ -352,25 +423,31 @@ class MatiaProcurementPlanController(http.Controller):
         rows = data.get('tree_rows', []) or []
         combo = data.get('combo')
         if not xlsxwriter:
-            content = '\r\n'.join(
-                _plan_csv_lines(plan_name, scratch_total, rows, combo)
-            ).encode('utf-8')
-            filename = 'Plan_%s.csv' % datetime.now().strftime('%Y%m%d_%H%M')
+            lines = _plan_csv_lines(
+                plan_name, scratch_total, rows, combo)
+            self._append_cost_csv(lines, data)
+            content = '\r\n'.join(lines).encode('utf-8')
+            filename = 'Plan%s_%s.csv' % (
+                self._cost_suffix(data),
+                datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
                 headers=[
                     ('Content-Type', 'text/csv; charset=utf-8'),
                     ('Content-Disposition',
-                     'attachment; filename=%s' % filename),
+                      'attachment; filename=%s' % filename),
                 ])
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         ws = workbook.add_worksheet('Plan')
         self._write_plan_sheet(workbook, ws, plan_name, scratch_total,
                                rows, combo)
+        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
-        filename = 'Plan_%s.xlsx' % datetime.now().strftime('%Y%m%d_%H%M')
+        filename = 'Plan%s_%s.xlsx' % (
+            self._cost_suffix(data),
+            datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
             headers=[
@@ -644,9 +721,11 @@ class MatiaProcurementPlanController(http.Controller):
                 for v in s_est:
                     stotal.append('%d' % v)
                 lines.append(';'.join(stotal))
+            self._append_cost_csv(lines, data)
             content = '\r\n'.join(lines).encode('utf-8')
-            filename = 'Plan_Combined_%s.csv' % datetime.now().strftime(
-                '%Y%m%d_%H%M')
+            filename = 'Plan_Combined%s_%s.csv' % (
+                self._cost_suffix(data),
+                datetime.now().strftime('%Y%m%d_%H%M'))
             return request.make_response(
                 content,
                 headers=[
@@ -837,12 +916,14 @@ class MatiaProcurementPlanController(http.Controller):
             ws2.freeze_panes(shrow + 1, 0)
             ws2.set_landscape()
             ws2.fit_to_pages(1, 0)
+        self._append_cost_sheet(workbook, data)
         workbook.close()
         output.seek(0)
         prefix = 'Plan_Combined_Supplier' if with_supplier \
             else 'Plan_Combined'
-        filename = '%s_%s.xlsx' % (
-            prefix, datetime.now().strftime('%Y%m%d_%H%M'))
+        filename = '%s%s_%s.xlsx' % (
+            prefix, self._cost_suffix(data),
+            datetime.now().strftime('%Y%m%d_%H%M'))
         return request.make_response(
             output.getvalue(),
             headers=[

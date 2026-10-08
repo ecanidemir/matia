@@ -1584,7 +1584,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Supplier-only export (popup: supplier on, no slot picked).
-        _onExportExcel: function () {
+        // With withCost the live Cost sheet is appended server-side.
+        _onExportExcel: function (withCost) {
             if (!this.summary) return;
             var sup = this._supplierPayload();
             this._postExcel({
@@ -1593,6 +1594,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 total: sup.total,
                 kits: sup.kits,
                 scratch_total: sup.scratch_total,
+                withCost: withCost ? 1 : 0,
+            });
+        },
+
+        // Cost-only export (popup: only Product Cost checked).
+        _onExportCost: function () {
+            if (!this.summary) return;
+            this._postExcel({
+                plan_name: this.summary.name || 'Cost',
+                mode: 'cost_only',
+                withCost: 1,
             });
         },
 
@@ -1650,6 +1662,48 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '0 0 0 1px #7c2d12' : 'none');
             });
             $wrap.append($sup);
+            // Product Cost card (toggle, same pattern as supplier).
+            var $costInput = $('<input/>', {
+                type: 'checkbox',
+                'class': 'mpp-exp-cost',
+            }).css({'width': '18px', 'height': '18px',
+                'accent-color': '#7c2d12', 'flex-shrink': '0',
+                'cursor': 'pointer'});
+            var $cost = $('<div/>').css({
+                'display': 'flex', 'align-items': 'center',
+                'gap': '12px', 'background': '#fff7ed',
+                'border': '1px solid #fed7aa', 'border-radius': '10px',
+                'padding': '10px 14px', 'margin-bottom': '12px',
+                'cursor': 'pointer'});
+            var $costIcon = $('<span/>').css({
+                'display': 'inline-flex', 'align-items': 'center',
+                'justify-content': 'center', 'width': '34px',
+                'height': '34px', 'border-radius': '50%',
+                'background': '#7c2d12', 'color': '#fdba74',
+                'flex-shrink': '0'})
+                .append($('<i/>', {'class': 'fa fa-cubes'}));
+            var $costTxt = $('<div/>').css({'flex': '1 1 auto'})
+                .append($('<div/>').text('Product Cost').css({
+                    'font-weight': '700', 'color': INK,
+                    'font-size': '0.9rem'}))
+                .append($('<div/>').text(
+                    'Live cost sheet as a separate sheet').css({
+                    'color': MUT, 'font-size': '0.76rem'}));
+            $cost.append($costIcon).append($costTxt).append($costInput);
+            $cost.on('click', function (ev) {
+                if (ev.target.tagName !== 'INPUT') {
+                    $costInput.prop('checked',
+                        !$costInput.prop('checked')).trigger('change');
+                }
+            });
+            $costInput.on('change', function () {
+                $cost.css('border-color',
+                    $costInput.is(':checked') ? '#7c2d12' : '#fed7aa');
+                $cost.css('box-shadow',
+                    $costInput.is(':checked') ?
+                    '0 0 0 1px #7c2d12' : 'none');
+            });
+            $wrap.append($cost);
             // Slot rows.
             $wrap.append($('<div/>').text('STUDY SLOTS').css({
                 'font-size': '0.7rem', 'font-weight': '700',
@@ -1721,21 +1775,29 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                                     sel.push(parseInt(this.value, 10));
                                 });
                             var withSup = $supInput.is(':checked');
-                            if (!sel.length && !withSup) return;
-                            if (withSup && !sel.length) {
-                                self._onExportExcel();
+                            var withCost = $costInput.is(':checked');
+                            if (!sel.length && !withSup && !withCost) {
+                                return;
+                            }
+                            if (!sel.length) {
+                                if (withSup) {
+                                    self._onExportExcel(withCost);
+                                } else {
+                                    self._onExportCost();
+                                }
                                 return;
                             }
                             if (sel.length === 1 &&
                                 sel[0] === self.activeSlot) {
                                 if (withSup) {
-                                    self._onExportPlanSupplier();
+                                    self._onExportPlanSupplier(withCost);
                                 } else {
-                                    self._onExportTree();
+                                    self._onExportTree(withCost);
                                 }
                                 return;
                             }
-                            self._exportSlotsCollect(sel, withSup);
+                            self._exportSlotsCollect(
+                                sel, withSup, withCost);
                         },
                     },
                     {text: 'Cancel', close: true},
@@ -1744,8 +1806,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Single active slot + suppliers: Plan + Suppliers sheets,
-        // no slot reload needed.
-        _onExportPlanSupplier: function () {
+        // no slot reload needed (Cost sheet appended when asked).
+        _onExportPlanSupplier: function (withCost) {
             if (!this.summary) return;
             var entry = this._slotEntry(this.activeSlot);
             var planName = (entry && entry.note) ||
@@ -1758,6 +1820,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 combo: this._planCombos(),
                 scratch_total: this.summary.scratch_total_usd || 0,
                 supplier: this._supplierPayload(),
+                withCost: withCost ? 1 : 0,
             });
         },
 
@@ -1767,7 +1830,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // withSupplier also collects each slot's supplier breakdown
         // (saved data). A lone slot posts the single-sheet format
         // (tree, or plan_supplier with suppliers) instead of Combined.
-        _exportSlotsCollect: function (slots, withSupplier) {
+        // withCost appends the live Cost sheet server-side.
+        _exportSlotsCollect: function (slots, withSupplier, withCost) {
             var self = this;
             if (this._exporting || !this.summary) return;
             this._exporting = true;
@@ -1851,6 +1915,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         kits: plans[0].kits,
                         combo: plans[0].combo,
                         scratch_total: plans[0].scratch_total,
+                        withCost: withCost ? 1 : 0,
                     });
                 } else if (plans.length === 1 && withSupplier) {
                     self._postExcel({
@@ -1861,9 +1926,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         combo: plans[0].combo,
                         scratch_total: plans[0].scratch_total,
                         supplier: plans[0].supplier,
+                        withCost: withCost ? 1 : 0,
                     });
                 } else {
-                    self._postExcel({mode: 'slots', plans: plans});
+                    self._postExcel({mode: 'slots', plans: plans,
+                        withCost: withCost ? 1 : 0});
                 }
             }, function (err) {
                 restore();
@@ -1901,7 +1968,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             };
         },
 
-        _onExportTree: function () {
+        _onExportTree: function (withCost) {
             if (!this.summary) return;
             var entry = this._slotEntry(this.activeSlot);
             var planName = (entry && entry.note) ||
@@ -1913,6 +1980,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 kits: this.summary.kits || [],
                 combo: this._planCombos(),
                 scratch_total: this.summary.scratch_total_usd || 0,
+                withCost: withCost ? 1 : 0,
             });
         },
 
