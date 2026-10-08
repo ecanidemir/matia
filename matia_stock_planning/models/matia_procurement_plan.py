@@ -2422,6 +2422,7 @@ class MatiaProcurementPlan(models.Model):
             'plan_id': plan.id,
             'name': plan.name,
             'slot': plan.slot if isinstance(plan.slot, int) else -1,
+            'slot_note': plan.note or '',
             'state': plan.state,
             'total_cost': plan.total_cost,
             'groups': groups,
@@ -2511,8 +2512,9 @@ class MatiaProcurementPlan(models.Model):
     def get_slot_list(self):
         """All study slots with their bound plan (if any). Read-only.
 
-        @return: {'slots': [{slot, plan_id, name, state, target_count,
-            rfq_count, write_date}]}. Empty slots carry plan_id=False.
+        @return: {'slots': [{slot, plan_id, name, note, state,
+            target_count, rfq_count, write_date}]}. Empty slots carry
+            plan_id=False.
         """
         env_sudo = _mpp_env_sudo(self)
         latest = {}
@@ -2533,6 +2535,7 @@ class MatiaProcurementPlan(models.Model):
                     'slot': _s,
                     'plan_id': plan.id,
                     'name': plan.name,
+                    'note': plan.note or '',
                     'state': plan.state,
                     'target_count': len(targets),
                     'rfq_count': len(plan.purchase_order_ids),
@@ -2544,6 +2547,7 @@ class MatiaProcurementPlan(models.Model):
                     'slot': _s,
                     'plan_id': False,
                     'name': '',
+                    'note': '',
                     'state': '',
                     'target_count': 0,
                     'rfq_count': 0,
@@ -2569,13 +2573,16 @@ class MatiaProcurementPlan(models.Model):
         return res
 
     @api.model
-    def save_slot(self, slot, targets):
+    def save_slot(self, slot, targets, note=False):
         """Save Needed numbers into a slot and rebuild the tree.
 
         Overwrites the slot's plan (the latest one wins when several
         exist). Only positive quantities are kept; missing rows mean 0.
         @param slot: int 0..9.
         @param targets: {product_id: qty} Needed numbers from the client.
+        @param note: slot description from the slot-bar input. False
+            (default, old clients) leaves the stored note untouched;
+            any string (including '') overwrites it.
         @return: Same dict as get_tree_with_cost, plus slots/active_slot.
         """
         env_sudo = _mpp_env_sudo(self)
@@ -2592,7 +2599,10 @@ class MatiaProcurementPlan(models.Model):
                 continue
             if _pid > 0 and _qty > 0:
                 clean[str(_pid)] = _qty
-        plan.write({'target_json': json.dumps(clean)})
+        _vals = {'target_json': json.dumps(clean)}
+        if note is not False and note is not None:
+            _vals['note'] = str(note)
+        plan.write(_vals)
         res = self.get_tree_with_cost(plan.id)
         res['slots'] = self.get_slot_list()['slots']
         res['active_slot'] = _s

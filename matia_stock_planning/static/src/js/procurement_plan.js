@@ -20,6 +20,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-nav-tab': '_onNavTab',
             'change .mpp-slot-select': '_onSlotChange',
             'click .mpp-btn-slot-save': '_onSlotSave',
+            'input .mpp-slot-note': '_onSlotNoteInput',
             'click .mpp-btn-excel': '_onExportExcel',
             'click .mpp-btn-excel-tree': '_onExportTree',
             'click .mpp-btn-create-rfq': '_onCreateRfq',
@@ -61,6 +62,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             // Study slots 0-9 (persisted on the plan record).
             this.slots = [];
             this.activeSlot = 0;
+            // Slot description (plan note): typed locally, saved
+            // with the Save button together with the Needed numbers.
+            this.slotNote = '';
+            this.dirtySlotNote = false;
             // Per-group auto-fill targets (Cost card inputs).
             this.fillN = {base: 50, outdoor: 50, seat: 50, screws: 50};
             this.activeTab = 1;
@@ -366,6 +371,21 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 status += ' - empty';
             }
             this.$('.mpp-slot-status').text(status);
+            // Description input between the select and Save: shows
+            // the active slot's note; typing stays local until Save.
+            this.slotNote = (entry && entry.note) || '';
+            this.dirtySlotNote = false;
+            var $note = this.$('.mpp-slot-note');
+            if ($note.length && $note.val() !== this.slotNote) {
+                $note.val(this.slotNote);
+            }
+        },
+
+        // Typing in the slot description keeps the value local (no
+        // re-render, so the input keeps focus). Saved via Save button.
+        _onSlotNoteInput: function (ev) {
+            this.slotNote = (ev.currentTarget.value || '');
+            this.dirtySlotNote = true;
         },
 
         // Switching the dropdown loads that slot's study (no write).
@@ -385,9 +405,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
-        // Save writes the current Needed numbers into the selected slot
-        // (same slot = plain save, other slot = save as). Overwriting a
-        // study that already has linked RFQs asks for confirmation.
+        // Save writes the current Needed numbers plus the slot
+        // description into the selected slot (same slot = plain save,
+        // other slot = save as). Overwriting a study that already has
+        // linked RFQs asks for confirmation.
         _onSlotSave: function () {
             var self = this;
             var slot = parseInt(this.$('.mpp-slot-select').val(), 10);
@@ -396,8 +417,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             (this.slots || []).forEach(function (s) {
                 if (s.slot === slot) entry = s;
             });
+            var $note = this.$('.mpp-slot-note');
+            var note = $note.length ? ($note.val() || '') :
+                (this.slotNote || '');
             var doSave = function () {
-                self._rpcPlan('save_slot', [slot, self.needMap]).then(
+                self._rpcPlan('save_slot',
+                    [slot, self.needMap, note]).then(
                     function (res) {
                         self._applySummary(res);
                         self._renderSlotBar();
@@ -441,9 +466,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     self._notifyErr(err);
                 });
             };
-            if (this.dirtyNeeds) {
+            if (this.dirtyNeeds || this.dirtySlotNote) {
                 Dialog.confirm(this,
-                    _t('Reload the saved plan? Unsaved Needed changes will be lost.'),
+                    _t('Reload the saved plan? Unsaved Needed changes and the slot description will be lost.'),
                     {
                         title: _t('Discard unsaved changes'),
                         confirmButtonText: _t('Reload'),

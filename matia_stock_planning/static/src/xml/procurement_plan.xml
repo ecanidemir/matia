@@ -35,7 +35,8 @@
                 <i class="fa fa-archive"></i>
                 <span class="mpp-slot-title">Study</span>
                 <select class="form-control form-control-sm mpp-slot-select"/>
-                <button type="button" class="btn btn-primary btn-sm mpp-btn-slot-save" title="Save current Needed numbers into the selected slot">
+                <input type="text" class="form-control form-control-sm mpp-slot-note" placeholder="Slot description..." title="Description for this study (saved with Save)"/>
+                <button type="button" class="btn btn-primary btn-sm mpp-btn-slot-save" title="Save current Needed numbers and the description into the selected slot">
                     <i class="fa fa-save mr-1"></i>Save
                 </button>
                 <span class="mpp-slot-status text-muted"/>
