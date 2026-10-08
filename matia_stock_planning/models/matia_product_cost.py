@@ -29,6 +29,7 @@ from .matia_procurement_plan import (
     _mpp_norm_bom_qty,
     _mpp_price_overrides,
     _mpp_product_routes,
+    _mpp_search_kit_forest,
     _mpp_stock_per_po_factor,
     _mpp_uom_en,
 )
@@ -605,6 +606,20 @@ class MatiaProductCost(models.AbstractModel):
             })
         items.sort(key=lambda r: (r['code'] or '', r['name'] or ''))
         return {'items': items, 'count': len(items)}
+
+    @api.model
+    def search_tree(self, query):
+        """Full-forest code/name search over the 4 kit BOMs (Cost tab).
+
+        Same match shape as the Production Plan search, but plan-independent:
+        walks ALL kit tops so parts buried inside collapsed sub-BOMs are
+        found with a single cheap RPC (cap 100, depth 10).
+
+        @param query: raw search text (min 2 chars).
+        @return: {'matches': [...], 'total': int}.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        return _mpp_search_kit_forest(env_sudo, query)
 
     # ----------------------------------------------------------
     # RPC: global prices (moved out of the Production Plan page)

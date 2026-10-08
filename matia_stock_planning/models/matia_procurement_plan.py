@@ -580,6 +580,146 @@ def _mpp_find_kit_boms(env_sudo):
     return found
 
 
+def _mpp_search_kit_forest(env_sudo, query, cap=100):
+    """Walk the 4 kit BOM forests and return code/name matches.
+
+    Plan-independent twin of ``MatiaProcurementPlan.search_tree``: it walks
+    ALL kit tops (no plan-target filter) so the Device Capacity and Product
+    Cost pages can find parts buried inside collapsed sub-BOMs with a single
+    cheap RPC. Bounded by ``cap`` matches and depth 10, with per-call
+    product/BOM caches, so a keystroke search stays fast and does not
+    strain the server.
+
+    @param env_sudo: sudo environment (see _mpp_env_sudo).
+    @param query: raw search text (min 2 chars, else empty result).
+    @param cap: max matches returned.
+    @return: {'matches': [...], 'total': int}. Each match carries
+        product_id/code/name/level/group_key/group_title/top_pid/top_code/
+        top_name/path_ids (top-first pid list)/trail (top-first code+name).
+    """
+    q = (query or '').strip().lower()
+    cap = max(1, int(cap or 100))
+    if len(q) < 2:
+        return {'matches': [], 'total': 0}
+    kit_cfgs = _mpp_find_kit_boms(env_sudo)
+    group_title = {'base': 'Base', 'screws': 'Screws',
+                   'outdoor': 'Outdoor', 'seat': 'Seat'}
+    matches = []
+    prod_cache = {}
+    bom_cache = {}
+
+    def _info(pid):
+        if pid in prod_cache:
+            return prod_cache[pid]
+        info = {'code': '', 'name': ''}
+        try:
+            pr = env_sudo['product.product'].browse(pid)
+            if pr.exists():
+                info = {'code': pr.default_code or '',
+                        'name': pr.name or ''}
+        except Exception:
+            info = {'code': '', 'name': ''}
+        prod_cache[pid] = info
+        return info
+
+    def _kids_bom(pid):
+        if pid in bom_cache:
+            return bom_cache[pid]
+        bom = False
+        try:
+            prod = env_sudo['product.product'].browse(pid)
+            if prod.exists():
+                bom = env_sudo['mrp.bom'].search([
+                    ('product_tmpl_id', '=', prod.product_tmpl_id.id),
+                    ('product_id', '=', prod.id),
+                ], limit=1)
+                if not bom:
+                    bom = env_sudo['mrp.bom'].search([
+                        ('product_tmpl_id', '=', prod.product_tmpl_id.id),
+                    ], limit=1)
+        except Exception:
+            bom = False
+        bom_cache[pid] = bom
+        return bom
+
+    def _hit(pid):
+        info = _info(pid)
+        return q in (info['code'] or '').lower() or \
+            q in (info['name'] or '').lower()
+
+    def _walk(pid, ancestors, depth, ctx):
+        if len(matches) >= cap or depth > _MPP_MAX_LEVEL or \
+                pid in ancestors:
+            return
+        bom = _kids_bom(pid)
+        if not bom:
+            return
+        for bl in bom.bom_line_ids:
+            cpid = bl.product_id.id
+            chain = ancestors + [pid]
+            if _hit(cpid):
+                cinfo = _info(cpid)
+                trail = []
+                for apid in chain + [cpid]:
+                    ainfo = _info(apid)
+                    trail.append({'code': ainfo['code'],
+                                  'name': ainfo['name']})
+                matches.append({
+                    'product_id': cpid,
+                    'code': cinfo['code'],
+                    'name': cinfo['name'],
+                    'level': depth + 1,
+                    'group_key': ctx['group_key'],
+                    'group_title': ctx['group_title'],
+                    'top_pid': ctx['top_pid'],
+                    'top_code': ctx['top_code'],
+                    'top_name': ctx['top_name'],
+                    'path_ids': chain + [cpid],
+                    'trail': trail,
+                })
+                if len(matches) >= cap:
+                    return
+            _walk(cpid, chain, depth + 1, ctx)
+            if len(matches) >= cap:
+                return
+
+    try:
+        for kit in kit_cfgs:
+            gkey = kit['key']
+            for bl in kit['bom'].bom_line_ids:
+                tpid = bl.product_id.id
+                tinfo = _info(tpid)
+                if _hit(tpid):
+                    matches.append({
+                        'product_id': tpid,
+                        'code': tinfo['code'],
+                        'name': tinfo['name'],
+                        'level': 0,
+                        'group_key': gkey,
+                        'group_title': group_title.get(gkey, gkey),
+                        'top_pid': tpid,
+                        'top_code': tinfo['code'],
+                        'top_name': tinfo['name'],
+                        'path_ids': [tpid],
+                        'trail': [{'code': tinfo['code'],
+                                   'name': tinfo['name']}],
+                    })
+                _walk(tpid, [], 0, {
+                    'group_key': gkey,
+                    'group_title': group_title.get(gkey, gkey),
+                    'top_pid': tpid,
+                    'top_code': tinfo['code'],
+                    'top_name': tinfo['name'],
+                })
+                if len(matches) >= cap:
+                    break
+            if len(matches) >= cap:
+                break
+    except Exception as exc:
+        _logger.warning('MPP search_kit_forest failed for %r: %s', query, exc)
+    return {'matches': matches, 'total': len(matches)}
+
+
 # Override purchase-location codes to company IDs (TR=1, US=2).
 _MPP_OVERRIDE_COMPANY = {'tr': _MPP_TR_COMPANY_ID,
                          'us': _MPP_US_COMPANY_ID}

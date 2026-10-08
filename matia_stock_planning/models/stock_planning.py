@@ -2,6 +2,7 @@
 import math
 from odoo import models, api, _
 from odoo.exceptions import UserError
+from .matia_procurement_plan import _mpp_search_kit_forest
 
 # Common UoM name translations (Odoo stores them in the language of the DB)
 _UOM_NAME_MAP = {
@@ -64,6 +65,25 @@ def _msp_clamped_avail(tr_stock, tr_res, us_stock, us_res):
 class MatiaStockPlanning(models.AbstractModel):
     _name = 'matia.stock.planning'
     _description = 'Matia TekRMD Device Capacity and Stock Planning'
+
+    @api.model
+    def search_tree(self, query):
+        """Full-forest code/name search over the 4 kit BOMs (Capacity page).
+
+        Same match shape as the Production Plan search, but plan-independent:
+        walks ALL kit tops so parts buried inside collapsed sub-BOMs are
+        found with a single cheap RPC (cap 100, depth 10).
+
+        @param query: raw search text (min 2 chars).
+        @return: {'matches': [...], 'total': int}.
+        """
+        all_company_ids = self.env['res.company'].with_context(
+            active_test=False).sudo().search([]).ids
+        env_sudo = self.with_context(
+            allowed_company_ids=all_company_ids,
+            active_test=False
+        ).sudo().env
+        return _mpp_search_kit_forest(env_sudo, query)
 
     @api.model
     def get_capacity_planning_data(self, include_tr=True, include_usa=True, dynamic_targets=None):

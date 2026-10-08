@@ -55,6 +55,11 @@ odoo.define('matia_product_cost.dashboard', function (require) {
             this.expanded = {};
             this.subCache = {};
             this.treeSearch = '';
+            this.treeSearchTimer = null;
+            this.treeSearchToken = 0;
+            this.treeSearchMatches = [];
+            this.treeSearchDone = false;
+            this.treeSearchLoading = false;
             // Tab 2 Prices: quantity-free product list with manual
             // USD/location overrides (global per product, stored in DB).
             this.priceRows = [];
@@ -654,14 +659,185 @@ odoo.define('matia_product_cost.dashboard', function (require) {
         },
 
         _onTreeSearch: function (ev) {
-            this.treeSearch = (ev.currentTarget.value || '')
-                .toLowerCase();
+            var q = (ev.currentTarget.value || '').trim();
+            this.treeSearch = q.toLowerCase();
+            this.treeSearchDone = false;
+            clearTimeout(this.treeSearchTimer);
+            if (q.length < 2 || !this.costLoaded) {
+                this.treeSearchLoading = false;
+                this.treeSearchMatches = [];
+                this._applySearchFilter();
+                return;
+            }
+            // Instant local filter on loaded rows first, then a single
+            // full-forest server search (same pattern as the Production
+            // Plan tab): finds parts inside collapsed sub-BOMs without
+            // expanding everything.
             this._applySearchFilter();
+            var self = this;
+            var token = ++this.treeSearchToken;
+            this.treeSearchLoading = true;
+            this.treeSearchTimer = setTimeout(function () {
+                self._applySearchFilter();
+                self._rpcCost('search_tree', [q]).then(function (res) {
+                    if (token !== self.treeSearchToken) {
+                        return;
+                    }
+                    self.treeSearchMatches =
+                        (res && res.matches) || [];
+                    self.treeSearchDone = true;
+                    self._expandSearchPathsCost().then(function () {
+                        if (token !== self.treeSearchToken) {
+                            return;
+                        }
+                        self.treeSearchLoading = false;
+                        self._applySearchFilter();
+                    });
+                }, function (err) {
+                    if (token !== self.treeSearchToken) {
+                        return;
+                    }
+                    self.treeSearchLoading = false;
+                    self.treeSearchMatches = [];
+                    self._notifyErr(err);
+                    self._applySearchFilter();
+                });
+            }, 350);
+        },
+
+        _expandSearchPathsCost: function () {
+            var self = this;
+            var seq = Promise.resolve();
+            (this.treeSearchMatches || []).forEach(function (m) {
+                seq = seq.then(function () {
+                    return self._expandPathCost(
+                        m.group_key, m.path_ids || []);
+                });
+            });
+            return seq.then(function () {
+                return true;
+            }, function () {
+                return true;
+            });
+        },
+
+        _expandPathCost: function (groupKey, ids) {
+            // Expand ancestors top-down, skipping the match itself (the
+            // last id): once a parent row is rendered its toggle button
+            // already carries the scaled chain in data-chain.
+            var self = this;
+            var chain = Promise.resolve();
+            ids.slice(0, Math.max(0, ids.length - 1)).forEach(
+                function (pid, idx) {
+                    chain = chain.then(function () {
+                        return self._expandOneCost(groupKey, pid,
+                            ids.slice(0, idx).join(','));
+                    });
+                });
+            return chain;
+        },
+
+        _expandOneCost: function (groupKey, pid, path) {
+            var self = this;
+            var btn = this.$('.mpc-tree-body tr.item-row[data-group="' +
+                groupKey + '"] .msp-btn-sub-bom[data-pid="' + pid +
+                '"][data-path="' + path + '"]');
+            if (!btn.length) {
+                return Promise.resolve(false);
+            }
+            var row = btn.closest('tr');
+            var bchain = parseFloat(btn.data('chain')) || 0;
+            var nodeKey = pid + '|' + path + '|' + bchain;
+            if (this.expanded[nodeKey]) {
+                return Promise.resolve(true);
+            }
+            var open = function (items) {
+                self.expanded[nodeKey] = true;
+                btn.find('.msp-bom-arrow')
+                    .removeClass('fa-caret-right')
+                    .addClass('fa-caret-down');
+                self._insertSubRows(row, items, pid, groupKey,
+                    bchain, path);
+            };
+            var key = this._subCacheKey(pid, path);
+            if (this.subCache[key]) {
+                open(this.subCache[key]);
+                return Promise.resolve(true);
+            }
+            var pathArr = path ? String(path).split(',').map(
+                function (x) {
+                    return parseInt(x, 10);
+                }).filter(function (x) {
+                return x > 0;
+            }) : [];
+            return this._rpcCost(
+                'get_sub_bom_cost', [pid, 1.0, pathArr]
+            ).then(function (res) {
+                var sub = (res && res.items) || [];
+                self.subCache[key] = sub;
+                open(sub);
+                return true;
+            }, function () {
+                return false;
+            });
         },
 
         _applySearchFilter: function () {
             var q = this.treeSearch;
             var self = this;
+            this.$('.mpc-tree-body tr.mpc-no-match').remove();
+            // Full-forest search finished: show only rows on a match path
+            // (matches plus all their ancestors), hide everything else.
+            if (q && q.length >= 2 && this.treeSearchDone) {
+                var keep = {};
+                (this.treeSearchMatches || []).forEach(function (m) {
+                    var ids = m.path_ids || [];
+                    for (var l = 1; l <= ids.length; l++) {
+                        keep[m.group_key + ':' +
+                            ids.slice(0, l).join(',')] = true;
+                    }
+                });
+                this.$('.mpc-tree-body tr.item-row').each(function () {
+                    var r = self.$(this);
+                    var dp = String(r.data('path') || '');
+                    var full = dp ?
+                        dp + ',' + String(r.data('node')) :
+                        String(r.data('node'));
+                    this.style.display =
+                        keep[r.data('group') + ':' + full] ?
+                        '' : 'none';
+                });
+                var visible = 0;
+                this.$('.mpc-tree-body tr.item-row').each(function () {
+                    if (this.style.display !== 'none') {
+                        visible++;
+                    }
+                });
+                this.$('.mpc-tree-body tr.group-row').each(function () {
+                    var gkey = this.dataset.group;
+                    var anyVisible = false;
+                    self.$('.mpc-tree-body tr.item-row[data-group="' +
+                        gkey + '"]').each(function () {
+                        if (this.style.display !== 'none') {
+                            anyVisible = true;
+                        }
+                    });
+                    this.style.display = anyVisible ? '' : 'none';
+                });
+                if (!visible) {
+                    var tb = this.$('.mpc-tree-body table tbody');
+                    if (!tb.length) {
+                        tb = this.$('.mpc-tree-body table');
+                    }
+                    tb.append('<tr class="mpc-no-match"><td ' +
+                        'colspan="4">No parts match "' +
+                        this._escHtml(q) +
+                        '".</td></tr>');
+                }
+                return;
+            }
+            // Instant local filter on loaded rows (also used while the
+            // server search is still loading).
             this.$('.mpc-tree-body tr.item-row').each(function () {
                 var txt = (this.innerText || '').toLowerCase();
                 this.style.display =

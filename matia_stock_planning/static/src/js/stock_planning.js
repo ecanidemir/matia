@@ -42,6 +42,12 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             this.sub_bom_cache = {};
             this.expanded_boms = {};
             this.hidden_groups = {};  // group.key -> true when hidden
+            this.treeSearch = '';
+            this.treeSearchTimer = null;
+            this.treeSearchToken = 0;
+            this.treeSearchMatches = [];
+            this.treeSearchDone = false;
+            this.treeSearchLoading = false;
             this.sort_col = null;     // currently sorted column key
             this.sort_dir = 'asc';    // 'asc' | 'desc'
             this.summary = {
@@ -390,16 +396,179 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         _onSearchInput: function (ev) {
             var self = this;
             var rawQuery = $(ev.currentTarget).val();
-            clearTimeout(this._searchTimer);
-            this._searchTimer = setTimeout(function () {
-                self._applySearchFilter(rawQuery);
-            }, 150);
+            var q = (rawQuery || '').trim();
+            this.treeSearch = q.toLowerCase();
+            this.treeSearchDone = false;
+            clearTimeout(this.treeSearchTimer);
+            if (q.length < 2) {
+                this.treeSearchLoading = false;
+                this.treeSearchMatches = [];
+                this._applySearchFilter(q);
+                return;
+            }
+            // Instant local filter on loaded rows first, then a single
+            // full-forest server search (same pattern as the Production
+            // Plan tab): finds parts inside collapsed sub-BOMs without
+            // expanding everything.
+            this._applySearchFilter(q);
+            var token = ++this.treeSearchToken;
+            this.treeSearchLoading = true;
+            this.treeSearchTimer = setTimeout(function () {
+                self._applySearchFilter(q);
+                self._rpc({
+                    model: 'matia.stock.planning',
+                    method: 'search_tree',
+                    args: [q],
+                }).then(function (res) {
+                    if (token !== self.treeSearchToken) {
+                        return;
+                    }
+                    self.treeSearchMatches =
+                        (res && res.matches) || [];
+                    self.treeSearchDone = true;
+                    self._expandSearchPathsStock().then(function () {
+                        if (token !== self.treeSearchToken) {
+                            return;
+                        }
+                        self.treeSearchLoading = false;
+                        self._applySearchFilter(q);
+                    });
+                }, function (err) {
+                    if (token !== self.treeSearchToken) {
+                        return;
+                    }
+                    self.treeSearchLoading = false;
+                    self.treeSearchMatches = [];
+                    self.displayNotification({
+                        title: _t('Search failed'),
+                        message: (err && err.message) || String(err),
+                        type: 'danger',
+                    });
+                    self._applySearchFilter(q);
+                });
+            }, 350);
+        },
+
+        _expandSearchPathsStock: function () {
+            var self = this;
+            var seq = Promise.resolve();
+            (this.treeSearchMatches || []).forEach(function (m) {
+                seq = seq.then(function () {
+                    return self._expandPathStock(
+                        m.group_key, m.path_ids || []);
+                });
+            });
+            return seq.then(function () {
+                return true;
+            }, function () {
+                return true;
+            });
+        },
+
+        _expandPathStock: function (groupKey, ids) {
+            // Expand ancestors top-down, skipping the match itself (the
+            // last id). Rows carry data-node-id "g-<group>-<p0>/<p1]/..."
+            // and data-path "<p0>/<p1>/..." (slash-joined, self included).
+            var self = this;
+            var chain = Promise.resolve();
+            ids.slice(0, Math.max(0, ids.length - 1)).forEach(
+                function (pid, idx) {
+                    chain = chain.then(function () {
+                        return self._expandOneStock(groupKey,
+                            'g-' + groupKey + '-' +
+                            ids.slice(0, idx + 1).join('/'), pid);
+                    });
+                });
+            return chain;
+        },
+
+        _expandOneStock: function (groupKey, nodeId, pid) {
+            var row = this.$(
+                'tr.item-row[data-node-id="' + nodeId + '"]');
+            if (!row.length) {
+                return Promise.resolve(false);
+            }
+            // Already loaded: leave visibility to the final filter and
+            // never toggle-hide here.
+            if (this.$('tr.sub-bom-row[data-parent-node="' + nodeId +
+                '"]').length) {
+                return Promise.resolve(true);
+            }
+            var btn = row.find('.msp-btn-sub-bom');
+            if (!btn.length) {
+                return Promise.resolve(false);
+            }
+            var bomQty = parseFloat(btn.data('bom-qty')) || 1.0;
+            return this._toggleSubBomForProduct(
+                pid, bomQty, groupKey, btn).then(function () {
+                return true;
+            }, function () {
+                return false;
+            });
+        },
+
+        _escHtml: function (s) {
+            return (s === undefined || s === null ? '' : String(s))
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         },
 
         _applySearchFilter: function (rawQuery) {
-            var query = (rawQuery || '').toLowerCase().trim();
+            var query = (rawQuery !== undefined ? rawQuery :
+                this.treeSearch || '').toLowerCase().trim();
+            var self = this;
+            this.$('tr.msp-no-match').remove();
+            // Full-forest search finished: show only rows on a match path
+            // (matches plus all their ancestors), hide everything else.
+            if (query && query.length >= 2 && this.treeSearchDone) {
+                var keep = {};
+                (this.treeSearchMatches || []).forEach(function (m) {
+                    var ids = m.path_ids || [];
+                    for (var l = 1; l <= ids.length; l++) {
+                        keep[m.group_key + ':' +
+                            ids.slice(0, l).join('/')] = true;
+                    }
+                });
+                this.$('.item-row').each(function () {
+                    var r = self.$(this);
+                    var key = String(r.data('group')) + ':' +
+                        String(r.attr('data-path'));
+                    this.style.display = keep[key] ? '' : 'none';
+                });
+                this.$('.group-row').each(function () {
+                    var grpKey = $(this).data('group');
+                    var visibleItems = self.$(
+                        '.item-row[data-group="' + grpKey +
+                        '"]:visible').length;
+                    if (visibleItems === 0) {
+                        $(this).hide();
+                    } else {
+                        $(this).show();
+                    }
+                });
+                if (this.$('.item-row:visible').length === 0) {
+                    var cols = this.$(
+                        '.msp-table thead th').length || 20;
+                    var tbody = this.$('.msp-table tbody');
+                    if (!tbody.length) {
+                        tbody = this.$('.msp-table');
+                    }
+                    tbody.append('<tr class="msp-no-match"><td ' +
+                        'colspan="' + cols + '">' +
+                        _t('No parts match') + ' "' +
+                        this._escHtml(query) + '".</td></tr>');
+                }
+                return;
+            }
 
             if (!query) {
+                // Search cleared from anywhere (input, expand-all):
+                // kill any pending server search too.
+                clearTimeout(this.treeSearchTimer);
+                this.treeSearchToken++;
+                this.treeSearchLoading = false;
+                this.treeSearchMatches = [];
+                this.treeSearchDone = false;
                 this.$('.item-row').show();
                 this.$('.group-row').show();
                 this.$('tr.sub-bom-row').each(function () {
@@ -436,7 +605,6 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             });
 
             // Hide empty group headers
-            var self = this;
             this.$('.group-row').each(function () {
                 var grpKey = $(this).data('group');
                 var visibleItems = self.$('.item-row[data-group="' + grpKey + '"]:visible').length;
