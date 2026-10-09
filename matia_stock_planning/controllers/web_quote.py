@@ -271,7 +271,7 @@ table.kits{border-collapse:collapse;width:100%;background:var(--surface);border:
 </section>
 </main>
 <script>
-var fmtUSD = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'});
+var fmtUSD = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0});
 var busy=false, loadTimer=null, loadStart=0, abortCtl=null;
 var STEPS=[
   {t:0, msg:'Reading live production data...'},
@@ -396,6 +396,12 @@ function calc(){
         if(baseRow){ baseRow.val=Math.round((baseRow.val+screwsTotal)*100)/100; }
         else{ rows.push({kit:'base', val:screwsTotal}); }
       }
+      var KIT_ORDER={base:0, outdoor:1, seat:2};
+      rows.sort(function(a,b){
+        var ka=String(a.kit).toLowerCase(), kb=String(b.kit).toLowerCase();
+        var oa=(ka in KIT_ORDER)?KIT_ORDER[ka]:3, ob=(kb in KIT_ORDER)?KIT_ORDER[kb]:3;
+        return oa-ob;
+      });
       rows.forEach(function(r){
         var tr=document.createElement('tr');
         var tdK=document.createElement('td'); tdK.className='kit';
