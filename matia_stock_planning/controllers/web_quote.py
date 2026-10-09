@@ -242,7 +242,7 @@ table.kits{border-collapse:collapse;width:100%;background:var(--surface);border:
 <header>
 <p class="eyebrow">Matia &middot; Device pricing</p>
 <h1>Full-combo device quote</h1>
-<p class="lede">One complete set includes the base, screws, outdoor unit, and seat. Enter a quantity to see the per-set price, the gross total, and the net amount you still need to buy to reach that quantity.</p>
+<p class="lede">One complete set includes the base, outdoor unit, and seat. Enter a quantity to see the per-set price, the gross total, and the net amount you still need to buy to reach that quantity.</p>
 </header>
 <section class="card" aria-labelledby="calc-h">
 <h2 class="sub" id="calc-h" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0">Quote calculator</h2>
@@ -381,16 +381,30 @@ function calc(){
       note.textContent='To complete your stock to '+j.qty+' full device sets, you need '+money(j.net_usd)+' in parts (net total). Buying everything new would cost '+money(j.gross_usd)+' (gross) — the rest is already in stock.';
       sum.appendChild(note);
       var tb=document.getElementById('tb'); tb.innerHTML='';
+      var rows=[]; var screwsTotal=0;
       (j.kits||[]).forEach(function(l){
+        var key=String(l.kit||'').toLowerCase();
+        var val=Number(l.retained_usd); if(!isFinite(val)){ val=0; }
+        if(key==='screws'){ screwsTotal=Math.round((screwsTotal+val)*100)/100; return; }
+        rows.push({kit:String(l.kit||''), val:val});
+      });
+      if(screwsTotal>0){
+        var baseRow=null;
+        for(var bi=0;bi<rows.length;bi++){
+          if(String(rows[bi].kit).toLowerCase()==='base'){ baseRow=rows[bi]; break; }
+        }
+        if(baseRow){ baseRow.val=Math.round((baseRow.val+screwsTotal)*100)/100; }
+        else{ rows.push({kit:'base', val:screwsTotal}); }
+      }
+      rows.forEach(function(r){
         var tr=document.createElement('tr');
         var tdK=document.createElement('td'); tdK.className='kit';
-        tdK.setAttribute('data-label','Kit'); tdK.textContent=l.kit;
+        tdK.setAttribute('data-label','Kit'); tdK.textContent=r.kit;
         var tdV=document.createElement('td'); tdV.className='num';
-        tdV.setAttribute('data-label','Retained'); tdV.textContent=money(l.retained_usd);
+        tdV.setAttribute('data-label','Retained'); tdV.textContent=money(r.val);
         tr.appendChild(tdK); tr.appendChild(tdV); tb.appendChild(tr);
       });
       tbl.hidden=false;
-      if(j.note){ var s=document.createElement('p'); s.className='note'; s.textContent=String(j.note); sum.appendChild(s); }
     })
     .catch(function(e){
       var wasAbort=(e && (e.name==='AbortError'));
