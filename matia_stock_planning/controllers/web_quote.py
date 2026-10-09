@@ -49,11 +49,14 @@ def _json_response(payload, status=200):
     @param status: HTTP status code.
     @return: Werkzeug response with application/json content type.
     """
-    return request.make_response(
+    # Odoo 15 ``make_response(data, headers, cookies)`` takes NO status
+    # argument (verified against 15.0 source); set it afterwards.
+    response = request.make_response(
         json.dumps(payload),
         headers=[('Content-Type', 'application/json; charset=utf-8')],
-        status=status,
     )
+    response.status_code = status
+    return response
 
 
 def _build_quote(qty):
