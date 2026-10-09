@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "accessibility-inclusive-design": {
+      "source": "hueyexe/frontend-agent-skills",
+      "sourceType": "github",
+      "skillPath": "accessibility-inclusive-design/SKILL.md",
+      "computedHash": "9a8384c4aafbe0b8184e35273225a0b6ece8208182bbadd0daec9285d018fca4"
+    },
+    "impeccable": {
+      "source": "pbakaus/impeccable",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/impeccable/SKILL.md",
+      "computedHash": "1862731c18a1cc31dd819e44731d0dbc158a16ff4c0f8dde580314e826c44eef"
+    },
+    "ui-visual-composition": {
+      "source": "hueyexe/frontend-agent-skills",
+      "sourceType": "github",
+      "skillPath": "ui-visual-composition/SKILL.md",
+      "computedHash": "bfe56aeeef4c79967f72fa0615e1dbdf661df3200be428a7ca93a8436a08d107"
+    }
+  }
+}
