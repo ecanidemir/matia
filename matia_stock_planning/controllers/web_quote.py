@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Public read-only web quote page + JSON API (v1).
+"""Public web quote page + JSON API (v2: plan engine, slot 0).
 
 Provides two ``auth='public'`` GET routes guarded by a shared secret
 (``QUOTE_KEY``) stored in ``ir.config_parameter`` key ``web_quote.key``:
@@ -7,9 +7,14 @@ Provides two ``auth='public'`` GET routes guarded by a shared secret
 - ``GET /web_quote``: simple HTML page (qty input, key input, result table).
   Inline string, no XML/view file, no manifest ``data`` change.
 - ``GET /web_quote/quote?qty=N&key=...``: JSON quote for N full-combo
-  (base+screws+outdoor+seat) device sets: gross = full x N, net = SUM of
-  top-level net needs x rolled unit USD. Read-only: no write method
-  (``save_slot``, ``set_targets_and_rebuild``) is ever called here.
+  (base+screws+outdoor+seat) device sets. Runs the plan engine itself:
+  slot 0 targets are set to N x kit recipe qty via ``save_slot`` and the
+  plan's own result (``retained_total_usd``) is returned, so the net
+  matches the Production Plan page to the cent. Gross = full x N
+  (``matia.product.cost`` combos).
+
+NOT read-only: each quote WRITES slot 0 (targets + full tree rebuild).
+Slot 0's saved study and RFQ/MO line links are replaced on every call.
 
 Odoo 15 notes: ``auth='public'`` env is unprivileged, so internal calls
 use recordset ``.sudo()`` (``Environment.sudo()`` does not exist in 15).
@@ -60,72 +65,67 @@ def _json_response(payload, status=200):
 
 
 def _build_quote(qty):
-    """Compute gross + net quote for N full-combo device sets (read-only).
+    """Run the plan engine on slot 0 with qty in every Needed, return it.
+
+    The entered figure is written as-is into ALL kit-top Needed rows
+    (``save_slot(0, ...)``), then the Rebuild path runs
+    (``get_tree_with_cost(force=True)``: full re-explosion from live
+    master data, no cache). Net = the plan's own ``retained_total_usd``,
+    so it matches the Production Plan page to the cent.
 
     @param qty: device count (int, already validated 1..10000).
-    @return: dict with qty, gross_usd, net_usd, full_usd, lines.
+    @return: dict with qty, gross_usd, net_usd, full_usd, kits, plan_id.
     """
     cost_env = request.env['matia.product.cost'].sudo()
-    plan_env = request.env['matia.stock.planning'].sudo()
-    cost_tree = cost_env.get_cost_tree()
-    combos = (cost_tree or {}).get('combos') or {}
-    full = float(combos.get('full') or 0.0)
-    unit_map = {}
-    for grp in (cost_tree or {}).get('groups') or []:
-        for item in grp.get('items') or []:
-            try:
-                pid = int(item.get('product_id'))
-            except (TypeError, ValueError):
-                continue
-            try:
-                unit_map[pid] = float(item.get('unit_usd') or 0.0)
-            except (TypeError, ValueError):
-                unit_map[pid] = 0.0
-    cap = plan_env.get_capacity_planning_data(
-        include_tr=True, include_usa=True, dynamic_targets=[qty])
-    qkey = str(int(qty))
-    lines = []
-    net_total = 0.0
-    for grp in (cap or {}).get('groups') or []:
-        for item in grp.get('items') or []:
-            try:
-                pid = int(item.get('product_id'))
-            except (TypeError, ValueError):
-                continue
-            needs = item.get('dynamic_needs') or {}
-            entry = needs.get(qkey) or {}
-            try:
-                need_units = float(entry.get('val') or 0.0)
-            except (TypeError, ValueError):
-                need_units = 0.0
-            unit = float(unit_map.get(pid) or 0.0)
-            line_net = round(need_units * unit, 2)
-            net_total += line_net
-            lines.append({
-                'product_id': pid,
-                'code': item.get('product_code') or '',
-                'name': item.get('product_name') or '',
-                'group': grp.get('key') or '',
-                'bom_qty': item.get('bom_qty') or 0.0,
-                'avail': item.get('avail_qty') or 0,
-                'need_units': need_units,
-                'unit_usd': round(unit, 4),
-                'line_net_usd': line_net,
-            })
-    lines.sort(key=lambda r: (r.get('group') or '', r.get('code') or ''))
-    gross = round(full * int(qty), 2)
-    return {
-        'qty': int(qty),
-        'full_usd': round(full, 2),
-        'gross_usd': gross,
-        'net_usd': round(net_total, 2),
-        'lines': lines,
-        'note': 'Top-level net only, no sub-BOM detail.',
-    }
+    slot_env = request.env['matia.procurement.plan'].sudo()
+    cap_env = request.env['matia.stock.planning'].sudo()
+    try:
+        cost_tree = cost_env.get_cost_tree()
+        combos = (cost_tree or {}).get('combos') or {}
+        full = float(combos.get('full') or 0.0)
+        # Girilen rakam tüm Needed satırlarına aynen yazılır: satırlar
+        # = 4 kitin üst ürünleri (kapasite gruplarındaki item'lar).
+        cap = cap_env.get_capacity_planning_data(
+            include_tr=True, include_usa=True, dynamic_targets=[])
+        pids = set()
+        for _grp in (cap or {}).get('groups', []) or []:
+            for _it in _grp.get('items', []) or []:
+                try:
+                    _pid = int(_it.get('product_id') or 0)
+                except (TypeError, ValueError):
+                    continue
+                if _pid > 0:
+                    pids.add(_pid)
+        if not pids:
+            raise ValueError(_('Kit üst ürünleri bulunamadı.'))
+        targets = {str(_pid): int(qty) for _pid in sorted(pids)}
+        # Plan motorunun kendisi: slot 0 yaz + Rebuild (force).
+        # NOT: slot 0 üzerine yazar (kayıtlı çalışma + RFQ/MO
+        # satır bağları yenilenir). Staging'de doğrulanmadan
+        # prod'a alınmaz.
+        saved = slot_env.save_slot(0, targets)
+        res = slot_env.get_tree_with_cost(saved.get('plan_id'), force=True)
+        net_total = float(res.get('retained_total_usd') or 0.0)
+        kits = [{'kit': (_k.get('key') or ''),
+                 'retained_usd': round(float(
+                     _k.get('retained_usd') or 0.0), 2)}
+                for _k in res.get('retained_kits', []) or []]
+        return {
+            'qty': int(qty),
+            'full_usd': round(full, 2),
+            'gross_usd': round(full * int(qty), 2),
+            'net_usd': round(net_total, 2),
+            'kits': kits,
+            'plan_id': res.get('plan_id'),
+            'slot': res.get('slot', 0),
+            'note': 'Slot 0 plan engine result (all Needed = qty, Rebuild).',
+        }
+    except Exception as exc:
+        return {'error': _('Hesaplama hatası: %s') % exc}
 
 
 class WebQuoteController(http.Controller):
-    """Public read-only quote endpoints (key-guarded, no login)."""
+    """Public quote endpoints (key-guarded, no login; writes slot 0)."""
 
     @http.route('/web_quote', type='http', auth='public', methods=['GET'],
                 csrf=False)
@@ -153,7 +153,7 @@ th{background:#f2f2f2}
 .mut{color:#666;font-size:.8rem}
 </style></head><body>
 <h2>Web Quote (full combo)</h2>
-<p class="mut">Base + Screws + Outdoor + Seat per device set. Top-level net only.</p>
+<p class="mut">Base + Screws + Outdoor + Seat per device set. Runs the plan engine on slot 0 (all Needed = qty, Rebuild) — net matches the Production Plan page.</p>
 <div>
 <label for="q">Qty (1-10000):</label>
 <input id="q" type="number" value="100" min="1" max="10000"/>
@@ -164,8 +164,7 @@ th{background:#f2f2f2}
 <div id="err"></div>
 <div id="sum"></div>
 <table id="tbl" style="display:none"><thead><tr>
-<th>Group</th><th>Code</th><th>Product</th><th>BOM qty</th>
-<th>Avail</th><th>Need</th><th>Unit USD</th><th>Net USD</th>
+<th>Kit</th><th>Retained USD</th>
 </tr></thead><tbody id="tb"></tbody></table>
 <script>
 function calc(){
@@ -178,14 +177,15 @@ function calc(){
     .then(function(x){
       if(x.s!==200){ err.textContent=(x.j&&x.j.error)||('HTTP '+x.s); return; }
       var j=x.j;
+      if(j.error){ err.textContent=j.error; return; }
       document.getElementById('sum').innerHTML='<p>Qty <b>'+j.qty+'</b> | Full/set <b>'
         +j.full_usd+'</b> USD | Gross <b>'+j.gross_usd+'</b> USD | Net <b>'+j.net_usd
         +'</b> USD</p><p class="mut">'+j.note+'</p>';
       var tb=document.getElementById('tb'); tb.innerHTML='';
-      j.lines.forEach(function(l){
+      (j.kits||[]).forEach(function(l){
         var tr=document.createElement('tr');
         tr.textContent='';
-        [l.group,l.code,l.name,l.bom_qty,l.avail,l.need_units,l.unit_usd,l.line_net_usd]
+        [l.kit,l.retained_usd]
           .forEach(function(v){ var td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
         tb.appendChild(tr);
       });
@@ -203,11 +203,14 @@ function calc(){
     @http.route('/web_quote/quote', type='http', auth='public', methods=['GET'],
                 csrf=False)
     def web_quote_json(self, **kwargs):
-        """Return the JSON quote for ``qty`` full-combo sets (read-only).
+        """Return the JSON quote for ``qty`` full-combo sets (slot 0 engine).
+
+        Writes ``qty`` into every kit-top Needed on slot 0 and runs the
+        plan Rebuild, then returns the plan's own totals.
 
         @param qty: device count, 1..10000 (else 400).
         @param key: must equal ``ir.config_parameter`` web_quote.key (else 403).
-        @return: JSON with qty, full_usd, gross_usd, net_usd, lines.
+        @return: JSON with qty, full_usd, gross_usd, net_usd, kits, plan_id.
         """
         if not _quote_key_ok(kwargs.get('key')):
             return _json_response({'error': 'Forbidden'}, status=403)
