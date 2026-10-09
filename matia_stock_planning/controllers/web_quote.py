@@ -21,7 +21,7 @@ use recordset ``.sudo()`` (``Environment.sudo()`` does not exist in 15).
 """
 import json
 
-from odoo import http
+from odoo import _, http
 from odoo.http import request
 
 _QTY_MIN = 1
