@@ -22,3 +22,5 @@
 2026-10-08 | odoo15 wrong-instance upgrade (prod yerine staging varsayımı) | Yan etki öncesi ODOO_URL doğrulanmadı (prod sanılan env staging çıktı) -> Write öncesi URL'yi yazdırıp teyit et + önce smoke_after_deploy.py çalıştır
 2026-10-08 | odoo15 deploy-without-upgrade total outage (UndefinedColumn res_users) | Yeni kod restart ile yuklendi ama modul Upgrade atlandi, kolon olusmadi -> Deploy sonrasi smoke_after_deploy.py YESIL olmadan haber verme; auth cokerse kod-revert + redeploy
 2026-10-08 | [O15] edit-newline merge SyntaxError (procurement_export satir birlesmesi) | oldString sonundaki newline dustu, iki statement tek satira yapisip SyntaxError verdi -> edit sonrasi py_compile sart; cok-satirli anchor`da sondaki boslugu degistirme
+2026-10-09 | powershell inline-regex terminator hatasi | Regex icinde gomulu tirnak PowerShell parser'i bozdu -> Karmasik deseni grep tool'una birakip shell komutlarini basit tut
+2026-10-09 | [auto] APIError [403]: Upstream request failed: An active OpenCode Go subscription is required to use Go models. | kürate edilmedi -> /log-error ile işle
