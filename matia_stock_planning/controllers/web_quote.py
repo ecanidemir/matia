@@ -242,7 +242,7 @@ table.kits{border-collapse:collapse;width:100%;background:var(--surface);border:
 <header>
 <p class="eyebrow">Matia &middot; Device pricing</p>
 <h1>Full-combo device quote</h1>
-<p class="lede">One complete set includes the base, screws, outdoor unit, and seat. Enter a quantity to see the per-set price, gross total, and net total from live production data.</p>
+<p class="lede">One complete set includes the base, screws, outdoor unit, and seat. Enter a quantity to see the per-set price, the gross total, and the net amount you still need to buy to reach that quantity.</p>
 </header>
 <section class="card" aria-labelledby="calc-h">
 <h2 class="sub" id="calc-h" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0">Quote calculator</h2>
@@ -377,7 +377,7 @@ function calc(){
       var h=document.createElement('h2'); h.className='sub'; h.textContent='Retained cost by kit';
       sum.appendChild(h);
       var note=document.createElement('p'); note.className='note';
-      note.textContent='You pay the net total of '+money(j.net_usd)+' for '+j.qty+' sets. Gross is '+money(j.gross_usd)+' before retained savings.';
+      note.textContent='To complete your stock to '+j.qty+' full device sets, you need '+money(j.net_usd)+' in parts (net total). Buying everything new would cost '+money(j.gross_usd)+' (gross) — the rest is already in stock.';
       sum.appendChild(note);
       var tb=document.getElementById('tb'); tb.innerHTML='';
       (j.kits||[]).forEach(function(l){
