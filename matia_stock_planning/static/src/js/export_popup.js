@@ -7,15 +7,20 @@ odoo.define('matia_stock_planning.export_popup', function (require) {
     // list). Callers pass their slots and an onExport callback; this
     // module only collects the choice.
     // opts: {parent, slots, activeSlot, dirtyMsg, onExport,
-    //     preselectCapacity, canExportAdmin}.
+    //     preselectCapacity, canExportAdmin, supplierNeedsSlot}.
     // onExport(sel, withSup, withCost, withCap): sel = checked slot
     // numbers, withSup/withCost/withCap = sheet toggles.
     // canExportAdmin === false hides the Suppliers/Cost/slot blocks
     // (Capacity card only); undefined keeps the old full popup
     // (backward compatible). The server re-checks the group per
     // export mode - hiding cards is cosmetic, never the real gate.
+    // supplierNeedsSlot shows a hint that Suppliers requires a study
+    // slot (Cost and Capacity export alone).
     function openExportPopup($, Dialog, opts) {
-        var slots = opts.slots || [];
+        // Slot 0 is reserved for separate use: never offered here.
+        var slots = (opts.slots || []).filter(function (s) {
+            return s && s.slot !== 0;
+        });
         var activeSlot = opts.activeSlot;
         var adminOnly = opts.canExportAdmin === false;
         var INK = '#0f172a', MUT = '#64748b', LINE = '#e2e8f0';
@@ -139,6 +144,13 @@ odoo.define('matia_stock_planning.export_popup', function (require) {
                 $slots.append($row);
             });
             $wrap.append($slots);
+            if (opts.supplierNeedsSlot) {
+                $wrap.append($('<div/>').text(
+                    'Suppliers needs a study slot; Cost and ' +
+                    'Capacity export alone.').css({
+                    'color': MUT, 'font-size': '0.76rem',
+                    'margin': '2px 2px 0'}));
+            }
         }
         if (opts.dirtyMsg) {
             $wrap.append(opts.dirtyMsg);

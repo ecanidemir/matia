@@ -709,3 +709,18 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - SAPMA (karar 3): get_my_capacity_targets kodda YOK (revert 4905308, STAGING KESINTISI girdisine bak); live yol payload`daki opsiyonel capacity_targets listesini ayni sanitize ile alir (pozitif int, max 3), yoksa standart sutunlar. Server-side kayitli sutun yeniden istenirse once staging`de Upgrade-sonrasi smoke SART (res.users alani TOTAL kilit yapmisti).
 - Dogrulama: scratch/test_capacity_popup_export.py 35/35 (donusum, sira, dosya adi, iki icerik yolu, gate) + test_combined_export.py 34/34; py_compile + node --check OK; diff TR-karakter temiz. Manifest 15.0.2.7.0.
 - Deploy: Python VAR -> Git Deploy + restart (mesai disi + oncesi backup) + modul Upgrade + Ctrl+F5. Commit/push YOK (kullanici onayi bekleniyor).
+
+## Export Popup Slot Kurali (2026-10-09, commit YOK)
+
+- Sikayet: Capacity sayfasinda Cost+Capacity birlikte slot sarti cikariyordu; Cost slot-bagimsiz sayfa oldugu icin istenmiyordu.
+- Cozum (static-only, Python YOK): Capacity cagiricisinda slot sarti yalniz Suppliers`a kaldi (uyari metni de oyle); Cost(+Capacity) slotsuzken live cost_only (+live capacity) post`lanir (server destegi onceki committe vardi). Popup`a supplierNeedsSlot notu eklendi (Capacity + Cost sayfasi gonderir; Plan sayfasi gondermez cunku orada slotsuz supplier = aktif planin supplier`i, gecerli). Slot 0 popup`ta global filtrelenir (export_popup.js tek yer, 3 cagirici etkilenir; server kabulu aynen).
+- Kural: slot-bagimli veri (supplier) ile slot-bagimsiz sayfa verisi (cost/capacity) ayni popup kosuluna baglanmaz. Deploy: static-only -> modul Upgrade yeterli, restart gerekmez; sonrasi Ctrl+F5.
+
+## Web Quote v1 (2026-10-09, kodlandi - deploy BEKLIYOR)
+
+- Yeni `controllers/web_quote.py` (`matia_stock_planning` icinde) + `controllers/__init__.py` tek satir import; manifest `data` degisikligi YOK (plan: `plans/web_quote_justcloud.md`).
+- Iki `auth='public'` GET route: `/web_quote` (inline HTML, key kontrolu YOK - sayfa veri tasimaz) + `/web_quote/quote?qty=N&key=...` (key'siz/yanlis -> 403 fail-closed, qty 1..10000 disi -> 400).
+- Key `ir.config_parameter` `web_quote.key`'de tutulur (kodda/repoda ASLA yok; staging+prod'a manuel girilir; kayit yoksa 403). Rotate restart gerektirmez.
+- Hesap (salt-okunur, write metodu YOK): `matia.product.cost.get_cost_tree()` (combos.full + unit_map) + `matia.stock.planning.get_capacity_planning_data(include_tr=True, include_usa=True, dynamic_targets=[N])` (dynamic_needs[str(N)].val); brut=fullxN, net=SUM(top-level need_units x unit_usd). `fields_get` iki modelde de bos doner (AbstractModel, normal) - imzalar dosyadan dogrulandi; `web_quote.key` prod'da henuz yok (beklenen).
+- Dogrulama: `py_compile` OK; ORM write/create/unlink cagrisi YOK (grep temiz); secret taramasi temiz.
+- Deploy: Python VAR -> staging Git Deploy + restart (mesai disi + backup) + modul Upgrade; capraz kontrol (100 adet: brut=fullx100, net<=brut, Capacity dynamic_needs ile); prod SADECE staging yesil + kullanici onayi. Faz-2 (slot-write/gizleme) YAPILMADI.

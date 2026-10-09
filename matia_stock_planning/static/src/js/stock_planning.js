@@ -1232,6 +1232,7 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                     dirtyMsg: null,
                     preselectCapacity: true,
                     canExportAdmin: canAdmin,
+                    supplierNeedsSlot: true,
                     onExport: function (sel, withSup, withCost,
                         withCap) {
                         if (!sel.length && !withSup && !withCost &&
@@ -1247,12 +1248,24 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
                             });
                             return;
                         }
-                        if (!sel.length) {
+                        if (withSup && !sel.length) {
+                            // Supplier data lives in study slots.
                             self.displayNotification({
                                 title: _t('No slot selected'),
                                 message: _t('Select at least one ' +
-                                    'study slot for Suppliers/Cost.'),
+                                    'study slot for Suppliers.'),
                                 type: 'warning',
+                            });
+                            return;
+                        }
+                        if (!sel.length) {
+                            // Live Cost sheet (+ live Capacity when
+                            // asked): both sheets are slot-free, like
+                            // their pages.
+                            self._postProcurementExcel({
+                                mode: 'cost_only',
+                                withCost: 1,
+                                withCapacity: withCap ? 1 : 0,
                             });
                             return;
                         }

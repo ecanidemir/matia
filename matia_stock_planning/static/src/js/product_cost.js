@@ -908,6 +908,7 @@ odoo.define('matia_product_cost.dashboard', function (require) {
                     activeSlot: null,
                     dirtyMsg: null,
                     canExportAdmin: canAdmin,
+                    supplierNeedsSlot: true,
                     onExport: function (sel, withSup, withCost,
                         withCap) {
                         if (!sel.length && !withSup && !withCost &&
