@@ -688,8 +688,16 @@ class MatiaProductCost(models.AbstractModel):
             corr = float(pm.get('corrected') or 0.0)
             lusd = float(pm.get('last_usd') or 0.0)
             eff = corr if corr > 0 else lusd
-            pfactor = float(pm.get('price_factor') or 1.0) or 1.0
-            corr_disp = corr * pfactor if corr and pfactor \
+            # Shown per the product's own purchase UoM (the unit
+            # save_price_override expects): stock -> PO factor. The
+            # last-buy factor is wrong here (1.0 when no purchase
+            # exists, e.g. E1CBRB01 showed 0.0006 instead of 0.6).
+            spf_key = (stock_uid, po_uid)
+            if spf_key not in spf_cache:
+                spf_cache[spf_key] = _mpp_stock_per_po_factor(
+                    env_sudo, stock_uid, po_uid) or 1.0
+            spfactor = spf_cache[spf_key]
+            corr_disp = corr * spfactor if corr and spfactor \
                 else corr
             # Location-aware standard-price fallback, shown per
             # the product's own purchase UoM (the commercial unit
@@ -715,11 +723,6 @@ class MatiaProductCost(models.AbstractModel):
             _pt = info.get('product_tmpl_id')
             if loc in ('tr', 'us') and _pt:
                 loc_pending[pid] = (_pt[0], loc)
-            spf_key = (stock_uid, po_uid)
-            if spf_key not in spf_cache:
-                spf_cache[spf_key] = _mpp_stock_per_po_factor(
-                    env_sudo, stock_uid, po_uid) or 1.0
-            spfactor = spf_cache[spf_key]
             items.append({
                 'product_id': pid,
                 'code': info.get('default_code') or '',
@@ -731,7 +734,7 @@ class MatiaProductCost(models.AbstractModel):
                 'uom': uom_txt,
                 'last_uom': pm.get('last_uom') or '',
                 'price_uom': price_uom_txt or uom_txt,
-                'price_factor': pfactor,
+                'price_factor': spfactor,
                 'corrected_display': corr_disp,
                 'last_price': float(pm.get('last_price') or 0.0),
                 'last_currency': pm.get('last_currency') or '',
@@ -818,13 +821,19 @@ class MatiaProductCost(models.AbstractModel):
                 # writing a 0.0 row would only pollute the table.
                 skipped.append(pr_code)
                 continue
-            pfactor = float(pm.get('price_factor') or 1.0) or 1.0
+            # Commercial (per purchase UoM) input: stock -> PO
+            # factor from the product card, NOT the last-buy
+            # factor (1.0 when no purchase exists).
+            _su = pr.uom_id.id if pr.uom_id else False
+            _ppu = pr.uom_po_id.id if pr.uom_po_id else _su
+            _pf = _mpp_stock_per_po_factor(
+                env_sudo, _su, _ppu) or 1.0
             try:
                 # save_price_override expects the commercial
                 # (per purchase UoM) input and stores it per
                 # stock UoM; location=False keeps the stored one.
                 Mpp.save_price_override(
-                    pid, eff * pfactor, False)
+                    pid, eff * _pf, False)
                 updated += 1
             except Exception as exc:
                 _logger.warning(
