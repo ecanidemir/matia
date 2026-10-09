@@ -358,6 +358,7 @@ function calc(){
       }
       var j=x.j;
       if(!j||j.error){ showError((j&&j.error)||'Could not calculate this quote.'); return; }
+      try{ sessionStorage.setItem('wq_key', kEl.value); }catch(e){}
       empty.hidden=true;
       var stats=document.createElement('div'); stats.className='stats';
       var items=[
@@ -399,6 +400,10 @@ function calc(){
         : 'Request failed. Check your connection and try again.');
     });
 }
+try{
+  var savedKey=sessionStorage.getItem('wq_key');
+  if(savedKey){ document.getElementById('k').value=savedKey; }
+}catch(e){}
 </script>
 </body></html>"""
         return request.make_response(
