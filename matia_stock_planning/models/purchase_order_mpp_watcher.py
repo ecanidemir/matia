@@ -61,15 +61,21 @@ class PurchaseOrderMppWatcher(models.Model):
             return
         for plan in plans:
             try:
-                plan.write({'needs_revision': True})
+                # sudo for access: group_user is read-only on plans
+                # (direct writes stay blocked), so the system flag is
+                # written elevated. The chatter author still resolves
+                # to the acting user (sudo never changes env.user).
+                sudo_plan = self.env[
+                    'matia.procurement.plan'].sudo().browse(plan.id)
+                sudo_plan.write({'needs_revision': True})
                 if what == 'deleted':
-                    plan.message_post(body=_(
+                    sudo_plan.message_post(body=_(
                         '%s was deleted after release rev %s. Check '
                         'the tracking screen and revise the plan if '
                         'needed.') % (', '.join(names),
                                        plan.released_rev))
                 else:
-                    plan.message_post(body=_(
+                    sudo_plan.message_post(body=_(
                         '%s was cancelled after release rev %s. Check '
                         'the tracking screen and revise the plan if '
                         'needed.') % (', '.join(names),
