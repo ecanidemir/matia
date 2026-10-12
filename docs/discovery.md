@@ -822,3 +822,11 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Kok neden: RPC gidis-donus saniyeler surer + re-render tiklanan butonu yok eder; response aninda kaydedilen konum artik kayip.
 - Cozum (JS only, procurement_plan.js): `_snapshotSupScroll` tik aninda senkron kayit; 4 handler'da (`_onCreateRfq/_onConfirmRfq/_onUpdateRfq/_onCreateMo`) preventDefault+stopPropagation, response'ta `_renderSup` + `_restoreSupScroll`, layout/bildirim sonrasi `_restoreSupScrollSoon` (rAF + isDestroyed guard); basari toast'lari kaldirildi (inline liste zaten gosterir), Forbidden/Already-exists/Skipped uyari + hata toast'lari duruyor. Denetim bulgusu (cift-tik mukerrer belge riski): tiklanan buton RPC bitene kadar `_lockSupBtn` ile kilitli, hata yolunda `_unlockSupBtn` acar; `_preserveSupScroll` try/finally.
 - Dogrulama: `node --check` OK. Deploy: static-only -> modul Upgrade + Ctrl+F5.
+
+## Plan Tek-Buton Release (2026-10-12, kodlandi - deploy BEKLIYOR)
+
+- Kapsam: `matia.procurement.plan` `_inherit` + mail.thread (`models/matia_procurement_plan_release.py`); `release_state` draft/released/closed + `release_snapshot` (JSON: rev/user/rfq_ids/mo_ids/line_ids/ts) + `released_rev` + `needs_revision`; Release wizard (RFQ tarafi pure hesap, MO tarafi widget-secimli) -> `action_create_draft_rfqs` + `action_create_mos` cagirir; Takip wizard (TransientModel satirlar, attention badge, secili draft RFQ confirm, Yenile).
+- Kilit: `write()` guard target_json'u released/closed planda engeller; Action: set hedefleri dener -> plan "revize icin acildi" sonuc karti + `action_unrelease` (RFQ/MO silinmez). PO iptal/silme watcher (`purchase_order_mpp_watcher.py`, best-effort flag + chatter, engelleme yok) -> needs_revision.
+- MO dedup: ayni origin+product+company'de iptal-olmayan MO varsa `action_create_mos` yeniden uretmek yerine relink eder (`relinked` key; eski satirda `_rfq_coverage_map` rebuild sonrasi link kaybi = mukerrer MO riski vardi). JS sayac `created+relinked`.
+- Pure helperlar stdlib-only `models/mpp_release_common.py` (line_tracking_status + snapshot builder); reviewer uyarilari kapatildi (view'da release_state readonly, chatter USER-env, confirm= yikici butonlarda).
+- Deploy: Python var -> Git Deploy + servis restart (mesai disi + öncesi backup) + modul Upgrade. Version 15.0.2.9.0.

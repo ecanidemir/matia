@@ -10,3 +10,7 @@ access_matia_procurement_plan_user,matia.procurement.plan.user,model_matia_procu
 access_matia_procurement_plan_line_user,matia.procurement.plan.line.user,model_matia_procurement_plan_line,base.group_user,1,1,1,1
 access_matia_procurement_price_override_user,matia.procurement.price.override.user,model_matia_procurement_price_override,base.group_user,1,1,1,1
 access_matia_product_cost_user,matia.product.cost.user,model_matia_product_cost,base.group_user,1,1,1,1
+access_mpp_release_wizard_user,matia.procurement.plan.release.wizard.user,model_matia_procurement_plan_release_wizard,base.group_user,1,1,1,1
+access_mpp_release_wizard_line_user,matia.procurement.plan.release.wizard.line.user,model_matia_procurement_plan_release_wizard_line,base.group_user,1,1,1,1
+access_mpp_tracking_user,matia.procurement.plan.tracking.user,model_matia_procurement_plan_tracking,base.group_user,1,1,1,1
+access_mpp_tracking_line_user,matia.procurement.plan.tracking.line.user,model_matia_procurement_plan_tracking_line,base.group_user,1,1,1,1

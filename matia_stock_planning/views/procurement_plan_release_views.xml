@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Plan form: release buttons, statusbar, tracking page, chatter -->
+    <record id="view_matia_procurement_plan_form_release"
+            model="ir.ui.view">
+        <field name="name">matia.procurement.plan.form.release</field>
+        <field name="model">matia.procurement.plan</field>
+        <field name="inherit_id"
+               ref="matia_stock_planning.view_matia_procurement_plan_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_open_release_wizard" type="object"
+                        string="Release" class="oe_highlight"
+                        attrs="{'invisible': [('release_state', '!=', 'draft')]}"/>
+                <button name="action_open_tracking" type="object"
+                        string="Takip"/>
+                <button name="action_unrelease" type="object"
+                        string="Revize icin ac"
+                        confirm="Plan kilidi acilacak. Devam edilsin mi?"
+                        attrs="{'invisible': [('release_state', '=', 'draft')]}"/>
+                <button name="action_close_release" type="object"
+                        string="Kapat"
+                        confirm="Release kapatilacak. Devam edilsin mi?"
+                        attrs="{'invisible': [('release_state', '!=', 'released')]}"/>
+                <field name="release_state" widget="statusbar"
+                       statusbar_visible="draft,released,closed"/>
+            </xpath>
+            <xpath expr="//notebook" position="inside">
+                <page string="Release">
+                    <group>
+                        <field name="release_state" readonly="1"/>
+                        <field name="released_rev" readonly="1"/>
+                        <field name="needs_revision" readonly="1"/>
+                    </group>
+                    <field name="purchase_order_ids" readonly="1">
+                        <tree>
+                            <field name="name"/>
+                            <field name="partner_id"/>
+                            <field name="state"/>
+                            <field name="amount_total"/>
+                        </tree>
+                    </field>
+                    <field name="mo_ids" readonly="1">
+                        <tree>
+                            <field name="name"/>
+                            <field name="product_id"/>
+                            <field name="product_qty"/>
+                            <field name="state"/>
+                        </tree>
+                    </field>
+                </page>
+            </xpath>
+            <xpath expr="//sheet" position="after">
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"
+                           widget="mail_followers"/>
+                    <field name="message_ids" widget="mail_thread"/>
+                </div>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Plan list: release columns -->
+    <record id="view_matia_procurement_plan_tree_release"
+            model="ir.ui.view">
+        <field name="name">matia.procurement.plan.tree.release</field>
+        <field name="model">matia.procurement.plan</field>
+        <field name="inherit_id"
+               ref="matia_stock_planning.view_matia_procurement_plan_tree"/>
+        <field name="arch" type="xml">
+            <field name="state" position="after">
+                <field name="release_state"/>
+                <field name="needs_revision" invisible="1"/>
+            </field>
+            <tree position="attributes">
+                <attribute name="decoration-danger">needs_revision == True</attribute>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Release wizard -->
+    <record id="view_mpp_release_wizard_form" model="ir.ui.view">
+        <field name="name">matia.procurement.plan.release.wizard.form</field>
+        <field name="model">matia.procurement.plan.release.wizard</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <field name="plan_id" invisible="1"/>
+                    <group>
+                        <field name="mode" widget="radio"/>
+                    </group>
+                    <group>
+                        <field name="summary" readonly="1" nolabel="1"/>
+                    </group>
+                    <field name="line_ids">
+                        <tree editable="top">
+                            <field name="include"/>
+                            <field name="product_name"/>
+                            <field name="qty"/>
+                            <field name="kind"/>
+                            <field name="detail"/>
+                        </tree>
+                    </field>
+                </sheet>
+                <footer>
+                    <button name="action_confirm_release" type="object"
+                            string="Release Et" class="oe_highlight"/>
+                    <button string="Vazgec" class="btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Tracking screen -->
+    <record id="view_mpp_tracking_form" model="ir.ui.view">
+        <field name="name">matia.procurement.plan.tracking.form</field>
+        <field name="model">matia.procurement.plan.tracking</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <field name="plan_id" invisible="1"/>
+                    <group>
+                        <field name="attention_only"/>
+                    </group>
+                    <field name="line_ids">
+                        <tree editable="top"
+                              decoration-danger="attention == True">
+                            <field name="attention" invisible="1"/>
+                            <field name="selected"/>
+                            <field name="code"/>
+                            <field name="product_name"/>
+                            <field name="qty"/>
+                            <field name="route"/>
+                            <field name="status"/>
+                            <field name="rfq_name"/>
+                            <field name="rfq_state"/>
+                            <field name="mo_name"/>
+                            <field name="mo_state"/>
+                        </tree>
+                    </field>
+                </sheet>
+                <footer>
+                    <button name="action_tracking_send" type="object"
+                            string="Secili RFQlari Onayla"
+                            confirm="Secili taslak RFQlar siparise cevrilecek. Devam edilsin mi?"
+                            class="oe_highlight"/>
+                    <button name="action_refresh" type="object"
+                            string="Yenile"/>
+                    <button name="action_tracking_unrelease" type="object"
+                            string="Revize icin ac"/>
+                    <button name="action_tracking_close" type="object"
+                            string="Kapat"/>
+                    <button string="Vazgec" class="btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

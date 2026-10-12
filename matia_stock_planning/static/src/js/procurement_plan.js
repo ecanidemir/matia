@@ -2813,7 +2813,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     res.supplier_summary : self.supSummary;
                 self._renderSup();
                 self._restoreSupScroll(snap);
-                var n = (res && res.created ? res.created.length : 0);
+                var n = (res && res.created ? res.created.length : 0) +
+                    (res && res.relinked ? res.relinked.length : 0);
                 // Success toast removed (inline MO list already shows
                 // it); keep only the Skipped warning so a no-op is
                 // still explained.

@@ -4486,7 +4486,7 @@ class MatiaProcurementPlan(models.Model):
         normal-type BOM are reported, never forced.
         @param plan_id Plan ID.
         @param line_ids Optional line IDs (None = all make lines).
-        @return Dict with created/skipped plus a fresh supplier summary.
+        @return Dict with created/relinked/skipped plus a fresh supplier summary.
         """
         if not _mpp_can_create_docs(self):
             raise AccessError(_(
@@ -4557,7 +4557,7 @@ class MatiaProcurementPlan(models.Model):
                 bom_cache[tid] = b
             return bom_cache[tid]
 
-        created, skipped = [], []
+        created, skipped, relinked = [], [], []
         for line in lines:
             if line.mo_id:
                 skipped.append({
@@ -4565,6 +4565,24 @@ class MatiaProcurementPlan(models.Model):
                     'code': line.product_id.default_code or '',
                     'reason': _('MO already linked: %s')
                     % line.mo_id.name,
+                })
+                continue
+            # Release dedup: a rebuild drops line.mo_id, but the MO
+            # created by an earlier release still exists under this
+            # plan's origin. Relink it instead of manufacturing twice.
+            existing_mo = env_sudo['mrp.production'].search([
+                ('origin', '=', plan.name),
+                ('product_id', '=', line.product_id.id),
+                ('company_id', '=', plan.company_id.id),
+                ('state', '!=', 'cancel'),
+            ], order='id desc', limit=1)
+            if existing_mo:
+                line.write({'mo_id': existing_mo.id})
+                relinked.append({
+                    'id': existing_mo.id, 'name': existing_mo.name,
+                    'product': line.product_id.display_name,
+                    'qty': float(line.order_qty),
+                    'mo_qty': float(existing_mo.product_qty),
                 })
                 continue
             bom = _normal_bom(line.product_id.id)
@@ -4614,10 +4632,12 @@ class MatiaProcurementPlan(models.Model):
                 'product': line.product_id.display_name,
                 'qty': float(line.order_qty),
             })
-        if created:
-            plan.write({'mo_ids': [(4, c['id']) for c in created]})
+        if created or relinked:
+            plan.write({'mo_ids': [(4, c['id']) for c in
+                                   created + relinked]})
         return {
             'created': created,
+            'relinked': relinked,
             'skipped': skipped,
             'supplier_summary': self.get_supplier_summary(plan.id),
         }
