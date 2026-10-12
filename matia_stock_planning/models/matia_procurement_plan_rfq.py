@@ -20,6 +20,7 @@ Rules:
 """
 from odoo import api, fields, models, _
 from odoo.exceptions import AccessError, UserError
+from xml.sax.saxutils import escape as _xml_escape
 import logging
 
 from .matia_procurement_plan import (
@@ -156,9 +157,13 @@ class MatiaProcurementPlanRfq(models.Model):
     def _rfq_plan(self, plan_id):
         """Load the plan in sudo env and validate its state.
 
-        @param plan_id: database id of the plan.
+        @param plan_id: database id of the plan (int or int-like).
         @return: (env_sudo, plan) tuple.
         """
+        try:
+            plan_id = int(plan_id)
+        except (TypeError, ValueError):
+            raise UserError(_('Invalid plan reference.'))
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(plan_id)
         if not plan.exists():
@@ -168,6 +173,118 @@ class MatiaProcurementPlanRfq(models.Model):
             raise UserError(_(
                 'Run supplier preview before creating draft RFQs.'))
         return env_sudo, plan
+
+    def _rfq_find_bom(self, env_sudo, product, company_id):
+        """Find the best BOM for a product and company.
+
+        Prefers the company's own BOM over a global one, and a
+        normal/subcontract BOM over a phantom kit.
+
+        @param env_sudo: sudo environment.
+        @param product: product.product record.
+        @param company_id: res.company id (or False).
+        @return: mrp.bom record or False when none exists.
+        """
+        boms = env_sudo['mrp.bom'].search([
+            ('product_tmpl_id', '=',
+             product.product_tmpl_id.id),
+            '|', ('product_id', '=', product.id),
+            ('product_id', '=', False),
+        ])
+        if not boms:
+            return False
+
+        def _rank(bom):
+            if company_id and bom.company_id.id == company_id:
+                comp = 0
+            elif not bom.company_id:
+                comp = 1
+            else:
+                comp = 2
+            kind = 0 if bom.type in (
+                'normal', 'subcontract') else 1
+            return (comp, kind, bom.id)
+
+        return sorted(boms, key=_rank)[0]
+
+    def _rfq_fmt_qty(self, qty):
+        """Format a quantity compactly (integer when whole).
+
+        @param qty: float quantity.
+        @return: str without trailing decimal noise.
+        """
+        qty = float(qty or 0.0)
+        if abs(qty - round(qty)) < 1e-9:
+            return str(int(round(qty)))
+        return ('%.2f' % qty).rstrip('0').rstrip('.')
+
+    def _rfq_bom_chatter(self, env_sudo, plan, po, lines):
+        """Post a BOM-detail note on a freshly created RFQ.
+
+        Each ordered line is listed with its ordered quantity; when
+        the line product has a BOM, its components are exploded one
+        level and scaled by the ordered quantity, e.g.
+        '[M3TLMN01] Wheel Tool 2 Milling - 26 Units' with component
+        '[M3TLTN02] Wheel Tool 2 Lathe - 26 Units (1 per)'.
+        Lines without a BOM render as themselves only. Posted as an
+        internal note so the vendor is not emailed.
+
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record.
+        @param po: purchase.order record to post on.
+        @param lines: plan line recordset ordered on this RFQ.
+        @return: None.
+        """
+        items = []
+        for line in lines:
+            prod = line.product_id
+            src_uom = (line.uom_id or prod.uom_id
+                       or prod.uom_po_id)
+            head = '[%s] %s - %s %s' % (
+                prod.default_code or '',
+                prod.display_name or '',
+                self._rfq_fmt_qty(line.order_qty),
+                src_uom.name if src_uom else '')
+            bom = self._rfq_find_bom(
+                env_sudo, prod, po.company_id.id)
+            if not bom:
+                items.append('<li>%s</li>' % _xml_escape(head))
+                continue
+            try:
+                need = src_uom._compute_quantity(
+                    line.order_qty or 0.0, bom.product_uom_id)
+            except Exception:
+                need = line.order_qty or 0.0
+            factor = (need / bom.product_qty) if bom.product_qty \
+                else 0.0
+            comps = []
+            for bl in bom.bom_line_ids:
+                cprod = bl.product_id
+                cqty = (bl.product_qty or 0.0) * factor
+                comps.append('[%s] %s - %s %s (%s per %s %s)' % (
+                    cprod.default_code or '',
+                    cprod.display_name or '',
+                    self._rfq_fmt_qty(cqty),
+                    bl.product_uom_id.name,
+                    self._rfq_fmt_qty(bl.product_qty),
+                    self._rfq_fmt_qty(bom.product_qty),
+                    bom.product_uom_id.name))
+            if comps:
+                items.append(
+                    '<li>%s<ul><li>%s</li></ul></li>' % (
+                        _xml_escape(head),
+                        '</li><li>'.join(
+                            _xml_escape(c) for c in comps)))
+            else:
+                items.append('<li>%s</li>' % _xml_escape(head))
+        if not items:
+            return
+        body = '<p>%s</p><ul>%s</ul>' % (
+            _xml_escape(_('BOM detail from %s:') % plan.name),
+            ''.join(items))
+        po.message_post(
+            body=body, message_type='comment',
+            subtype_xmlid='mail.mt_note')
 
     def get_rfq_preview(self, plan_id):
         """Preview the draft RFQs that would be created (no writes).
@@ -311,6 +428,12 @@ class MatiaProcurementPlanRfq(models.Model):
                         'purchase_line_id': po_line.id,
                     })
                     amount += ((line.order_qty or 0.0) * _conv)
+                try:
+                    self._rfq_bom_chatter(
+                        env_sudo, plan, po, grp['lines'])
+                except Exception:
+                    _logger.warning(
+                        'MPP BOM chatter failed for PO %s.', po.id)
                 created.append({
                     'id': po.id,
                     'name': po.name,
@@ -440,6 +563,12 @@ class MatiaProcurementPlanRfq(models.Model):
                     })
                     amount += ((line.order_qty or 0.0)
                                * _conv2)
+                try:
+                    self._rfq_bom_chatter(
+                        env_sudo, plan, po, grp['lines'])
+                except Exception:
+                    _logger.warning(
+                        'MPP BOM chatter failed for PO %s.', po.id)
                 created.append({
                     'id': po.id,
                     'name': po.name,

@@ -108,7 +108,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _planId: function () {
             if (this.summary && this.summary.plan_id) {
-                return this.summary.plan_id;
+                var pid = parseInt(this.summary.plan_id, 10);
+                return pid || false;
             }
             return false;
         },
@@ -2050,6 +2051,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // and creates the RFQ under that company.
         _renderSuppliers: function (s) {
             var self = this;
+            s = s || {};
             var sups = s.suppliers || [];
             if (!sups.length) {
                 this.$('.mpp-sup-body').html(
@@ -2165,7 +2167,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _supCompanyStats: function (s) {
             var usaTotal = 0, trTotal = 0;
             var usaSellers = {}, trSellers = {};
-            (s.suppliers || []).forEach(function (sp) {
+            ((s || {}).suppliers || []).forEach(function (sp) {
                 var t = parseFloat(sp.total_usd) || 0;
                 if (sp.company === 'USA') {
                     usaTotal += t;
@@ -2191,6 +2193,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._preserveSupScroll(function () {
                 self.collapsedSupGroups[key] =
                     !self.collapsedSupGroups[key];
+                if (!self.supSummary) return;
                 self._renderSuppliers(self.supSummary);
             });
         },
@@ -2202,6 +2205,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var key = el.dataset.supKey;
             if (!key) return;
             var self = this;
+            if (!self.supSummary) return;
             this._preserveSupScroll(function () {
                 if (self.expandedSup[key]) {
                     delete self.expandedSup[key];
@@ -2329,7 +2333,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _renderProduction: function (s) {
             var self = this;
-            var rows = s.production || [];
+            var rows = (s || {}).production || [];
             if (!rows.length) {
                 this.$('.mpp-prod-body').html(
                     '<div class="alert alert-info">No make/subcontract lines with quantity.</div>');
