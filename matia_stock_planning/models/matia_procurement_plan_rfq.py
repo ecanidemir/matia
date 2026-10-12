@@ -82,15 +82,28 @@ class MatiaProcurementPlanRfq(models.Model):
         """
         _ov = (overrides or {}).get(line.product_id.id, {})
         _corr = float(_ov.get('price') or 0.0)
+        _loc = _ov.get('location')
+        _loc_cid = _MPP_OVERRIDE_COMPANY.get(_loc) if _loc else None
         if _corr > 0:
-            _loc = _ov.get('location')
             return {
                 'price': _corr,
                 'currency_id': usd.id if usd else 0,
                 'currency_name': 'USD',
-                'company_id': _MPP_OVERRIDE_COMPANY.get(_loc) or (
+                'company_id': _loc_cid or (
                     line.last_company_id.id if line.last_company_id
                     else plan.company_id.id),
+            }
+        if _loc_cid:
+            # Location alone decides the purchase company even without
+            # a corrected price; price/currency fall back to last buy.
+            return {
+                'price': (line.last_price or 0.0)
+                * _mpp_line_uom_factor(line),
+                'currency_id': line.last_currency_id.id
+                if line.last_currency_id else 0,
+                'currency_name': line.last_currency_id.name
+                if line.last_currency_id else '',
+                'company_id': _loc_cid,
             }
         # RFQ PO lines use the product purchase UoM, so the
         # plan-line-UoM snapshot is converted back to the purchase
