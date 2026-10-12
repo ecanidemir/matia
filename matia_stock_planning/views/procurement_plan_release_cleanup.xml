@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Stale-view cleanup: procurement_plan_release_views.xml was deleted
+         (Release moved to the JS dashboard), but databases upgraded from
+         15.0.2.9.x still hold its 4 views. They must be dropped BEFORE
+         procurement_plan_views.xml is reloaded, otherwise the base form
+         view's combined-arch validation fails on buttons whose methods
+         (action_open_release_wizard, ...) no longer exist.
+         Search-based delete: no-op on fresh installs. -->
+    <delete model="ir.ui.view" search="[('name', '=', 'matia.procurement.plan.form.release')]"/>
+    <delete model="ir.ui.view" search="[('name', '=', 'matia.procurement.plan.tree.release')]"/>
+    <delete model="ir.ui.view" search="[('name', '=', 'matia.procurement.plan.release.wizard.form')]"/>
+    <delete model="ir.ui.view" search="[('name', '=', 'matia.procurement.plan.tracking.form')]"/>
+</odoo>
