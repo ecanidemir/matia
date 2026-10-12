@@ -4205,6 +4205,10 @@ class MatiaProcurementPlan(models.Model):
             })
         po_by_seller = {}
         for po in plan.purchase_order_ids:
+            # Cancelled RFQs stay linked for history but are hidden
+            # from the Suppliers tab (user rule).
+            if po.state == 'cancel':
+                continue
             po_by_seller.setdefault(
                 (po.partner_id.id, po.company_id.id), []).append({
                     'id': po.id, 'name': po.name, 'state': po.state,
@@ -4271,7 +4275,8 @@ class MatiaProcurementPlan(models.Model):
                 mo = {'id': line.mo_id.id, 'name': line.mo_id.name,
                       'state': line.mo_id.state}
             po = False
-            if line.purchase_order_id:
+            if line.purchase_order_id and \
+                    line.purchase_order_id.state != 'cancel':
                 _po = line.purchase_order_id
                 po = {'id': _po.id, 'name': _po.name,
                       'state': _po.state}
@@ -4313,7 +4318,8 @@ class MatiaProcurementPlan(models.Model):
             'unknown_total_usd': round(unknown_total, 2),
             'unknown_count': unknown_count,
             'production': production,
-            'rfq_count': len(plan.purchase_order_ids),
+            'rfq_count': len([po for po in plan.purchase_order_ids
+                              if po.state != 'cancel']),
             'mo_count': len(plan.mo_ids),
             'mos': [{
                 'id': m.id, 'name': m.name, 'state': m.state,

@@ -310,10 +310,15 @@ class MatiaProcurementPlanRfq(models.Model):
                 _contrib = _nf * _n
                 _puom = (_pl.uom_id.name
                          if _pl.uom_id else '')
+                # NOTE: product .name (not display_name: it already
+                # embeds [code] and would duplicate it).
+                _pcode = _pl.product_id.default_code or ''
+                _pname = _pl.product_id.name or ''
+                if _pcode:
+                    _pname = '[%s] %s' % (_pcode, _pname)
                 found.append((_contrib,
-                    '[%s] %s: %s %s x %s %s = %s %s' % (
-                        _pl.product_id.default_code or '',
-                        _pl.product_id.display_name or '',
+                    '%s: %s %s x %s %s = %s %s' % (
+                        _pname,
                         self._rfq_fmt_qty(_nf), child_uom,
                         self._rfq_fmt_qty(_n), _puom,
                         self._rfq_fmt_qty(_contrib),
@@ -352,9 +357,14 @@ class MatiaProcurementPlanRfq(models.Model):
             src_uom = (line.uom_id or prod.uom_id
                        or prod.uom_po_id)
             src_uom_name = src_uom.name if src_uom else ''
-            head = '[%s] %s - %s %s' % (
-                prod.default_code or '',
-                prod.display_name or '',
+            # NOTE: .name (not display_name: it already embeds
+            # [code] and would duplicate it).
+            _code = prod.default_code or ''
+            _pname = prod.name or ''
+            if _code:
+                _pname = '[%s] %s' % (_code, _pname)
+            head = '%s - %s %s' % (
+                _pname,
                 self._rfq_fmt_qty(line.order_qty),
                 src_uom_name)
             bom = self._rfq_find_bom(
@@ -371,9 +381,12 @@ class MatiaProcurementPlanRfq(models.Model):
                 for bl in bom.bom_line_ids:
                     cprod = bl.product_id
                     cqty = (bl.product_qty or 0.0) * factor
-                    subs.append('[%s] %s - %s %s (%s per %s %s)' % (
-                        cprod.default_code or '',
-                        cprod.display_name or '',
+                    _ccode = cprod.default_code or ''
+                    _cname = cprod.name or ''
+                    if _ccode:
+                        _cname = '[%s] %s' % (_ccode, _cname)
+                    subs.append('%s - %s %s (%s per %s %s)' % (
+                        _cname,
                         self._rfq_fmt_qty(cqty),
                         bl.product_uom_id.name,
                         self._rfq_fmt_qty(bl.product_qty),
@@ -446,11 +459,14 @@ class MatiaProcurementPlanRfq(models.Model):
             'line_count': sum(len(g['lines']) for g in groups),
             'groups': preview_groups,
             'skipped': skipped,
-            'existing_rfq_count': len(plan.purchase_order_ids),
+            'existing_rfq_count': len(
+                [po for po in plan.purchase_order_ids
+                 if po.state != 'cancel']),
             'existing_rfqs': [{
                 'id': po.id, 'name': po.name,
                 'partner': po.partner_id.display_name,
-            } for po in plan.purchase_order_ids],
+            } for po in plan.purchase_order_ids
+                if po.state != 'cancel'],
         }
 
     @api.model
@@ -722,6 +738,8 @@ class MatiaProcurementPlanRfq(models.Model):
             env_sudo, plan)
         po_by_seller = {}
         for po in plan.purchase_order_ids:
+            if po.state == 'cancel':
+                continue
             po_by_seller.setdefault(po.partner_id.id, []).append({
                 'id': po.id, 'name': po.name,
             })
@@ -730,8 +748,10 @@ class MatiaProcurementPlanRfq(models.Model):
         res['rfqs'] = [{
             'id': po.id, 'name': po.name,
             'partner': po.partner_id.display_name,
-        } for po in plan.purchase_order_ids]
-        res['rfq_count'] = len(plan.purchase_order_ids)
+        } for po in plan.purchase_order_ids
+            if po.state != 'cancel']
+        res['rfq_count'] = len([po for po in plan.purchase_order_ids
+                                if po.state != 'cancel'])
         return res
 
 

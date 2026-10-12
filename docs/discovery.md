@@ -750,3 +750,8 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 
 - Istek: modül PO satir `name`'ine `[plan] urun` yazmasin; standart satin alma aciklamasi gelsin.
 - Cozum: `_rfq_std_line_name` helper (stok purchase onchange aynasi: tedarikci dilinde `display_name` + varsa `description_purchase`, partner context dahil). Iki RFQ uretim blogundaki `[%s] %s` kaldirildi. `description_purchase` fields_get ile dogrulandi. py_compile OK.
+
+## Iptal RFQ Suppliers'ta Gizleme (2026-10-12, kodlandi - push/deploy BEKLIYOR)
+
+- Belirti (staging canli teyitli): iptal edilen `PO/26-00055` (state cancel, origin MPP) supplier satirinda gorunmeye devam ediyor.
+- Cozum: `get_supplier_summary` (po_by_seller + rfq_count + production satirindaki po), `get_rfq_preview` (existing_*), `_plan_summary` override (rfqs + rfq_count) artik `state == 'cancel'` PO'lari atliyor. Yeniden olusturma mantigi zaten sadece `draft`'a baktigi icin iptal sonrasi tekrar RFQ acilabiliyor (degismedi). Slot-bar `rfq_count` ve stored `rfq_count` tarihce oldugu icin ELLEMEDI (overwrite uyarisi guvenli tarafta kalsin). py_compile OK.
