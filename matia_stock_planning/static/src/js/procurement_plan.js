@@ -40,6 +40,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .msp-th-sortable': '_onSort',
             'click .mpp-btn-sup-toggle': '_onSupToggle',
             'click .mpp-sup-name': '_onSupToggle',
+            'click .mpp-po-link': '_onOpenPo',
             'click .mpp-btn-sup-group-toggle': '_onSupGroupToggle',
         },
 
@@ -2220,6 +2221,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             });
         },
 
+        // Open a purchase.order form in a new browser tab.
+        _onOpenPo: function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var poid = parseInt(ev.currentTarget.dataset.poid, 10);
+            if (!poid) return;
+            window.open('/web#id=' + poid +
+                '&model=purchase.order&view_type=form', '_blank');
+        },
+
         _supplierLinesHtml: function (sp) {
             var self = this;
             var lines = sp.lines || [];
@@ -2252,6 +2263,48 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '</small>' :
                     '<small class="text-muted">' +
                     (ln.note || 'No purchase history') + '</small>';
+                // Live RFQ/PO coverage: fully covered lines get a green
+                // note, partially covered ones show the open remainder.
+                // Covering documents, listed visibly so tracking is
+                // easy: up to 3 links + overflow note (full list in
+                // the title). Click opens the PO in a new tab.
+                var docLinks = '';
+                var covDocs = ln.covered_docs || [];
+                if (covDocs.length) {
+                    var escName = function (nm) {
+                        return String(nm === undefined || nm === null ? '' : nm)
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .replace(/"/g, '&quot;');
+                    };
+                    var shown = covDocs.slice(0, 3).map(function (d) {
+                        return '<a href="#" class="mpp-po-link" data-poid="' +
+                            d.id + '">' + escName(d.name) + '</a>';
+                    }).join(', ');
+                    var extra = (ln.covered_total || covDocs.length) -
+                        Math.min(covDocs.length, 3);
+                    var allNames = covDocs.map(function (d) {
+                        return d.name;
+                    }).join(', ');
+                    docLinks = '<small class="d-block" title="' +
+                        escName(allNames) + '">in: ' + shown +
+                        (extra > 0 ? ' <span class="text-muted">+' +
+                            extra + ' more</span>' : '') + '</small>';
+                }
+                var covInfo = '';
+                if (ln.remaining_qty !== undefined &&
+                    ln.remaining_qty !== null &&
+                    (ln.order_qty || 0) > 0) {
+                    var remQty = parseFloat(ln.remaining_qty) || 0;
+                    if (remQty <= 1e-9) {
+                        covInfo = '<small class="d-block" style="color:#059669;">covered</small>';
+                    } else if (remQty < (parseFloat(ln.order_qty) || 0) - 1e-9) {
+                        covInfo = '<small class="text-muted d-block">open ' +
+                            self._fmtNum(remQty, 0) + ' ' +
+                            (ln.uom || '') + '</small>';
+                    }
+                }
                 html += '<tr class="mpp-sup-sub-row">' +
                     '<td class="td-product mpp-sup-sub-prod">' +
                     '<i class="fa fa-level-up fa-rotate-90 sub-tree-icon mr-2 text-primary"></i>' +
@@ -2263,7 +2316,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<td class="td-stock text-right">' +
                     self._fmtNum(ln.order_qty, 0) + ' ' +
                     '<small class="text-muted">' +
-                    (ln.uom || '') + '</small></td>' +
+                    (ln.uom || '') + '</small>' + covInfo + '</td>' +
                     '<td class="text-center"><span class="badge badge-info">' +
                     (ln.route || '') + '</span></td>' +
                     '<td class="td-stock text-right"><strong>' +
@@ -2274,7 +2327,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     self._fmtNum(ln.order_qty, 0) + ' = ' +
                     self._fmtNum(ln.rolled_total_usd, 2) +
                     '</small></td>' +
-                    '<td>' + lastInfo + '</td>' +
+                    '<td>' + lastInfo + docLinks + '</td>' +
                     '<td></td></tr>';
             });
             return html;
@@ -2312,20 +2365,32 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var isOpen = !!this.expandedSup[supKey];
             var lineCount = (sp.lines || []).length || sp.line_count;
             // RFQ buttons are admin-only; other users see a hint.
+            // Lines already sitting on a live RFQ/PO are covered: the
+            // button shows only while open lines remain, and hides
+            // behind a Covered badge when everything is ordered.
+            var openCount = (sp.open_line_count === undefined ||
+                sp.open_line_count === null) ?
+                lineCount : sp.open_line_count;
+            var coveredTotal = lineCount - openCount;
+            var openNote = (coveredTotal > 0 && openCount > 0) ?
+                '<small class="text-muted d-block">' + coveredTotal +
+                '/' + lineCount + ' covered</small>' : '';
             var rfqBtn = !sp.seller_id ?
                 '<span class="text-muted" style="font-size:0.75rem;">Assign a seller first</span>' :
                 !self.canCreateDocs ?
                 '<span class="text-muted" style="font-size:0.75rem;">Admin only</span>' :
+                openCount > 0 ?
                 '<button type="button" class="btn btn-success btn-sm mpp-btn-create-rfq" ' +
                 'data-seller="' + sp.seller_id + '" data-company="' +
                 (sp.company_id || '') + '">' +
-                '<i class="fa fa-file-text-o mr-1"></i>' + label + '</button>' +
+                '<i class="fa fa-file-text-o mr-1"></i>' + label + '</button>' + openNote +
                 (self.pendingRfqSeller === key ?
                     '<div class="alert alert-warning mt-1 mb-0" style="font-size:0.8rem;">' +
                     'Draft RFQ(s) already exist for this supplier + company. ' +
                     '<button type="button" class="btn btn-warning btn-sm mpp-btn-confirm-rfq" ' +
                     'data-seller="' + sp.seller_id + '" data-company="' +
-                    (sp.company_id || '') + '">Create Again</button></div>' : '');
+                    (sp.company_id || '') + '">Create Again</button></div>' : '') :
+                '<span class="badge badge-success">Covered</span>';
             var unpricedNote = (sp.unpriced_count || 0) > 0 ?
                 ' <span class="badge badge-warning" title="Lines without price are counted as 0 USD">' +
                 sp.unpriced_count + ' no price</span>' : '';

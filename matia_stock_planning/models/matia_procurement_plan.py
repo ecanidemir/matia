@@ -4077,6 +4077,139 @@ class MatiaProcurementPlan(models.Model):
     # below, linked by one procurement.group per plan + origin=plan.
     # ------------------------------------------------------------------
     @api.model
+    def _rfq_coverage_map(self, env_sudo, plan):
+        """Remaining need per plan line after live RFQs/POs.
+
+        Coverage is PRODUCT-based across every live (non-cancelled)
+        incoming document holding the product (user rule: the vendor
+        may change, what matters is whether the product sits on any
+        RFQ or PO). Two sources unite: plan-linked POs (any date) and
+        from-scratch manual POs opened at/after the plan's creation
+        (older documents predate the plan's netting and are ignored).
+        Cancelling a PO or lowering its qty re-opens the gap, so the
+        RFQ button comes back; moving a product into another RFQ
+        manually closes it.
+        The same product on several plan lines shares one pool,
+        allocated in line-id order, so coverage is never counted
+        twice. PO-line quantities are converted to the plan line's
+        UoM; entries that fail conversion are skipped (conservative:
+        the gap stays open).
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record.
+        @return: {plan_line_id: {'covered': float, 'remaining': float,
+            'covered_docs': [{'id': int, 'name': str}] (max 5),
+            'covered_total': int}} in the plan line's UoM.
+        """
+        entries = {}
+        po_docs = {}
+        linked_ids = set()
+
+        def _add(_pid, _qty, _uom, _poid, _poname):
+            if not _pid or not _uom:
+                return
+            try:
+                _q = float(_qty or 0.0)
+            except (TypeError, ValueError):
+                return
+            if _q <= 0.0:
+                return
+            entries.setdefault(_pid, []).append([_q, _uom])
+            if _poid:
+                _pd = po_docs.setdefault(_pid, {'docs': [],
+                                                'total': 0})
+                if _poid not in [_d[0] for _d in _pd['docs']]:
+                    _pd['docs'].append((_poid, _poname or ''))
+                    _pd['total'] += 1
+
+        for po in plan.purchase_order_ids:
+            if po.state == 'cancel':
+                continue
+            linked_ids.add(po.id)
+            for _pl in po.order_line:
+                # Section/note lines carry no product quantity.
+                if _pl.display_type:
+                    continue
+                if not _pl.product_id:
+                    continue
+                _add(_pl.product_id.id, _pl.product_qty,
+                     _pl.product_uom, po.id, po.name)
+        # Manual from-scratch POs are never linked to the plan, so
+        # they are found by date: anything opened at/after the plan's
+        # creation holding the same product covers the need.
+        if plan.create_date:
+            try:
+                _rows = env_sudo['purchase.order.line'].search_read(
+                    [('order_id.date_order', '>=', plan.create_date),
+                     ('order_id.state', '!=', 'cancel'),
+                     ('display_type', '=', False)],
+                    ['product_id', 'product_qty', 'product_uom',
+                     'order_id'])
+            except Exception:
+                _rows = []
+            _uids = {_r['product_uom'][0] for _r in (_rows or [])
+                     if _r.get('product_uom')}
+            try:
+                _uoms = {u.id: u for u in
+                         env_sudo['uom.uom'].browse(list(_uids))}
+            except Exception:
+                _uoms = {}
+            for _r in _rows or []:
+                _pid = (_r.get('product_id') or [False])[0]
+                _oid = (_r.get('order_id') or [False])[0]
+                if not _pid or _oid in linked_ids:
+                    continue
+                _uom = None
+                if _r.get('product_uom'):
+                    _uom = _uoms.get(_r['product_uom'][0])
+                _add(_pid, _r.get('product_qty'), _uom, _oid,
+                     (_r.get('order_id') or [False, ''])[1])
+        res = {}
+        by_product = {}
+        for _line in plan.line_ids:
+            by_product.setdefault(_line.product_id.id, []).append(
+                _line)
+        for _pid, _lines in by_product.items():
+            _lines = sorted(_lines, key=lambda l: l.id)
+            _pool_uom = (_lines[0].uom_id
+                         or _lines[0].product_id.uom_id)
+            _pool = 0.0
+            if _pool_uom:
+                for _qty, _uom in entries.get(_pid, []):
+                    try:
+                        _pool += _uom._compute_quantity(
+                            _qty, _pool_uom) if _uom else 0.0
+                    except Exception:
+                        continue
+            for _line in _lines:
+                _order = float(_line.order_qty or 0.0)
+                _take = 0.0
+                if _order > 1e-9 and _pool > 1e-9 \
+                        and _line.uom_id and _pool_uom:
+                    try:
+                        _avail = _pool_uom._compute_quantity(
+                            _pool, _line.uom_id)
+                    except Exception:
+                        _avail = 0.0
+                    _take = min(_order, max(_avail, 0.0))
+                    try:
+                        _pool -= _line.uom_id._compute_quantity(
+                            _take, _pool_uom)
+                    except Exception:
+                        _pool = 0.0
+                    _pool = max(_pool, 0.0)
+                _take = max(_take, 0.0)
+                res[_line.id] = {
+                    'covered': _take,
+                    'remaining': max(_order - _take, 0.0),
+                    'covered_docs': [
+                        {'id': _d[0], 'name': _d[1]} for _d in
+                        po_docs.get(_pid, {}).get('docs', [])[:5]],
+                    'covered_total': po_docs.get(_pid, {}).get(
+                        'total', 0),
+                }
+        return res
+
+    @api.model
     def get_supplier_summary(self, plan_id):
         """Tab 2 data: suppliers with PO-value estimate + production lines.
 
@@ -4110,6 +4243,10 @@ class MatiaProcurementPlan(models.Model):
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
+        # Live RFQ/PO coverage per plan line (product-based, any
+        # plan-linked non-cancelled PO counts). Drives the RFQ button
+        # visibility: a line with no remaining need is covered.
+        cov = self._rfq_coverage_map(env_sudo, plan)
         suppliers = {}
         unsourced = 0
         unpriced = 0
@@ -4184,6 +4321,14 @@ class MatiaProcurementPlan(models.Model):
                 'code': line.product_id.default_code or '',
                 'name': line.product_id.name or '',
                 'order_qty': line.order_qty,
+                'covered_qty': (cov.get(line.id) or {}).get(
+                    'covered', 0.0),
+                'remaining_qty': (cov.get(line.id) or {}).get(
+                    'remaining', _qty),
+                'covered_docs': (cov.get(line.id) or {}).get(
+                    'covered_docs', []),
+                'covered_total': (cov.get(line.id) or {}).get(
+                    'covered_total', 0),
                 'uom': _mpp_uom_en(
                     line.uom_id.name if line.uom_id else ''),
                 'route': line.route_type or 'unknown',
@@ -4234,6 +4379,12 @@ class MatiaProcurementPlan(models.Model):
                 'rfq_label': '%s RFQ' % (
                     'TR' if s['company'] == 'TR' else 'US') if sid else '',
                 'line_count': s['line_count'],
+                'open_line_count': sum(
+                    1 for r in s['lines']
+                    if (r['remaining_qty'] or 0.0) > 1e-9),
+                'covered_line_count': sum(
+                    1 for r in s['lines']
+                    if (r['remaining_qty'] or 0.0) <= 1e-9),
                 'total_usd': round(s['total_usd'], 2),
                 'rolled_total_usd': round(s['rolled_total_usd'], 2),
                 'unpriced_count': s['unpriced_count'],

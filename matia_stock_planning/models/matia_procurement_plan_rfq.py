@@ -108,21 +108,27 @@ class MatiaProcurementPlanRfq(models.Model):
         or from the manual purchase location when set: the draft PO
         is created in that company so the receipt lands in the right
         warehouse (WHTR vs WHUS).
+        Only the OPEN part of each line is grouped: quantities already
+        sitting on a live (non-cancelled) plan RFQ/PO — even manually
+        moved to another vendor's document — are covered and excluded
+        (see _rfq_coverage_map). A top-up RFQ therefore holds remaining
+        quantities only.
         @param plan: matia.procurement.plan record (sudo env).
         @return: (groups, skipped) where groups is a list of dicts
             {seller_id, seller_name, currency_id, currency_name,
-            company_id, company, lines, subtotal} and skipped counts
-            excluded lines by reason.
+            company_id, company, lines, qty_map, subtotal} and skipped
+            counts excluded lines by reason.
         """
         groups = {}
         skipped = {
             'make': 0, 'subcontract': 0, 'unknown': 0, 'zero_qty': 0,
-            'no_supplier': 0,
+            'no_supplier': 0, 'covered': 0,
         }
         env_sudo = plan.env
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
         overrides = _mpp_price_overrides(env_sudo)
+        cov = self._rfq_coverage_map(env_sudo, plan)
         for line in plan.line_ids:
             route = line.route_type or 'unknown'
             if route not in ('buy', 'subcontract'):
@@ -133,6 +139,11 @@ class MatiaProcurementPlanRfq(models.Model):
                 continue
             if not line.seller_id:
                 skipped['no_supplier'] += 1
+                continue
+            _rem = float((cov.get(line.id) or {}).get(
+                'remaining', line.order_qty) or 0.0)
+            if not _rem > 1e-9:
+                skipped['covered'] += 1
                 continue
             eff = self._rfq_line_eff(
                 env_sudo, usd, plan, line, overrides)
@@ -148,11 +159,12 @@ class MatiaProcurementPlanRfq(models.Model):
                 'company': self._mpp_company_code(
                     plan.env, comp_id),
                 'lines': [],
+                'qty_map': {},
                 'subtotal': 0.0,
             })
             bucket['lines'].append(line)
-            bucket['subtotal'] += (
-                (line.order_qty or 0.0) * eff['price'])
+            bucket['qty_map'][line.id] = _rem
+            bucket['subtotal'] += _rem * eff['price']
         return list(groups.values()), skipped
 
     def _rfq_plan(self, plan_id):
@@ -330,7 +342,8 @@ class MatiaProcurementPlanRfq(models.Model):
                 len(found) - 10))
         return res
 
-    def _rfq_bom_chatter(self, env_sudo, plan, po, lines):
+    def _rfq_bom_chatter(self, env_sudo, plan, po, lines,
+                            qty_map=None):
         """Post a BOM-detail note on a freshly created RFQ.
 
         Each ordered line is listed with its ordered quantity; when
@@ -348,11 +361,14 @@ class MatiaProcurementPlanRfq(models.Model):
         @param plan: matia.procurement.plan record.
         @param po: purchase.order record to post on.
         @param lines: plan line recordset ordered on this RFQ.
+        @param qty_map: optional {plan_line_id: ordered qty} (open
+            remainder; falls back to the line order_qty).
         @return: None.
         """
         items = []
         usage_parents, lines_by_pid = self._rfq_usage_map(plan)
         for line in lines:
+            _oqty = (qty_map or {}).get(line.id, line.order_qty)
             prod = line.product_id
             src_uom = (line.uom_id or prod.uom_id
                        or prod.uom_po_id)
@@ -365,7 +381,7 @@ class MatiaProcurementPlanRfq(models.Model):
                 _pname = '[%s] %s' % (_code, _pname)
             head = '%s - %s %s' % (
                 _pname,
-                self._rfq_fmt_qty(line.order_qty),
+                self._rfq_fmt_qty(_oqty),
                 src_uom_name)
             bom = self._rfq_find_bom(
                 env_sudo, prod, po.company_id.id)
@@ -373,9 +389,9 @@ class MatiaProcurementPlanRfq(models.Model):
             if bom:
                 try:
                     need = src_uom._compute_quantity(
-                        line.order_qty or 0.0, bom.product_uom_id)
+                        _oqty or 0.0, bom.product_uom_id)
                 except Exception:
-                    need = line.order_qty or 0.0
+                    need = _oqty or 0.0
                 factor = (need / bom.product_qty) if bom.product_qty \
                     else 0.0
                 for bl in bom.bom_line_ids:
@@ -433,11 +449,14 @@ class MatiaProcurementPlanRfq(models.Model):
             for line in grp['lines']:
                 _eff = self._rfq_line_eff(
                     env_sudo, usd, plan, line, overrides)
+                _rem = grp['qty_map'].get(line.id,
+                                           line.order_qty)
                 _plines.append({
                     'product_id': line.product_id.id,
                     'code': line.product_id.default_code or '',
                     'name': line.product_id.display_name,
-                    'order_qty': line.order_qty,
+                    'order_qty': _rem,
+                    'covered_qty': (line.order_qty or 0.0) - _rem,
                     'last_price': _eff['price'],
                     'last_currency': _eff['currency_name'],
                 })
@@ -500,8 +519,9 @@ class MatiaProcurementPlanRfq(models.Model):
         groups, skipped = self._rfq_groups(plan)
         if not groups:
             raise UserError(_(
-                'No RFQ-eligible lines: need buy lines with quantity '
-                'and an assigned supplier.'))
+                'No open lines: need buy lines with quantity and an '
+                'assigned supplier that are not already covered by an '
+                'RFQ or PO.'))
         # Incoming picking type per company (TR Receipts / US Receive),
         # so each PO's receipt lands in the right warehouse.
         pickings = {}
@@ -545,10 +565,12 @@ class MatiaProcurementPlanRfq(models.Model):
                     _conv = self._rfq_line_eff(
                         env_sudo, usd, plan, line,
                         overrides)['price']
+                    _rem = grp['qty_map'].get(line.id,
+                                              line.order_qty)
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,
-                        'product_qty': line.order_qty,
+                        'product_qty': _rem,
                         'product_uom': uom,
                         'price_unit': _conv,
                         'name': self._rfq_std_line_name(
@@ -559,10 +581,11 @@ class MatiaProcurementPlanRfq(models.Model):
                         'purchase_order_id': po.id,
                         'purchase_line_id': po_line.id,
                     })
-                    amount += ((line.order_qty or 0.0) * _conv)
+                    amount += (_rem * _conv)
                 try:
                     self._rfq_bom_chatter(
-                        env_sudo, plan, po, grp['lines'])
+                        env_sudo, plan, po, grp['lines'],
+                        grp['qty_map'])
                 except Exception:
                     _logger.warning(
                         'MPP BOM chatter failed for PO %s.', po.id)
@@ -624,8 +647,9 @@ class MatiaProcurementPlanRfq(models.Model):
                   and (not company_id or g['company_id'] == company_id)]
         if not groups:
             raise UserError(_(
-                'No RFQ-eligible lines for this supplier: need buy or '
-                'subcontract lines with quantity.'))
+                'No open lines for this supplier: need buy or '
+                'subcontract lines with quantity that are not already '
+                'covered by an RFQ or PO.'))
         company_id = groups[0]['company_id']
         groups = [g for g in groups
                   if g['company_id'] == company_id]
@@ -680,10 +704,12 @@ class MatiaProcurementPlanRfq(models.Model):
                     _conv2 = self._rfq_line_eff(
                         env_sudo, usd, plan, line,
                         overrides)['price']
+                    _rem2 = grp['qty_map'].get(line.id,
+                                               line.order_qty)
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,
-                        'product_qty': line.order_qty,
+                        'product_qty': _rem2,
                         'product_uom': uom,
                         'price_unit': _conv2,
                         'name': self._rfq_std_line_name(
@@ -694,11 +720,11 @@ class MatiaProcurementPlanRfq(models.Model):
                         'purchase_order_id': po.id,
                         'purchase_line_id': po_line.id,
                     })
-                    amount += ((line.order_qty or 0.0)
-                               * _conv2)
+                    amount += (_rem2 * _conv2)
                 try:
                     self._rfq_bom_chatter(
-                        env_sudo, plan, po, grp['lines'])
+                        env_sudo, plan, po, grp['lines'],
+                        grp['qty_map'])
                 except Exception:
                     _logger.warning(
                         'MPP BOM chatter failed for PO %s.', po.id)
