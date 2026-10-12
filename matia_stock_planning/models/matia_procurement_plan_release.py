@@ -29,6 +29,12 @@ _logger = logging.getLogger(__name__)
 class MatiaProcurementPlanRelease(models.Model):
     """Release state machine + lock + tracking entry points."""
 
+    # NOTE: _name is required explicitly with list-form _inherit. Without
+    # it Odoo builds a shadow new model named after this class, copying
+    # all stored fields incl. purchase_order_ids (same M2M table) -> the
+    # registry dies with "Many2many fields ... use the same table and
+    # columns" and every request 500s. Explicit _name forces extension.
+    _name = 'matia.procurement.plan'
     _inherit = ['matia.procurement.plan', 'mail.thread']
 
     release_state = fields.Selection([
