@@ -724,3 +724,10 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Hesap (salt-okunur, write metodu YOK): `matia.product.cost.get_cost_tree()` (combos.full + unit_map) + `matia.stock.planning.get_capacity_planning_data(include_tr=True, include_usa=True, dynamic_targets=[N])` (dynamic_needs[str(N)].val); brut=fullxN, net=SUM(top-level need_units x unit_usd). `fields_get` iki modelde de bos doner (AbstractModel, normal) - imzalar dosyadan dogrulandi; `web_quote.key` prod'da henuz yok (beklenen).
 - Dogrulama: `py_compile` OK; ORM write/create/unlink cagrisi YOK (grep temiz); secret taramasi temiz.
 - Deploy: Python VAR -> staging Git Deploy + restart (mesai disi + backup) + modul Upgrade; capraz kontrol (100 adet: brut=fullx100, net<=brut, Capacity dynamic_needs ile); prod SADECE staging yesil + kullanici onayi. Faz-2 (slot-write/gizleme) YAPILMADI.
+
+## Web Quote 500 duzeltmesi (2026-10-09, commit 2772a59 - staging deploy BEKLIYOR)
+
+- Belirti: `/web_quote` aciliyor ama Calculate -> "Request failed"; `/web_quote/quote` dogrudan HTML "Internal Server Error".
+- Kok neden (BENIM hatam, 15.0 kaynagindan dogrulandi): Odoo 15 `HttpRequest.make_response(data, headers, cookies)` imzasinda `status` parametresi YOK. `status=` vermek her JSON cevabinda TypeError'a yol aciyordu (basari yolu da dahil - try icinde patlayip except'teki ikinci `_json_response` disarida patliyordu) -> Odoo HTML 500. Kapasite sayfasi calistigi icin hesap saglamdi.
+- Cozum: response nesnesi donup `response.status_code = status` atanir (tum surumlerde gecerli desen). Dogrulama: py_compile OK; push main'e yapildi.
+- Deploy: controller-only Python degisikligi -> Git Deploy + restart YETERLI (modul Upgrade gerekmez); sonrasi staging'de qty=50 + key ile tekrar dene.

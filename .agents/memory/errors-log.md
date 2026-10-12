@@ -24,3 +24,4 @@
 2026-10-08 | [O15] edit-newline merge SyntaxError (procurement_export satir birlesmesi) | oldString sonundaki newline dustu, iki statement tek satira yapisip SyntaxError verdi -> edit sonrasi py_compile sart; cok-satirli anchor`da sondaki boslugu degistirme
 2026-10-09 | powershell inline-regex terminator hatasi | Regex icinde gomulu tirnak PowerShell parser'i bozdu -> Karmasik deseni grep tool'una birakip shell komutlarini basit tut
 2026-10-09 | [auto] APIError [403]: Upstream request failed: An active OpenCode Go subscription is required to use Go models. | kürate edilmedi -> /log-error ile işle
+2026-10-09 | web_quote make_response status kwarg -> HTML 500 + Request failed | Odoo 15 HttpRequest.make_response(data, headers, cookies) imzasinda status parametresi yok; status= vermek her JSON cevabinda TypeError'a yol acip Odoo 500 HTML sayfasi donduruyor -> Response nesnesi donup status_code sonradan atanir (tum surumlerde gecerli desen)
