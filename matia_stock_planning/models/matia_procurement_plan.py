@@ -4590,6 +4590,14 @@ class MatiaProcurementPlan(models.Model):
                     'origin': plan.name,
                     'procurement_group_id': group.id,
                 })
+                # API create() skips UI onchanges, so the MO would stay
+                # without components forever (action_confirm only confirms
+                # EXISTING moves, never generates them). Mirror Odoo's own
+                # import_file path: explode the BOM into raw/finished
+                # moves + workorders now, MO stays draft for manual Confirm.
+                mo._onchange_move_raw()
+                mo._onchange_move_finished()
+                mo._onchange_workorder_ids()
             except Exception as exc:
                 _logger.exception(
                     'MPP MO creation failed for line %s (%s).',
