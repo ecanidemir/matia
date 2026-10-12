@@ -851,3 +851,10 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Kok neden: silinen `procurement_plan_release_views.xml`'in 4 view'u (form_release inherit + tree_release inherit + 2 wizard formu) staging DB'de duruyordu; base form view reload'da `_inverse_arch` combined-arch'i bayat inherit ile birlestirip silinen metoda takildi. Odoo silinen dosya kayitlarini upgrade SONUNDA temizler, o faza gelinemedi. Basarisiz upgrade transactional -> DB kirlenmesi YOK (modul eski versiyonda kaldi).
 - Duzeltme: `views/procurement_plan_release_cleanup.xml` (search-tabanli 4x `<delete>`, fresh install'da no-op) manifest data sirasinda view dosyasindan ONCE; commit a55f299. KURAL: inherit view iceren XML dosyasi silinirse, ayni upgrade'te once `<delete>` cleanup sart (dosya silmek yetmez).
 - Not: CloudPepper checkout dizinindeki `6ab5064b9c4d3` bizim git SHA degil (ic dusum isimlendirme); icerik fb8d495 ile eslesiyor (metod yok + dosya yok).
+
+## Release Upgrade KeyError + Orphan-Selection SQL Cleanup (2026-10-12, staging, duzeltme push'landi - v15.0.2.10.2)
+
+- Belirti: view fixinden sonraki Upgrade `_process_end` fazinda `KeyError: 'matia.procurement.plan.tracking.line'` (`ir_model.py _process_ondelete` -> `self.env[selection.field_id.model]`).
+- Kok neden: silinen 4 transient modelin `ir.model.fields.selection` satirlari DB'de kalmis; GC onlari ORM ile unlink etmeye kalkinca registry'de olmayan modeli cozup patladi. `<delete>` ayni sebeple ise yaramazdi (o da ORM unlink kullanir).
+- Duzeltme: cleanup XML'e `<function model="matia.procurement.plan" name="_cleanup_release_transient_selection_rows"/>` + helper raw-SQL DELETE (JOIN ir_model_fields, 4 model adi sabit liste; fresh install'da 0 satir). KURAL: registry'den silinen modele ait DB satiri ORM ile silinemez -> once SQL ile kir, sonra upgrade GC'si devam eder.
+- Kaynak dogrulama: `github_search_code` ile odoo/odoo `ir_model.py::_process_ondelete` ("Process the 'ondelete' of the given selection values") teyit edildi.
