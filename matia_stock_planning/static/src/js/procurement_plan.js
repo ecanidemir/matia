@@ -2132,6 +2132,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 if (el && list.indexOf(el) < 0) list.push(el);
             };
             if (this.$el) {
+                // NOTE: the widget root itself is the scroller
+                // (overflow-y:auto in the scss). $() only matches
+                // DESCENDANTS, so when the class sits on $el the
+                // lookup below finds nothing — add $el explicitly,
+                // otherwise its position is never saved and every
+                // full re-render (RFQ/MO buttons) jumps to top.
+                add(this.$el[0]);
                 var $root = this.$('.o_matia_procurement_plan');
                 if ($root && $root.length) add($root[0]);
                 var $own = this.$el.closest('.o_content');

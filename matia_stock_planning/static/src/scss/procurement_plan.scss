@@ -544,3 +544,15 @@
         }
     }
 }
+
+/* Re-rendered supplier/production tables: full innerHTML replacement
+ * destroys Chrome's scroll anchor (the clicked row), which jumps the
+ * page to top after RFQ/MO actions. Disabling anchor heuristics here
+ * lets _preserveSupScroll (procurement_plan.js) own the position. */
+.o_matia_procurement_plan {
+    .mpp-sup-body,
+    .mpp-prod-body,
+    .mpp-sup-cards {
+        overflow-anchor: none;
+    }
+}
