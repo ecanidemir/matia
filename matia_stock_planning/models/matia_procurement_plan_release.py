@@ -469,10 +469,16 @@ class MatiaProcurementPlanRelease(models.Model):
         for line in plan.line_ids:
             po = line.purchase_order_id
             mo = line.mo_id
-            code, attn = line_tracking_status(
-                line.route_type or 'unknown',
-                po.state if po else None,
-                mo.state if mo else None)
+            if not (line.order_qty or 0.0) > 0:
+                # Zero-need line: nothing to order, never attention.
+                # (Otherwise fully-covered plans show a wall of red
+                # rows for lines that need nothing.)
+                code, attn = 'no_need', False
+            else:
+                code, attn = line_tracking_status(
+                    line.route_type or 'unknown',
+                    po.state if po else None,
+                    mo.state if mo else None)
             vals.append({
                 'plan_line_id': line.id,
                 'code': line.product_id.default_code or '',
