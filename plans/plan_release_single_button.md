@@ -14,6 +14,13 @@ Hedef: **eksik veya fazla satınalma** ve **mükerrer/eksik MO** oluşumunu pros
 
 ## 2. Karar: tek "Yayınla (Release)" butonu + snapshot + state machine
 
+> REVİZYON 2026-10-12 (kullanıcı düzeltmesi): Release, plan FORM view'unda
+> DEĞİL, Production Plan JS dashboard'unun içinde yaşar: sekmeler
+> `1. Plan > 2. Suppliers & Production > 3. Release`. Toplu RFQ/MO butonu
+> Suppliers sayfasındadır; önizleme + onay + takip 3. sekmededir.
+> Form view'daki Release UI tamamen kaldırıldı (tek giriş JS'tir).
+> Aşağıda "plan formu" yazan her yer "dashboard 3. sekme" demektir.
+
 Kullanıcı önerisi onaylandı — en sağlıklı yöntem budur. Gerekçe: hata, sıralama özgürlüğünden doğuyor;
 özgürlük kalkınca hata sınıfı ortadan kalkar. Uyarı dialog'ları ikinci savunma hattıdır (kliklenip geçilir).
 
@@ -31,9 +38,10 @@ Kullanıcı önerisi onaylandı — en sağlıklı yöntem budur. Gerekçe: hata
   Önerilen satırlar §2.7 Takip sayfasının "olması gereken" tarafıdır — manuel düzeltme/bölme sapması ancak bunlarla ölçülür.)
 - `release_doc_ids`: many2many/computed ile release'te yaratılan PO + MO listesi (checklist için).
 
-### 2.2 "Yayınla" wizard'ı (tek buton, `TransientModel`)
+### 2.2 "Yayınla" akışı (tek buton, dashboard 3. sekme)
 
-Buton: plan formunda `action_open_release_wizard`. Wizard adımları (tek ekranda önizleme + onayla):
+Giriş: Suppliers sayfasındaki toplu **"Release Et"** butonu → 3. sekmeyi açar.
+Buton: dashboard'ta `mpp-btn-release-open`; önizleme + onay 3. sekmede (tek ekran):
 
 1. Dahili taze rebuild (sessiz, snapshot amaçlı — kullanıcı rebuild'e basmaz, sistem basar).
 2. Önizleme: tedarikçi × ürün × miktar tablosu (RFQ taslakları) + yaratılacak MO listesi (taslak).
@@ -55,7 +63,7 @@ Buton: plan formunda `action_open_release_wizard`. Wizard adımları (tek ekrand
 
 ### 2.4 Release checklist (eksik belge avcısı)
 
-Plan formunda `released` iken checklist sekmesi: her release belgesi + durumu
+Dashboard 3. sekmede `released` iken checklist bölümü: her release belgesi + durumu
 (draft RFQ / purchase / done; draft MO / confirmed / done) + doğrudan link.
 Plan, tüm belgeler `purchase|done` + `confirmed|done` olana kadar `released` kalır;
 eksik onay varsa üstte uyarı bandı. Böylece "unutulan RFQ/MO" (eksik alım/üretim) ekranda bağırır.
@@ -76,7 +84,7 @@ planı `released` → revizyon-bekler bayrağına düşür. Odoo 15: `button_can
 
 ### 2.7 Takip sayfası (önerilen vs gerçekleşen — tedarikçi bazında sapma)
 
-Plan formunda yeni sekme: "Takip". Her satır = tedarikçi × ürün; kolonlar:
+Dashboard 3. sekmede yeni bölüm: "Takip". Her satır = tedarikçi × ürün; kolonlar:
 `önerilen (snapshot) | RFQ'da yazan (draft+purchase PO satırları) | gelen (done receipt) | MO durumu | sapma + kodu`.
 - **Manuel RFQ düzeltmesi görülür:** coverage haritası PO satırlarındaki GERÇEK `product_qty`'yi okuduğu için
   adet düşürme/artırma sayıya zaten yansır; Takip sayfası bunu `önerilen vs yazan` farkı olarak gösterir.
@@ -92,9 +100,9 @@ Plan formunda yeni sekme: "Takip". Her satır = tedarikçi × ürün; kolonlar:
 
 ### 2.8 Slot/plan kilidi (release süresince hedef değişimi engeli)
 
-Suppliers sayfasında Yayınla'ya basıldığında ilgili plan (ve bağlı slot/hedef seti) `locked_by_release` bayrağıyla kilitlenir:
-plan sayfasındaki hedef/target alanları `attrs="{'readonly': [('release_state','=','released')]}"` + server-side
-`write` override'da `ValidationError` (JS'yi atlayıp yazan olursa ikinci duvar).
+Suppliers sayfasında Yayınla'ya basıldığında ilgili plan (ve bağlı slot/hedef seti) `released` state'iyle kilitlenir:
+dashboard'ta Rebuild + satır RFQ/MO butonları gizlenir/pasifleşir (yerine "Revize için Aç" + Takip),
+server-side `write` override'da `target_json` yazımı `ValidationError` verir (JS'yi atlayıp yazan olursa ikinci duvar).
 Kilit varken hedef değiştirilemez → "ihtiyaç belirlendikten sonra planın kayması" sınıfı hatalar biter.
 Kaçış kapağı (kilitlenip kalma YOK): "Release'i Geri Al" butonu (gerekçe zorunlu, chatter'a işlenir) →
 `release_state='draft'`, snapshot revizyon arşivine kalkar, yaratılmış taslak belgeler yerinde durur
@@ -102,7 +110,10 @@ Kaçış kapağı (kilitlenip kalma YOK): "Release'i Geri Al" butonu (gerekçe z
 
 ## 3. Odoo 15 uyum notları (skill: odoo-15 — ihlal YASAK)
 
-- View'lar `<tree>` (asla `<list>`); yeni checklist sekmesi form + tree.
+- View'lar `<tree>` (asla `<list>`); form view'da Release UI YOK (tamamen kaldırıldı);
+  Release/takip UI dashboard JS'tedir (`static/src/xml/procurement_plan.xml` + `procurement_plan.js`).
+  Dashboard ↔ server köprüsü: `get_release_preview` / `action_release_confirm` /
+  `get_release_tracking` RPC'leri (`matia.procurement.plan` üzerinde, JSON-serializable dict döner).
 - Güvenlik: `category_id` tabanlı grup; yeni wizard (Transient) için `ir.model.access.csv` satırı;
   manifest `data` sırası: security → wizard → views.
 - Kısıt: `_sql_constraints` (gerekirse release snapshot benzersizliği için); `models.Constraint` YOK.

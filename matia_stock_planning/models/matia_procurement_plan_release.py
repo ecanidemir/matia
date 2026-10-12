@@ -106,87 +106,22 @@ class MatiaProcurementPlanRelease(models.Model):
                 % (plan.released_rev, self.env.user.display_name))
         return True
 
-    def action_open_release_wizard(self):
-        """Open the single-button release wizard for this plan.
-
-        @return: act_window opening matia.procurement.plan.release.wizard.
-        """
-        self.ensure_one()
-        if self.release_state in ('released', 'closed'):
-            raise UserError(_(
-                'Plan is already released. Open it for revision first '
-                'to release again.'))
-        if not self.line_ids:
-            raise UserError(_(
-                'Nothing to release: explode and net the plan first.'))
-        return {
-            'type': 'ir.actions.act_window',
-            'name': _('Release: %s') % self.name,
-            'res_model': 'matia.procurement.plan.release.wizard',
-            'view_mode': 'form',
-            'target': 'new',
-            'context': {
-                'default_plan_id': self.id,
-                'default_mode': 'update',
-            },
-        }
-
-    def action_open_tracking(self):
-        """Open the live tracking screen for this plan.
-
-        @return: act_window opening matia.procurement.plan.tracking.
-        """
-        self.ensure_one()
-        return {
-            'type': 'ir.actions.act_window',
-            'name': _('Tracking: %s') % self.name,
-            'res_model': 'matia.procurement.plan.tracking',
-            'view_mode': 'form',
-            'target': 'new',
-            'context': {'default_plan_id': self.id},
-        }
-
-
-class MatiaProcurementPlanReleaseWizard(models.TransientModel):
-    """Single-button release wizard (preview + confirm)."""
-
-    _name = 'matia.procurement.plan.release.wizard'
-    _description = 'Matia Plan Single-Button Release Wizard'
-
-    plan_id = fields.Many2one(
-        'matia.procurement.plan', required=True, readonly=True)
-    mode = fields.Selection([
-        ('update', 'Update existing draft RFQs'),
-        ('create', 'Always create new RFQs'),
-    ], default='update', required=True,
-        help='Update reuses the matching draft RFQ per supplier '
-             'group and only opens a new RFQ where none qualifies. '
-             'MO lines selected below are always deduped by origin.')
-    summary = fields.Text(readonly=True)
-    line_ids = fields.One2many(
-        'matia.procurement.plan.release.wizard.line', 'wizard_id',
-        string='Open lines')
+    # ---- Dashboard (JS) RPCs: JSON-serializable dicts, explicit plan_id
+    # (@api.model like action_create_mos, so the JS client calls them
+    # with [plan_id, ...] without recordset-dispatch ambiguity). ----
 
     @api.model
-    def default_get(self, fields_list):
-        """Prefill summary + one wizard line per open plan line.
+    def _release_preview_data(self, plan):
+        """Shared preview computation (wizard default_get + JS RPC).
 
-        RFQ-side selection is intentionally plan-wide: RFQ creation is
-        coverage-aware and idempotent (update mode only touches draft
-        RFQs), so per-line RFQ exclusion would silently under-order.
-        The include flag applies to MO lines.
-        @param fields_list: fields to fill.
-        @return: defaults dict.
+        RFQ-side selection is intentionally plan-wide (see wizard
+        default_get docstring); the include flag applies to MO lines.
+        @param plan: matia.procurement.plan record (sudo env).
+        @return: (lines, summary_text, counts) where lines is a list of
+            plain dicts (plan_line_id, product_name, qty, route, kind,
+            detail, include).
         """
-        res = super(MatiaProcurementPlanReleaseWizard,
-                    self).default_get(fields_list)
-        plan_id = res.get('plan_id')
-        if not plan_id:
-            return res
         env_sudo = _mpp_env_sudo(self)
-        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
-        if not plan.exists():
-            return res
         mpp = self.env['matia.procurement.plan']
         groups, skipped = mpp._rfq_groups(plan)
         cov = mpp._rfq_coverage_map(env_sudo, plan)
@@ -197,7 +132,7 @@ class MatiaProcurementPlanReleaseWizard(models.TransientModel):
                 rem = float((cov.get(line.id) or {}).get(
                     'remaining', line.order_qty) or 0.0)
                 if rem > 1e-9:
-                    lines.append((0, 0, {
+                    lines.append({
                         'plan_line_id': line.id,
                         'product_name':
                             line.product_id.display_name or '',
@@ -207,41 +142,78 @@ class MatiaProcurementPlanReleaseWizard(models.TransientModel):
                         'detail': line.seller_id.display_name or _(
                             'No supplier'),
                         'include': True,
-                    }))
+                    })
             elif route == 'make' and (line.order_qty or 0.0) > 0 \
                     and not line.mo_id:
-                lines.append((0, 0, {
+                lines.append({
                     'plan_line_id': line.id,
-                    'product_name': line.product_id.display_name or '',
+                    'product_name':
+                        line.product_id.display_name or '',
                     'qty': float(line.order_qty),
                     'route': route,
                     'kind': 'mo',
                     'detail': line.product_id.default_code or '',
                     'include': True,
-                }))
-        res['summary'] = _(
+                })
+        summary = _(
             '%d RFQ group(s), %d open line(s) shown, %d skipped '
             '(covered/no supplier/zero qty/make-with-MO). '
             '%d draft RFQ(s), %d MO(s) already linked to the plan.')
-        res['summary'] = res['summary'] % (
+        summary = summary % (
             len(groups), len(lines), sum(skipped.values()),
             len(plan.purchase_order_ids), len(plan.mo_ids))
-        res['line_ids'] = lines
-        return res
+        counts = {
+            'groups': len(groups),
+            'skipped': sum(skipped.values()),
+            'draft_rfqs': len(plan.purchase_order_ids),
+            'mos': len(plan.mo_ids),
+        }
+        return lines, summary, counts
 
-    def action_confirm_release(self):
-        """Create RFQs + MOs, stamp the snapshot, lock, open tracking.
+    @api.model
+    def get_release_preview(self, plan_id):
+        """Release preview for the dashboard (tab 3).
 
-        @return: act_window opening the tracking screen.
+        @param plan_id: plan id.
+        @return: dict with release_state/released_rev/needs_revision,
+            summary text, counts and open lines.
         """
-        self.ensure_one()
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        lines, summary, counts = self._release_preview_data(plan)
+        return {
+            'plan_id': plan.id,
+            'release_state': plan.release_state,
+            'released_rev': plan.released_rev or 0,
+            'needs_revision': bool(plan.needs_revision),
+            'summary': summary,
+            'group_count': counts['groups'],
+            'skipped_count': counts['skipped'],
+            'draft_rfq_count': counts['draft_rfqs'],
+            'mo_count': counts['mos'],
+            'lines': lines,
+        }
+
+    @api.model
+    def action_release_confirm(self, plan_id, mode='update',
+                               include_mo_line_ids=None):
+        """Confirm a release from the dashboard (no wizard record).
+
+        @param plan_id: plan id.
+        @param mode: 'update' (reuse matching draft RFQs) or 'create'.
+        @param include_mo_line_ids: plan line ids to manufacture
+            (MO-side include flags from the preview; RFQ side is always
+            plan-wide). Intersected with eligible make lines server-side.
+        @return: dict with rev + created/updated/relinked name lists.
+        """
         if not _mpp_can_create_docs(self):
             raise AccessError(_(
                 'Only administrators can release a plan.'))
         mpp = self.env['matia.procurement.plan']
         env_sudo = _mpp_env_sudo(self)
-        plan = env_sudo['matia.procurement.plan'].browse(
-            int(self.plan_id.id))
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists() or not plan.line_ids:
             raise UserError(_('Plan has no lines to release.'))
         if plan.release_state in ('released', 'closed'):
@@ -251,17 +223,29 @@ class MatiaProcurementPlanReleaseWizard(models.TransientModel):
         groups, skipped = mpp._rfq_groups(plan)
         if groups:
             rfq_res = mpp.action_create_draft_rfqs(
-                plan.id, confirm=True, mode=self.mode or 'update')
+                plan.id, confirm=True, mode=mode or 'update')
         else:
             rfq_res = {'created': [], 'updated': [],
                        'skipped': skipped}
-        mo_line_ids = self.line_ids.filtered(
-            lambda w: w.kind == 'mo' and w.include).mapped(
-            'plan_line_id.id')
+        wanted = set(int(x) for x in (include_mo_line_ids or []))
+        mo_line_ids = plan.line_ids.filtered(
+            lambda l: l.id in wanted and l.route_type == 'make'
+            and (l.order_qty or 0.0) > 0 and not l.mo_id).ids
         if mo_line_ids:
             mo_res = mpp.action_create_mos(plan.id, line_ids=mo_line_ids)
         else:
             mo_res = {'created': [], 'relinked': [], 'skipped': []}
+
+        def _names(items):
+            out = []
+            for item in (items or []):
+                if isinstance(item, dict):
+                    out.append(item.get('name') or
+                               '#%s' % item.get('id'))
+                else:
+                    out.append(str(item))
+            return out
+
         rfq_summary = {
             'created': rfq_res.get('created') or [],
             'updated': rfq_res.get('updated') or [],
@@ -292,74 +276,122 @@ class MatiaProcurementPlanReleaseWizard(models.TransientModel):
                'rfq': len(rfq_summary['created']),
                'upd': len(rfq_summary['updated']),
                'mo': len(mo_summary['created']),
-               'rel': len(mo_summary['relinked'])})
-        return plan.action_open_tracking()
-
-
-class MatiaProcurementPlanReleaseWizardLine(models.TransientModel):
-    """One open plan line inside the release wizard."""
-
-    _name = 'matia.procurement.plan.release.wizard.line'
-    _description = 'Matia Plan Release Wizard Line'
-
-    wizard_id = fields.Many2one(
-        'matia.procurement.plan.release.wizard', required=True,
-        ondelete='cascade')
-    plan_line_id = fields.Many2one(
-        'matia.procurement.plan.line', readonly=True)
-    product_name = fields.Char(readonly=True)
-    qty = fields.Float(readonly=True)
-    route = fields.Char(readonly=True)
-    kind = fields.Selection(
-        [('rfq', 'RFQ'), ('mo', 'MO')], readonly=True)
-    detail = fields.Char(readonly=True)
-    include = fields.Boolean(
-        default=True,
-        help='Only MO lines honour this flag: excluded MO lines '
-             'are not manufactured by this release.')
-
-
-class MatiaProcurementPlanTracking(models.TransientModel):
-    """Live per-line document tracking screen for a plan."""
-
-    _name = 'matia.procurement.plan.tracking'
-    _description = 'Matia Plan Release Tracking'
-
-    plan_id = fields.Many2one(
-        'matia.procurement.plan', required=True, readonly=True)
-    attention_only = fields.Boolean(
-        string='Only lines needing attention')
-    line_ids = fields.One2many(
-        'matia.procurement.plan.tracking.line', 'wizard_id',
-        string='Lines')
+                'rel': len(mo_summary['relinked'])})
+        return {
+            'rev': rev,
+            'rfq_created': _names(rfq_summary['created']),
+            'rfq_updated': _names(rfq_summary['updated']),
+            'mo_created': _names(mo_summary['created']),
+            'mo_relinked': _names(mo_summary['relinked']),
+        }
 
     @api.model
-    def default_get(self, fields_list):
-        """Snapshot all plan lines with live document states.
+    def get_release_tracking(self, plan_id, attention_only=False):
+        """Live per-line tracking data for the dashboard (tab 3).
 
-        @param fields_list: fields to fill.
-        @return: defaults dict.
+        @param plan_id: plan id.
+        @param attention_only: only return attention lines.
+        @return: dict with release_state/released_rev/needs_revision,
+            parsed snapshot header and tracking lines.
         """
-        res = super(MatiaProcurementPlanTracking,
-                    self).default_get(fields_list)
-        plan_id = res.get('plan_id')
-        if not plan_id:
-            return res
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
-            return res
-        res['line_ids'] = self._tracking_lines(plan)
-        return res
+            raise UserError(_('Plan not found.'))
+        lines = self._release_tracking_lines_vals(plan)
+        if attention_only:
+            lines = [l for l in lines if l.get('attention')]
+        snapshot = {}
+        if plan.release_snapshot:
+            try:
+                snapshot = json.loads(plan.release_snapshot)
+            except ValueError:
+                snapshot = {}
+        return {
+            'plan_id': plan.id,
+            'release_state': plan.release_state,
+            'released_rev': plan.released_rev or 0,
+            'needs_revision': bool(plan.needs_revision),
+            'snapshot': snapshot,
+            'attention_count': sum(1 for l in lines
+                                   if l.get('attention')),
+            'line_count': len(lines),
+            'lines': lines,
+        }
 
     @api.model
-    def _tracking_lines(self, plan):
-        """Build O2M commands for every plan line.
+    def action_release_confirm_docs(self, plan_id):
+        """Confirm all draft plan RFQs (dashboard tracking button).
+
+        Per-PO errors are collected, never abort the batch; the summary
+        is posted to the plan chatter.
+        @param plan_id: plan id.
+        @return: dict with confirmed/failed name lists.
+        """
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can confirm RFQs.'))
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        ok, failed = [], []
+        for po in plan.purchase_order_ids.filtered(
+                lambda p: p.state == 'draft'):
+            try:
+                env_sudo['purchase.order'].browse(po.id).button_confirm()
+                ok.append(po.name)
+            except Exception as exc:
+                _logger.warning(
+                    'MPP dashboard confirm failed for %s: %s',
+                    po.name, exc)
+                failed.append('%s (%s)' % (po.name, exc))
+        self.env['matia.procurement.plan'].browse(plan.id).message_post(
+            body=_(
+                'Dashboard confirm by %s: %d RFQ(s) confirmed%s%s.')
+            % (self.env.user.display_name, len(ok),
+               '; failed: ' + ', '.join(failed) if failed else '',
+               ': ' + ', '.join(ok) if ok else ''))
+        return {'confirmed': ok, 'failed': failed}
+
+    @api.model
+    def action_release_unrelease(self, plan_id):
+        """Dashboard wrapper for action_unrelease (unlock for revision).
+
+        @param plan_id: plan id.
+        @return: True.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        plan.action_unrelease()
+        return True
+
+    @api.model
+    def action_release_close(self, plan_id):
+        """Dashboard wrapper for action_close_release.
+
+        @param plan_id: plan id.
+        @return: True.
+        """
+        env_sudo = _mpp_env_sudo(self)
+        plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
+        if not plan.exists():
+            raise UserError(_('Plan not found.'))
+        plan.action_close_release()
+        return True
+
+    @api.model
+    def _release_tracking_lines_vals(self, plan):
+        """Plain-dict tracking lines for the dashboard (tab 3).
 
         @param plan: matia.procurement.plan record (sudo env).
-        @return: list of (0, 0, vals) commands.
+        @return: list of dicts (plan_line_id, code, product_name, qty,
+            route, rfq_name, rfq_state, mo_name, mo_state, status,
+            attention, selected).
         """
-        cmds = []
+        vals = []
         for line in plan.line_ids:
             po = line.purchase_order_id
             mo = line.mo_id
@@ -367,7 +399,7 @@ class MatiaProcurementPlanTracking(models.TransientModel):
                 line.route_type or 'unknown',
                 po.state if po else None,
                 mo.state if mo else None)
-            cmds.append((0, 0, {
+            vals.append({
                 'plan_line_id': line.id,
                 'code': line.product_id.default_code or '',
                 'product_name': line.product_id.display_name or '',
@@ -380,133 +412,5 @@ class MatiaProcurementPlanTracking(models.TransientModel):
                 'status': code,
                 'attention': attn,
                 'selected': True,
-            }))
-        return cmds
-
-    @api.onchange('attention_only')
-    def _onchange_attention_only(self):
-        """Filter the lines tree to attention lines when asked.
-
-        @return: domain dict for line_ids (or empty).
-        """
-        if self.attention_only:
-            return {'domain': {'line_ids': [('attention', '=', True)]}}
-        return {'domain': {'line_ids': []}}
-
-    def action_refresh(self):
-        """Rebuild the lines snapshot from live document states.
-
-        @return: act_window reopening this tracking screen.
-        """
-        self.ensure_one()
-        env_sudo = _mpp_env_sudo(self)
-        plan = env_sudo['matia.procurement.plan'].browse(
-            int(self.plan_id.id))
-        cmds = self._tracking_lines(plan)
-        self.line_ids.unlink()
-        self.write({'line_ids': cmds})
-        return {
-            'type': 'ir.actions.act_window',
-            'name': _('Tracking: %s') % plan.name,
-            'res_model': 'matia.procurement.plan.tracking',
-            'res_id': self.id,
-            'view_mode': 'form',
-            'target': 'new',
-        }
-
-    def action_tracking_send(self):
-        """Confirm selected draft RFQs (draft -> purchase order).
-
-        Per-PO errors are collected, never abort the batch: the
-        summary is posted to the plan chatter.
-        @return: refreshed tracking screen.
-        """
-        self.ensure_one()
-        if not _mpp_can_create_docs(self):
-            raise AccessError(_(
-                'Only administrators can confirm RFQs.'))
-        env_sudo = _mpp_env_sudo(self)
-        ok, failed = [], []
-        for tline in self.line_ids.filtered('selected'):
-            line = tline.plan_line_id
-            po = line.purchase_order_id
-            if not po or po.state != 'draft':
-                continue
-            try:
-                env_sudo['purchase.order'].browse(
-                    po.id).button_confirm()
-                ok.append(po.name)
-            except Exception as exc:
-                _logger.warning(
-                    'MPP tracking confirm failed for %s: %s',
-                    po.name, exc)
-                failed.append('%s (%s)' % (po.name, exc))
-        plan = env_sudo['matia.procurement.plan'].browse(
-            int(self.plan_id.id))
-        self.env['matia.procurement.plan'].browse(plan.id).message_post(
-            body=_(
-                'Tracking confirm by %s: %d RFQ(s) confirmed%s%s.')
-            % (self.env.user.display_name, len(ok),
-               '; failed: ' + ', '.join(failed) if failed else '',
-               ': ' + ', '.join(ok) if ok else ''))
-        return self.action_refresh()
-
-    def action_tracking_unrelease(self):
-        """Open the plan for revision from the tracking screen.
-
-        @return: refreshed tracking screen.
-        """
-        self.ensure_one()
-        env_sudo = _mpp_env_sudo(self)
-        plan = env_sudo['matia.procurement.plan'].browse(
-            int(self.plan_id.id))
-        plan.action_unrelease()
-        return self.action_refresh()
-
-    def action_tracking_close(self):
-        """Close the release from the tracking screen.
-
-        @return: refreshed tracking screen.
-        """
-        self.ensure_one()
-        env_sudo = _mpp_env_sudo(self)
-        plan = env_sudo['matia.procurement.plan'].browse(
-            int(self.plan_id.id))
-        plan.action_close_release()
-        return self.action_refresh()
-
-
-class MatiaProcurementPlanTrackingLine(models.TransientModel):
-    """One tracked plan line (live document states snapshot)."""
-
-    _name = 'matia.procurement.plan.tracking.line'
-    _description = 'Matia Plan Release Tracking Line'
-
-    wizard_id = fields.Many2one(
-        'matia.procurement.plan.tracking', required=True,
-        ondelete='cascade')
-    plan_line_id = fields.Many2one(
-        'matia.procurement.plan.line', readonly=True)
-    code = fields.Char(readonly=True)
-    product_name = fields.Char(readonly=True)
-    qty = fields.Float(readonly=True)
-    route = fields.Char(readonly=True)
-    rfq_name = fields.Char(readonly=True)
-    rfq_state = fields.Char(readonly=True)
-    mo_name = fields.Char(readonly=True)
-    mo_state = fields.Char(readonly=True)
-    status = fields.Selection([
-        ('no_rfq', 'No RFQ'),
-        ('rfq_draft', 'RFQ draft'),
-        ('rfq_sent', 'RFQ sent'),
-        ('po_confirmed', 'PO confirmed'),
-        ('po_cancelled', 'PO cancelled'),
-        ('no_mo', 'No MO'),
-        ('mo_draft', 'MO draft'),
-        ('mo_open', 'MO open'),
-        ('mo_done', 'MO done'),
-        ('mo_cancelled', 'MO cancelled'),
-        ('unknown', 'Unknown'),
-    ], readonly=True)
-    attention = fields.Boolean(readonly=True)
-    selected = fields.Boolean(default=True)
+            })
+        return vals

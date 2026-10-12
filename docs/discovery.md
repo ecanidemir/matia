@@ -830,3 +830,17 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - MO dedup: ayni origin+product+company'de iptal-olmayan MO varsa `action_create_mos` yeniden uretmek yerine relink eder (`relinked` key; eski satirda `_rfq_coverage_map` rebuild sonrasi link kaybi = mukerrer MO riski vardi). JS sayac `created+relinked`.
 - Pure helperlar stdlib-only `models/mpp_release_common.py` (line_tracking_status + snapshot builder); reviewer uyarilari kapatildi (view'da release_state readonly, chatter USER-env, confirm= yikici butonlarda).
 - Deploy: Python var -> Git Deploy + servis restart (mesai disi + öncesi backup) + modul Upgrade. Version 15.0.2.9.0.
+
+## Release Staging 500 + _name Hotfix (2026-10-12, staging, cozuldu - v15.0.2.9.1)
+
+- Belirti: CloudPepper update+restart sonrasi staging Internal Server Error; /xmlrpc/2/common version + TUM /object cagrilari 500 (canli saglikliydi).
+- Kok neden: `MatiaProcurementPlanRelease` sinifi `_name` OLMADAN liste-form `_inherit` (['matia.procurement.plan','mail.thread']) kullaniyordu; Odoo sinif adinda golge (shadow) yeni model kurup tum stored alanlari (purchase_order_ids M2M, relation matia_proc_plan_po_rel) aynen kopyaladi -> ayni tablo+kolon carpismasi -> registry hic kurulamadi (traceback setup_models/setup_nonrelated asamasi). KURAL: liste-form `_inherit` kullanan her sinifa explicit `_name = 'matia.procurement.plan'` yaz (tek satirlik _inherit string formu bu riske girmez).
+- Duzeltme: explicit _name + NOTE comment + manifest 15.0.2.9.1; commit 655b359 push'landi; DB kirlenmesi YOK (hata memory registry fazinda, upgrade DB yazamadi). Ilk push denemesi GitHub 'fatal error in commit_refs' verdi, retry tuttu.
+- Teshis sirasi: MCP config saglam mi (list_instances/health_check) -> canli saglikli mi (evetse sorun hedefe ozel) -> panel logundaki traceback'i TAM oku.
+
+## Release E2E Staging (2026-10-12, plan 30, 17/17 PASS - v15.0.2.9.1)
+
+- Script `scratch/e2e_release.py --staging --apply` (stdlib xmlrpc): T0 deploy+baseline, T1 wizard preview (399 acik satir) + confirm -> rev2 (34 RFQ + 119 MO), snapshot==belge eslesmesi, chatter yazar dogru; T6 cift-tik engelli; T3 rebuild kilitli; T5 cancel -> needs_revision + chatter; T4 sever+re-release rev3 relink (WHTR/MO/26-00017, newMO yok); tracking probe 960 satir/193 attention; cleanup: 35 test PO cancel+unlink, 119 test MO unlink -> plan 30 bazinda (62 PO, 3 MO, draft, rev=3 sayaci kaldi - zararsiz).
+- Odoo quirk (bizim kod DEGIL): standart `purchase.order button_cancel` None doner -> odoobulut XML-RPC 'cannot marshal None' Fault verir; Fault response'ta olur, cancel COMMIT olur. Test: Fault tolerate et + state re-read ile dogrula.
+- Script dersleri: execute_kw'de args/kwargs POZISYONEL (`[ids]` tek katman; cift katman 'unhashable list'); transient `create(vals)` default_get'i BYPASS eder -> wizard'lari `[{}]` + `{'context': {'default_plan_id': ..}}` ile ac; snapshot created/updated/relinked girdileri dict (id+name+...) -> karsilastirmada id cikar.
+- Bilinen aciklar (plana gore): released'da eski satir-butonlar gizlenmiyor (sadece yeni butonlarda attrs); §2.3 revizyon-delta akisi yok (unrelease duz kilit-acma); §2.7 gelismis takip kodlari yok (sadece baz status); 2 bos-body mail.message (sebebi belirsiz, minor).

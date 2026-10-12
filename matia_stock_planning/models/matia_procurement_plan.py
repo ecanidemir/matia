@@ -4455,6 +4455,13 @@ class MatiaProcurementPlan(models.Model):
             'plan_id': plan.id,
             'plan_name': plan.name,
             'state': plan.state,
+            # Release lock (dashboard tab 3 + suppliers bulk button):
+            # released plans hide Rebuild/row RFQ-MO buttons client-side;
+            # the write() guard in matia_procurement_plan_release.py
+            # enforces the same lock server-side.
+            'release_state': plan.release_state,
+            'released_rev': plan.released_rev or 0,
+            'needs_revision': bool(plan.needs_revision),
             # Drives the client-side RFQ/MO button visibility (admins
             # only). Read from the CALLER env: the sudo env would be
             # True for everybody. Server methods enforce this too.
@@ -4495,6 +4502,10 @@ class MatiaProcurementPlan(models.Model):
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
+        if plan.release_state in ('released', 'closed'):
+            raise UserError(_(
+                'Plan is released and locked. Open it for revision '
+                'first, then create manufacturing orders.'))
         lines = plan.line_ids.filtered(
             lambda l: l.route_type == 'make'
             and (l.order_qty or 0) > 0)

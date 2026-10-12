@@ -720,6 +720,10 @@ class MatiaProcurementPlanRfq(models.Model):
                 'Only administrators can create draft RFQs.'))
         mode = 'update' if mode == 'update' else 'create'
         env_sudo, plan = self._rfq_plan(plan_id)
+        if plan.release_state in ('released', 'closed'):
+            raise UserError(_(
+                'Plan is released and locked. Open it for revision '
+                'first, then create RFQs.'))
         existing = plan.purchase_order_ids
         if existing and not confirm:
             return {
@@ -881,6 +885,10 @@ class MatiaProcurementPlanRfq(models.Model):
                 'Only administrators can create draft RFQs.'))
         mode = 'update' if mode == 'update' else 'create'
         env_sudo, plan = self._rfq_plan(plan_id)
+        if plan.release_state in ('released', 'closed'):
+            raise UserError(_(
+                'Plan is released and locked. Open it for revision '
+                'first, then create RFQs.'))
         try:
             seller_id = int(seller_id)
         except (TypeError, ValueError):

@@ -8,12 +8,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         require('matia_stock_planning.export_popup');
     var _t = core._t;
 
-    // Production Plan dashboard: 2 tabs in ONE client action (no navigation).
+    // Production Plan dashboard: 3 tabs in ONE client action (no navigation).
     // Tab 1 (Plan): every BOM top lists directly with its TR/US unreserved
     // stock, an editable Needed number and the netted tree below it
     // (TR+US combined netting). Needed numbers persist on the plan record,
     // so the last plan reloads on open. Tab 2: suppliers with estimated
-    // USD + production (RFQ/MO creation).
+    // USD + production (RFQ/MO creation). Tab 3 (Release): single-button
+    // release (preview + confirm all at once) and frozen tracking.
     var ProcurementPlanDashboard = AbstractAction.extend({
         template: 'MatiaProcurementPlan.Dashboard',
         events: {
@@ -42,6 +43,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-sup-name': '_onSupToggle',
             'click .mpp-po-link': '_onOpenPo',
             'click .mpp-btn-sup-group-toggle': '_onSupGroupToggle',
+            'click .mpp-btn-release-open': '_onReleaseOpen',
+            'click .mpp-btn-release-confirm': '_onReleaseConfirm',
+            'click .mpp-btn-release-confirm-docs': '_onReleaseConfirmDocs',
+            'click .mpp-btn-release-refresh': '_onReleaseRefresh',
+            'change .mpp-rel-attention': '_onReleaseRefresh',
+            'click .mpp-btn-release-unrelease': '_onReleaseUnrelease',
+            'click .mpp-btn-release-close': '_onReleaseClose',
+            'click .mpp-btn-release-goto-sup': '_onReleaseGotoSup',
+            'click .mpp-btn-release-retry': '_onReleaseOpen',
         },
 
         init: function (parent, action) {
@@ -76,6 +86,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             // Admin gate for RFQ/MO buttons (server sends can_create_docs
             // with every supplier summary; server enforces it too).
             this.canCreateDocs = false;
+            // Single-button release state (tab 3): preview/tracking
+            // payload cache + released/closed lock flag (server sends
+            // release_state with every supplier summary).
+            this.releaseData = null;
+            this.planLocked = false;
             this.pendingRfqSeller = null;
             this.pendingRfqUpdatable = null;
             this.expandedSup = {};
@@ -127,6 +142,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 } else {
                     this.classList.remove('active');
                 }
+                this.setAttribute('aria-selected',
+                    t === n ? 'true' : 'false');
             });
             this.$('.mpp-pane').each(function () {
                 var t = parseInt(this.dataset.pane, 10);
@@ -139,12 +156,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             // Cost cards live inside pane 1, so they follow the pane.
             if (n === 1) this._renderTree();
             if (n === 2) this._renderSup();
+            if (n === 3) this._renderRelease();
         },
 
         _onNavTab: function (ev) {
             ev.preventDefault();
             var n = parseInt(ev.currentTarget.dataset.tab, 10) || 1;
-            if (n === 2) {
+            if (n === 2 || n === 3) {
                 if (!this.summary) {
                     this.displayNotification({
                         title: _t('Warning'),
@@ -153,8 +171,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     });
                     return;
                 }
-                this._showTab(2);
-                if (!this.supSummary) this._fetchSupSummary();
+                this._showTab(n);
+                if (n === 2 && !this.supSummary) this._fetchSupSummary();
+                if (n === 3 && !this.releaseData) this._onReleaseOpen();
                 return;
             }
             this._showTab(n);
@@ -291,6 +310,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.subCache = {};
             this.collapsedGroups = {};
             this.supSummary = null;
+            this.releaseData = null;
+            this.planLocked = false;
             this.pendingRfqSeller = null;
             this.pendingRfqUpdatable = null;
             this.expandedSup = {};
@@ -350,6 +371,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 this._renderSlotBar();
                 this._updateRebuildBtn();
                 this._renderCostKpis();
+                this._updateLockUi();
             }
         },
 
@@ -460,9 +482,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                                 '.',
                             type: 'success',
                         });
-                    }, function (err) {
-                        self._notifyErr(err);
-                    });
+            }, function (err) {
+                self._notifyErr(err);
+            });
             };
             if (entry && entry.plan_id &&
                     (slot !== this.activeSlot ||
@@ -490,6 +512,16 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 this.displayNotification({
                     title: _t('Warning'),
                     message: _t('The plan is still loading.'),
+                    type: 'warning',
+                });
+                return;
+            }
+            // A released/closed plan is locked: line rebuilds would
+            // orphan the frozen documents. Revise from the Release tab.
+            if (this.planLocked) {
+                this.displayNotification({
+                    title: _t('Locked'),
+                    message: _t('Plan is released - revise it from the Release tab to make changes.'),
                     type: 'warning',
                 });
                 return;
@@ -643,6 +675,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return this._rpcPlan('get_supplier_summary', [pid]).then(
                 function (res) {
                     self.supSummary = res;
+                    self._updateLockUi();
                     if (self.activeTab === 2) self._renderSup();
                 }, function (err) {
                     self._notifyErr(err);
@@ -2062,6 +2095,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'Fix sellers/prices before ordering.' +
                     '</div>';
             }
+            html += self._releaseBarHtml(s);
             html += '<div class="table-responsive"><table class="msp-table">' +
                 '<thead><tr>' +
                 '<th class="th-product">Supplier</th>' +
@@ -2554,6 +2588,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<span class="text-muted" style="font-size:0.75rem;">Assign a seller first</span>' :
                 !self.canCreateDocs ?
                 '<span class="text-muted" style="font-size:0.75rem;">Admin only</span>' :
+                self.planLocked ?
+                self._lockedHintHtml() :
                 openCount > 0 ?
                 '<button type="button" class="btn btn-success btn-sm mpp-btn-create-rfq" ' +
                 'data-seller="' + sp.seller_id + '" data-company="' +
@@ -2625,6 +2661,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             r.mo.state + ')';
                     } else if (!r.mo_creatable) {
                         doc = '<span class="badge-req-need">No normal BOM</span>';
+                    } else if (self.planLocked) {
+                        act = self._lockedHintHtml();
                     } else if (self.canCreateDocs) {
                         act = '<button type="button" class="btn btn-primary btn-sm mpp-btn-create-mo" ' +
                             'data-line="' + r.line_id + '">' +
@@ -2679,6 +2717,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
+            if (this.planLocked) {
+                this.displayNotification({
+                    title: _t('Locked'),
+                    message: _t('Plan is released - revise it from the Release tab to make changes.'),
+                    type: 'warning',
+                });
+                return;
+            }
             var snap = this._snapshotSupScroll();
             var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_supplier_rfq',
@@ -2732,6 +2778,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
+            if (this.planLocked) {
+                this.displayNotification({
+                    title: _t('Locked'),
+                    message: _t('Plan is released - revise it from the Release tab to make changes.'),
+                    type: 'warning',
+                });
+                return;
+            }
             var snap = this._snapshotSupScroll();
             var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_supplier_rfq',
@@ -2769,6 +2823,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
+            if (this.planLocked) {
+                this.displayNotification({
+                    title: _t('Locked'),
+                    message: _t('Plan is released - revise it from the Release tab to make changes.'),
+                    type: 'warning',
+                });
+                return;
+            }
             var snap = this._snapshotSupScroll();
             var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_supplier_rfq',
@@ -2805,6 +2867,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             var line = parseInt(ev.currentTarget.dataset.line, 10);
             if (!line || !this._planId()) return;
+            if (this.planLocked) {
+                this.displayNotification({
+                    title: _t('Locked'),
+                    message: _t('Plan is released - revise it from the Release tab to make changes.'),
+                    type: 'warning',
+                });
+                return;
+            }
             var snap = this._snapshotSupScroll();
             var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_mos',
@@ -2836,6 +2906,437 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 self._restoreSupScrollSoon(snap);
                 self._unlockSupBtn($btn);
             });
+        },
+
+        // ---------------- tab 3: release ----------------
+        // Single-button release (user rule): the bulk RFQ/MO button
+        // lives on the suppliers page, and the release page is a tab
+        // of the plan dashboard - not a form view, not a menu.
+        // Draft -> preview (what one Release click creates), then one
+        // confirm creates everything atomically and locks the plan.
+        // Released/closed -> frozen tracking from the snapshot, so the
+        // RFQ/MO button semantics never change.
+
+        // Release status bar on top of the suppliers list.
+        // Locked-plan hint shared by the supplier and MO rows: on a
+        // released/closed plan the per-row buttons are NOT rendered -
+        // a warning toast alone would be a clickable-looking dead end.
+        _lockedHintHtml: function () {
+            return '<span class="text-muted" ' +
+                'style="font-size:0.75rem;" title="' +
+                _t('Plan is released - revise it from the Release tab to make changes.') +
+                '"><i class="fa fa-lock mr-1"></i>' + _t('Locked') +
+                '</span>';
+        },
+
+        _releaseBarHtml: function (s) {
+            s = s || {};
+            var st = s.release_state || 'draft';
+            var rev = s.released_rev || 0;
+            var locked = (st === 'released' || st === 'closed');
+            var badgeCls = st === 'released' ? 'badge-success' :
+                (st === 'closed' ? 'badge-secondary' : 'badge-info');
+            var stateTxt = st === 'released' ? _t('Released rev ') + rev :
+                (st === 'closed' ? _t('Closed rev ') + rev : _t('Draft'));
+            var html = '<div class="alert ' +
+                (locked ? 'alert-success' : 'alert-info') +
+                '" style="display:flex;align-items:center;gap:10px;font-size:0.8rem;">' +
+                '<i class="fa fa-paper-plane"></i>' +
+                '<span class="badge ' + badgeCls + '">' + stateTxt +
+                '</span>';
+            if (s.needs_revision) {
+                html += '<span class="badge badge-danger">' +
+                    _t('Review needed') + '</span>';
+            }
+            html += '<span class="text-muted">' +
+                _t('Single-button release: preview, create all RFQs + MOs at once, track them frozen.') +
+                '</span>' +
+                '<span style="margin-left:auto;">' +
+                '<button type="button" class="btn btn-sm ' +
+                (locked ? 'btn-outline-primary' : 'btn-primary') +
+                ' mpp-btn-release-open">' +
+                (locked ? _t('Track release') : _t('Release')) +
+                '</button></span></div>';
+            return html;
+        },
+
+        // Released/closed lock: Rebuild button disabled, per-row RFQ/MO
+        // buttons gated in their handlers (server enforces it too).
+        _updateLockUi: function () {
+            var s = this.supSummary;
+            var st = s && s.release_state;
+            this.planLocked = (st === 'released' || st === 'closed');
+            if (!this.$el) return;
+            var $btn = this.$('.mpp-btn-rebuild');
+            if (!$btn.length) return;
+            $btn.prop('disabled', this.planLocked);
+            $btn.attr('title', this.planLocked ?
+                'Plan is released/closed - revise it from the Release tab to edit.' :
+                'Recalculate the whole plan from live data.');
+            $btn.toggleClass('mpp-locked', this.planLocked);
+        },
+
+        // Opens tab 3: a locked plan shows the frozen tracking view, a
+        // draft shows the release preview.
+        _onReleaseOpen: function (ev) {
+            var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
+            if (!this.canCreateDocs) {
+                this.displayNotification({
+                    title: _t('Forbidden'),
+                    message: _t('Only administrators can release plans.'),
+                    type: 'warning',
+                });
+                return;
+            }
+            var pid = this._planId();
+            if (!pid) return;
+            this._showTab(3);
+            this.$('.mpp-rel-body').html(
+                '<div class="alert alert-info">Loading…</div>');
+            var method = this.planLocked ?
+                'get_release_tracking' : 'get_release_preview';
+            this._rpcPlan(method, [pid]).then(function (res) {
+                self.releaseData = self.planLocked ?
+                    {view: 'tracking', tracking: res} :
+                    {view: 'preview', preview: res};
+                self._renderRelease();
+            }, function (err) {
+                self.$('.mpp-rel-body').html(
+                    '<div class="alert alert-danger" ' +
+                    'style="font-size:0.8rem;">' +
+                    _t('Could not load the release data.') + ' ' +
+                    '<button type="button" class="btn btn-sm ' +
+                    'btn-outline-danger mpp-btn-release-retry">' +
+                    _t('Retry') + '</button></div>');
+                self._notifyErr(err);
+            });
+        },
+
+        _renderRelease: function () {
+            var $body = this.$('.mpp-rel-body');
+            if (!$body.length) return;
+            var d = this.releaseData;
+            if (!d) {
+                $body.html(
+                    '<div class="alert alert-info">Loading…</div>');
+                return;
+            }
+            if (d.view === 'tracking') {
+                $body.html(this._releaseTrackingHtml(d.tracking));
+            } else {
+                $body.html(this._releasePreviewHtml(d.preview));
+            }
+        },
+
+        // Preview: every RFQ group with its create/update action, every
+        // uncovered make line as a checkbox, mode select, one button.
+        _releasePreviewHtml: function (p) {
+            var self = this;
+            p = p || {};
+            var html = '<div class="alert alert-info" ' +
+                'style="font-size:0.8rem;">' +
+                _t('Preview of everything one Release creates. Nothing is created until you press Release.') +
+                '</div>';
+            var groups = p.groups || [];
+            html += '<h6>' + _t('Draft RFQs') + ' (' + groups.length +
+                ')</h6>';
+            if (!groups.length) {
+                html += '<div class="alert alert-warning" ' +
+                    'style="font-size:0.8rem;">' +
+                    _t('No open supplier lines - nothing to release.') +
+                    '</div>';
+            } else {
+                html += '<div class="table-responsive"><table ' +
+                    'class="msp-table"><thead><tr>' +
+                    '<th class="th-product">' + _t('Supplier') + '</th><th>' +
+                    _t('Lines') + '</th>' +
+                    '<th>' + _t('Est. USD') + '</th><th>' + _t('Action') +
+                    '</th>' +
+                    '</tr></thead><tbody>';
+                groups.forEach(function (g) {
+                    html += '<tr><td>' + (g.name || '') + '</td>' +
+                        '<td>' + (g.line_count || 0) + '</td>' +
+                        '<td>' + self._fmtNum(g.total_usd || 0, 2) +
+                        '</td>' +
+                        '<td><span class="badge ' +
+                        (g.action === 'create' ? 'badge-success' :
+                            'badge-primary') + '">' +
+                        (g.action === 'create' ? _t('create') : _t('update')) +
+                        '</span></td></tr>';
+                });
+                html += '</tbody></table></div>';
+            }
+            var mos = p.mo_eligible || [];
+            html += '<h6 class="mt-3">' + _t('Production MOs') + ' (' +
+                mos.length + ')</h6>';
+            if (!mos.length) {
+                html += '<div class="text-muted" ' +
+                    'style="font-size:0.8rem;">' +
+                    _t('No uncovered make lines.') + '</div>';
+            } else {
+                mos.forEach(function (m) {
+                    html += '<label class="form-check" ' +
+                        'style="font-size:0.8rem;font-weight:400;">' +
+                        '<input type="checkbox" class="form-check-input ' +
+                        'mpp-rel-mo-check" checked="checked" data-line="' +
+                        m.line_id + '"/> ' +
+                        (m.product || '') + ' x ' + (m.qty || 0) +
+                        '</label>';
+                });
+            }
+            var hasWork = groups.length || mos.length;
+            html += '<div class="mt-3" style="display:flex;gap:10px;' +
+                'align-items:center;">' +
+                '<select class="o_input mpp-rel-mode" aria-label="' +
+                _t('RFQ create mode') + '">' +
+                '<option value="update">' +
+                _t('Update existing drafts') + '</option>' +
+                '<option value="create">' +
+                _t('Create new (keep existing)') +
+                '</option></select>' +
+                '<button type="button" class="btn btn-primary ' +
+                'mpp-btn-release-confirm"' +
+                (hasWork ? '' : ' disabled="disabled"') + '>' +
+                _t('Release') +
+                '</button></div>' +
+                '<div class="text-muted mt-2" style="font-size:0.8rem;">' +
+                _t('Release creates all documents at once and locks the plan. Rebuild and per-row buttons stay disabled until you revise.') +
+                '</div>';
+            return html;
+        },
+
+        // Tracking: frozen snapshot lines with status codes; attention
+        // filter, confirm-all, revise and close actions.
+        _releaseTrackingHtml: function (t) {
+            t = t || {};
+            var st = t.plan_state || 'released';
+            var closed = (st === 'closed');
+            var stateTxt = (closed ? _t('Closed') : _t('Released')) +
+                ' ' + _t('rev') + ' ' + (t.released_rev || 0);
+            var html = '<div class="alert ' +
+                (closed ? 'alert-secondary' : 'alert-success') +
+                '" style="font-size:0.8rem;display:flex;gap:10px;' +
+                'align-items:center;flex-wrap:wrap;">' +
+                '<span class="badge ' +
+                (closed ? 'badge-secondary' : 'badge-success') + '">' +
+                stateTxt + '</span>';
+            if (t.needs_revision) {
+                html += '<span class="badge badge-danger">' +
+                    _t('Review needed') + '</span>' +
+                    '<button type="button" class="btn btn-sm ' +
+                    'btn-outline-danger mpp-btn-release-goto-sup">' +
+                    _t('Review suppliers') + '</button>';
+            }
+            html += '<span style="margin-left:auto;display:flex;' +
+                'gap:6px;flex-wrap:wrap;">' +
+                '<button type="button" class="btn btn-sm ' +
+                'btn-outline-secondary mpp-btn-release-refresh">' +
+                _t('Refresh') + '</button>';
+            if (!closed) {
+                html += '<button type="button" class="btn btn-sm ' +
+                    'btn-primary mpp-btn-release-confirm-docs">' +
+                    _t('Confirm all drafts') + '</button>' +
+                    '<button type="button" class="btn btn-sm ' +
+                    'btn-warning mpp-btn-release-unrelease">' +
+                    _t('Revise') + '</button>' +
+                    '<button type="button" class="btn btn-sm ' +
+                    'btn-secondary mpp-btn-release-close">' +
+                    _t('Close') + '</button>';
+            }
+            html += '</span></div>';
+            html += '<label class="form-check mb-2" ' +
+                'style="font-size:0.8rem;font-weight:400;">' +
+                '<input type="checkbox" ' +
+                'class="form-check-input mpp-rel-attention"' +
+                (t.attention_only ? ' checked="checked"' : '') +
+                '/> ' + _t('Only attention lines') + '</label>';
+            var lines = t.lines || [];
+            html += '<div class="table-responsive"><table ' +
+                'class="msp-table"><thead><tr>' +
+                '<th class="th-product">' + _t('Product') + '</th><th>' +
+                _t('Route') + '</th>' +
+                '<th>' + _t('Status') + '</th><th>' + _t('Document') +
+                '</th>' +
+                '</tr></thead><tbody>';
+            if (!lines.length) {
+                html += '<tr><td colspan="4" class="text-muted">' +
+                    _t('No lines.') + '</td></tr>';
+            }
+            lines.forEach(function (l) {
+                var badge = l.attention ?
+                    '<span class="badge badge-danger">! ' +
+                    (l.status || '') + '</span>' :
+                    '<span class="badge badge-info">' +
+                    (l.status || '') + '</span>';
+                var doc = l.po_name ?
+                    (l.po_name + ' (' + (l.po_state || '') + ')') :
+                    (l.mo_name ?
+                        (l.mo_name + ' (' + (l.mo_state || '') +
+                            ')') : '-');
+                html += '<tr><td>' + (l.product || '') + '</td><td>' +
+                    (l.route || '') + '</td><td>' + badge + '</td><td>' +
+                    doc + '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+            return html;
+        },
+
+        // One Release click: creates all draft RFQs + selected MOs
+        // atomically, freezes the snapshot, locks the plan.
+        _onReleaseConfirm: function (ev) {
+            var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
+            var pid = this._planId();
+            if (!pid) return;
+            var mode = this.$('.mpp-rel-mode').val() || 'update';
+            var moLines = [];
+            this.$('.mpp-rel-mo-check:checked').each(function () {
+                var lid = parseInt(this.dataset.line, 10);
+                if (lid) moLines.push(lid);
+            });
+            Dialog.confirm(this,
+                _t('Create all draft RFQs and the selected MOs at once and lock the plan?'),
+                {
+                    title: _t('Release plan'),
+                    confirmButtonText: _t('Release'),
+                    confirm_callback: function () {
+                        self._rpcPlan('action_release_confirm',
+                            [pid, mode, moLines]).then(function (res) {
+                            self._reloadReleaseTracking(
+                                (res && res.message) ||
+                                _t('Released.'));
+                        }, function (err) {
+                            self._notifyErr(err);
+                        });
+                    },
+                });
+        },
+
+        // Re-fetch tracking (attention checkbox aware), refresh the
+        // lock state on the suppliers tab, optionally toast.
+        _reloadReleaseTracking: function (msg) {
+            var self = this;
+            var pid = this._planId();
+            if (!pid) return;
+            var $att = this.$('.mpp-rel-attention');
+            var att = $att.length ? $att.is(':checked') : false;
+            this._rpcPlan('get_release_tracking',
+                [pid, att]).then(function (t) {
+                self.releaseData = {view: 'tracking', tracking: t};
+                self._renderRelease();
+                self._fetchSupSummary();
+                if (msg) {
+                    self.displayNotification({
+                        title: _t('Done'),
+                        message: msg,
+                        type: 'success',
+                    });
+                }
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        _onReleaseConfirmDocs: function (ev) {
+            var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
+            var pid = this._planId();
+            if (!pid) return;
+            Dialog.confirm(this,
+                _t('Confirm every draft RFQ and MO of this release? This sends the orders to suppliers/production.'),
+                {
+                    title: _t('Confirm all drafts'),
+                    confirmButtonText: _t('Confirm all'),
+                    confirm_callback: function () {
+                        self._rpcPlan('action_release_confirm_docs',
+                            [pid]).then(function (res) {
+                            self._reloadReleaseTracking(
+                                (res && res.message) ||
+                                _t('Confirmed.'));
+                        }, function (err) {
+                            self._notifyErr(err);
+                        });
+                    },
+                });
+        },
+
+        _onReleaseRefresh: function (ev) {
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
+            this._reloadReleaseTracking(null);
+        },
+
+        _onReleaseUnrelease: function (ev) {
+            var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
+            var pid = this._planId();
+            if (!pid) return;
+            Dialog.confirm(this,
+                _t('Re-open this release for revision? The snapshot stays for comparison.'),
+                {
+                    title: _t('Revise release'),
+                    confirmButtonText: _t('Revise'),
+                    confirm_callback: function () {
+                        self._rpcPlan('action_release_unrelease',
+                            [pid]).then(function (res) {
+                            self._reloadReleaseTracking(
+                                (res && res.message) ||
+                                _t('Re-opened.'));
+                        }, function (err) {
+                            self._notifyErr(err);
+                        });
+                    },
+                });
+        },
+
+        _onReleaseClose: function (ev) {
+            var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
+            var pid = this._planId();
+            if (!pid) return;
+            Dialog.confirm(this,
+                _t('Close this release? The plan stays locked.'),
+                {
+                    title: _t('Close release'),
+                    confirmButtonText: _t('Close'),
+                    confirm_callback: function () {
+                        self._rpcPlan('action_release_close',
+                            [pid]).then(function (res) {
+                            self._reloadReleaseTracking(
+                                (res && res.message) ||
+                                _t('Closed.'));
+                        }, function (err) {
+                            self._notifyErr(err);
+                        });
+                    },
+                });
+        },
+
+        _onReleaseGotoSup: function (ev) {
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
+            this._showTab(2);
+            if (!this.supSummary) this._fetchSupSummary();
         },
     });
 

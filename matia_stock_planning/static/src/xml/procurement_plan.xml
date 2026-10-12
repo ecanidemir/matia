@@ -13,15 +13,20 @@
                     </div>
                 </div>
                 <div class="mpp-actions">
-                    <ul class="nav mpp-nav-tabs mpp-nav-tabs--header">
-                        <li class="nav-item">
-                            <a href="#" class="nav-link mpp-nav-tab active" data-tab="1">
+                    <ul class="nav mpp-nav-tabs mpp-nav-tabs--header" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <a href="#" class="nav-link mpp-nav-tab active" data-tab="1" role="tab" aria-selected="true">
                                 <i class="fa fa-sitemap mr-1"></i>1. Plan
                             </a>
                         </li>
-                        <li class="nav-item">
-                            <a href="#" class="nav-link mpp-nav-tab" data-tab="2">
+                        <li class="nav-item" role="presentation">
+                            <a href="#" class="nav-link mpp-nav-tab" data-tab="2" role="tab" aria-selected="false">
                                 <i class="fa fa-truck mr-1"></i>2. Suppliers &amp; Production
+                            </a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a href="#" class="nav-link mpp-nav-tab" data-tab="3" role="tab" aria-selected="false">
+                                <i class="fa fa-rocket mr-1"></i>3. Release
                             </a>
                         </li>
                     </ul>
@@ -108,6 +113,11 @@
                     </div>
                     <div class="mpp-prod-body"/>
                 </div>
+            </div>
+
+            <!-- TAB 3: release (preview + confirm + tracking) -->
+            <div class="mpp-pane d-none" data-pane="3">
+                <div class="mpp-rel-body"/>
             </div>
         </div>
     </t>
