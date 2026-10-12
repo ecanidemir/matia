@@ -1374,6 +1374,10 @@ class MatiaProcurementPlan(models.Model):
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
+        if plan.release_state in ('released', 'closed'):
+            raise UserError(_(
+                'Plan is released and locked. Open it for revision '
+                'first, then rebuild.'))
         try:
             targets = json.loads(plan.target_json or '{}')
         except ValueError:
@@ -1858,6 +1862,10 @@ class MatiaProcurementPlan(models.Model):
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
+        if plan.release_state in ('released', 'closed'):
+            raise UserError(_(
+                'Plan is released and locked. Open it for revision '
+                'first, then recalculate suppliers.'))
 
         POLine = env_sudo['purchase.order.line']
         Supplier = env_sudo['product.supplierinfo']
@@ -3006,7 +3014,20 @@ class MatiaProcurementPlan(models.Model):
         _vals = {'target_json': json.dumps(clean)}
         if note is not False and note is not None:
             _vals['note'] = str(note)
-        plan.write(_vals)
+        if plan.release_state in ('released', 'closed'):
+            raise UserError(_(
+                'Plan is released and locked. Open it for revision '
+                'first, then save.'))
+        try:
+            plan.write(_vals)
+        except UserError:
+            raise
+        except Exception as exc:
+            _logger.warning(
+                'MPP save_slot failed for plan %s: %s',
+                plan.name, exc)
+            raise UserError(_(
+                'Could not save the study. Please try again.'))
         res = self.get_tree_with_cost(plan.id)
         res['slots'] = self.get_slot_list()['slots']
         res['active_slot'] = _s
@@ -3038,7 +3059,20 @@ class MatiaProcurementPlan(models.Model):
                 continue
             if _pid > 0 and _qty > 0:
                 clean[str(_pid)] = _qty
-        plan.write({'target_json': json.dumps(clean)})
+        if plan.release_state in ('released', 'closed'):
+            raise UserError(_(
+                'Plan is released and locked. Open it for revision '
+                'first, then rebuild.'))
+        try:
+            plan.write({'target_json': json.dumps(clean)})
+        except UserError:
+            raise
+        except Exception as exc:
+            _logger.warning(
+                'MPP set_targets failed for plan %s: %s',
+                plan.name, exc)
+            raise UserError(_(
+                'Could not save the Needed numbers. Please try again.'))
         return self.get_tree_with_cost(plan.id, force=bool(force))
 
     @api.model

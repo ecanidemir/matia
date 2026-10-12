@@ -69,26 +69,34 @@ class MatiaProcurementPlanRelease(models.Model):
         """
         if 'target_json' in vals:
             locked = self.filtered(
-                lambda p: p.release_state == 'released')
+                lambda p: p.release_state in ('released', 'closed'))
             if locked:
                 raise UserError(_(
                     'Plan %s is released and locked. Open it for '
-                    'revision first (Revize icin ac), then rebuild.')
+                    'revision first, then rebuild.')
                     % ', '.join(locked.mapped('name')))
         return super(MatiaProcurementPlanRelease, self).write(vals)
 
-    def action_unrelease(self):
+    def action_unrelease(self, reason=False):
         """Open a released/closed plan for revision (unlock).
 
+        @param reason: optional revision reason, logged to chatter.
         @return: True.
         """
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can open a release for revision.'))
         for plan in self:
             if plan.release_state == 'draft':
                 continue
             plan.write({'release_state': 'draft'})
-            plan.message_post(body=_(
-                'Release rev %s opened for revision by %s.')
-                % (plan.released_rev, self.env.user.display_name))
+            msg = _(
+                'Release rev %s opened for revision by %s.'
+            ) % (plan.released_rev, self.env.user.display_name)
+            if reason:
+                msg += ' ' + _('Reason: %s') % str(reason)
+            self.env['matia.procurement.plan'].browse(
+                plan.id).message_post(body=msg)
         return True
 
     def action_close_release(self):
@@ -96,13 +104,17 @@ class MatiaProcurementPlanRelease(models.Model):
 
         @return: True.
         """
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can close a release.'))
         for plan in self:
             if plan.release_state != 'released':
                 raise UserError(_(
                     'Only a released plan can be closed.'))
             plan.write({'release_state': 'closed'})
-            plan.message_post(body=_(
-                'Release rev %s closed by %s.')
+            self.env['matia.procurement.plan'].browse(
+                plan.id).message_post(body=_(
+                    'Release rev %s closed by %s.')
                 % (plan.released_rev, self.env.user.display_name))
         return True
 
@@ -429,17 +441,24 @@ class MatiaProcurementPlanRelease(models.Model):
         return {'confirmed': ok, 'failed': failed}
 
     @api.model
-    def action_release_unrelease(self, plan_id):
+    def action_release_unrelease(self, plan_id, reason=False):
         """Dashboard wrapper for action_unrelease (unlock for revision).
 
         @param plan_id: plan id.
+        @param reason: optional revision reason, logged to chatter.
         @return: True.
         """
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can open a release for revision.'))
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
-        plan.action_unrelease()
+        if plan.release_state == 'draft':
+            raise UserError(_('Plan is already in draft.'))
+        self.env['matia.procurement.plan'].browse(
+            plan.id).action_unrelease(reason=reason)
         return True
 
     @api.model
@@ -449,11 +468,15 @@ class MatiaProcurementPlanRelease(models.Model):
         @param plan_id: plan id.
         @return: True.
         """
+        if not _mpp_can_create_docs(self):
+            raise AccessError(_(
+                'Only administrators can close a release.'))
         env_sudo = _mpp_env_sudo(self)
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
-        plan.action_close_release()
+        self.env['matia.procurement.plan'].browse(
+            plan.id).action_close_release()
         return True
 
     @api.model
