@@ -286,6 +286,7 @@ class MatiaProcurementPlanRfq(models.Model):
             body=body, message_type='comment',
             subtype_xmlid='mail.mt_note')
 
+    @api.model
     def get_rfq_preview(self, plan_id):
         """Preview the draft RFQs that would be created (no writes).
 
@@ -338,6 +339,7 @@ class MatiaProcurementPlanRfq(models.Model):
             } for po in plan.purchase_order_ids],
         }
 
+    @api.model
     def action_create_draft_rfqs(self, plan_id, confirm=False):
         """Create one draft RFQ per (supplier, currency) group.
 
@@ -458,6 +460,7 @@ class MatiaProcurementPlanRfq(models.Model):
             'summary': self._plan_summary(env_sudo, plan),
         }
 
+    @api.model
     def action_create_supplier_rfq(self, plan_id, seller_id,
                                    company_id=None, confirm=False):
         """Create draft RFQ(s) for ONE supplier in ONE company.
