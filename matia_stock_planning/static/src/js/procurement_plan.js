@@ -2151,7 +2151,13 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return list;
         },
 
-        _preserveSupScroll: function (fn) {
+        // Snapshot synchronously at click time: the RFQ/MO round-trip
+        // takes seconds and the re-render replaces the clicked button,
+        // so positions saved only at response time would already be
+        // lost (that is why the earlier response-time-only save jumped
+        // to top). Restore runs right after the re-render plus once
+        // more on the next animation frame (after layout/notify).
+        _snapshotSupScroll: function () {
             var scrollers = this._supScrollers();
             var tops = scrollers.map(function (el) {
                 return el.scrollTop;
@@ -2164,17 +2170,81 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 window.pageYOffset || 0;
             var winLeft = hasJQ ? $(window).scrollLeft() || 0 :
                 window.pageXOffset || 0;
-            fn.call(this);
-            scrollers.forEach(function (el, i) {
+            return {
+                els: scrollers,
+                tops: tops,
+                lefts: lefts,
+                winTop: winTop,
+                winLeft: winLeft,
+            };
+        },
+
+        _restoreSupScroll: function (snap) {
+            if (!snap) return;
+            (snap.els || []).forEach(function (el, i) {
                 try {
-                    el.scrollTop = tops[i];
-                    el.scrollLeft = lefts[i];
+                    el.scrollTop = snap.tops[i];
+                    el.scrollLeft = snap.lefts[i];
                 } catch (e) { /* noop */ }
             });
-            if (hasJQ) {
-                $(window).scrollTop(winTop);
-            } else if (winTop) {
-                window.scrollTo(0, winTop);
+            try {
+                if (typeof $ !== 'undefined') {
+                    $(window).scrollTop(snap.winTop);
+                    $(window).scrollLeft(snap.winLeft);
+                } else if (snap.winTop || snap.winLeft) {
+                    window.scrollTo(snap.winLeft || 0, snap.winTop || 0);
+                }
+            } catch (e) { /* noop */ }
+        },
+
+        _restoreSupScrollSoon: function (snap) {
+            var self = this;
+            try {
+                if (window.requestAnimationFrame) {
+                    window.requestAnimationFrame(function () {
+                        // RPC bitmeden sekme/widget kapanmissa eski
+                        // konumu geri yazma.
+                        if (self.isDestroyed && self.isDestroyed()) return;
+                        self._restoreSupScroll(snap);
+                    });
+                    return;
+                }
+            } catch (e) { /* noop */ }
+            setTimeout(function () {
+                if (self.isDestroyed && self.isDestroyed()) return;
+                self._restoreSupScroll(snap);
+            }, 50);
+        },
+
+        // Tik anindaki butonu RPC bitene kadar kilitle: cift tik
+        // canli DB'de mukerrer RFQ/MO acar (staging yok). Basari
+        // yolunda re-render butonu zaten yok eder; hata yolunda
+        // kilit _unlockSupBtn ile geri alinir.
+        _lockSupBtn: function (ev) {
+            try {
+                if (typeof $ !== 'undefined' && ev && ev.currentTarget) {
+                    var $btn = $(ev.currentTarget);
+                    if ($btn && $btn.length) {
+                        $btn.prop('disabled', true);
+                        return $btn;
+                    }
+                }
+            } catch (e) { /* noop */ }
+            return null;
+        },
+
+        _unlockSupBtn: function ($btn) {
+            try {
+                if ($btn && $btn.length) $btn.prop('disabled', false);
+            } catch (e) { /* noop */ }
+        },
+
+        _preserveSupScroll: function (fn) {
+            var snap = this._snapshotSupScroll();
+            try {
+                fn.call(this);
+            } finally {
+                this._restoreSupScroll(snap);
             }
         },
 
@@ -2594,6 +2664,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         _onCreateRfq: function (ev) {
             var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
             if (!this.canCreateDocs) {
                 this.displayNotification({
                     title: _t('Forbidden'),
@@ -2605,6 +2679,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
+            var snap = this._snapshotSupScroll();
+            var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_supplier_rfq',
                 [this._planId(), seller, company, false]).then(function (res) {
                 if (res && res.needs_confirm) {
@@ -2612,12 +2688,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     self.pendingRfqUpdatable =
                         (res && res.updatable) || null;
                     self._renderSup();
+                    self._restoreSupScroll(snap);
                     self.displayNotification({
                         title: _t('Already exists'),
                         message: res.message ||
                             _t('Draft RFQ(s) already exist for this supplier.'),
                         type: 'warning',
                     });
+                    self._restoreSupScrollSoon(snap);
                     return;
                 }
                 self.pendingRfqSeller = null;
@@ -2625,18 +2703,24 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 self.supSummary = res && res.supplier_summary ?
                     res.supplier_summary : self.supSummary;
                 self._renderSup();
-                self.displayNotification({
-                    title: _t('Success'),
-                    message: _t('Draft RFQ created.'),
-                    type: 'success',
-                });
+                self._restoreSupScroll(snap);
+                // No success toast: the RFQ list re-renders inline, and
+                // the top-right popup was dragging attention to the top.
+                self._restoreSupScrollSoon(snap);
             }, function (err) {
+                self._restoreSupScroll(snap);
                 self._notifyErr(err);
+                self._restoreSupScrollSoon(snap);
+                self._unlockSupBtn($btn);
             });
         },
 
         _onConfirmRfq: function (ev) {
             var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
             if (!this.canCreateDocs) {
                 this.displayNotification({
                     title: _t('Forbidden'),
@@ -2648,6 +2732,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
+            var snap = this._snapshotSupScroll();
+            var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_supplier_rfq',
                 [this._planId(), seller, company, true]).then(function (res) {
                 self.pendingRfqSeller = null;
@@ -2655,18 +2741,23 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 self.supSummary = res && res.supplier_summary ?
                     res.supplier_summary : self.supSummary;
                 self._renderSup();
-                self.displayNotification({
-                    title: _t('Success'),
-                    message: _t('Draft RFQ created.'),
-                    type: 'success',
-                });
+                self._restoreSupScroll(snap);
+                // No success toast (inline RFQ list already shows it).
+                self._restoreSupScrollSoon(snap);
             }, function (err) {
+                self._restoreSupScroll(snap);
                 self._notifyErr(err);
+                self._restoreSupScrollSoon(snap);
+                self._unlockSupBtn($btn);
             });
         },
 
         _onUpdateRfq: function (ev) {
             var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
             if (!this.canCreateDocs) {
                 this.displayNotification({
                     title: _t('Forbidden'),
@@ -2678,6 +2769,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var seller = parseInt(ev.currentTarget.dataset.seller, 10);
             var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
             if (!seller || !this._planId()) return;
+            var snap = this._snapshotSupScroll();
+            var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_supplier_rfq',
                 [this._planId(), seller, company, true, 'update']).then(function (res) {
                 self.pendingRfqSeller = null;
@@ -2685,20 +2778,23 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 self.supSummary = res && res.supplier_summary ?
                     res.supplier_summary : self.supSummary;
                 self._renderSup();
-                var crt = (res && res.created) || [];
-                self.displayNotification({
-                    title: _t('Success'),
-                    message: _t('Draft RFQ updated.') +
-                        (crt.length ? ' ' + _t('New RFQ(s) opened where no draft matched.') : ''),
-                    type: 'success',
-                });
+                self._restoreSupScroll(snap);
+                // No success toast (inline RFQ list already shows it).
+                self._restoreSupScrollSoon(snap);
             }, function (err) {
+                self._restoreSupScroll(snap);
                 self._notifyErr(err);
+                self._restoreSupScrollSoon(snap);
+                self._unlockSupBtn($btn);
             });
         },
 
         _onCreateMo: function (ev) {
             var self = this;
+            if (ev) {
+                if (ev.preventDefault) ev.preventDefault();
+                if (ev.stopPropagation) ev.stopPropagation();
+            }
             if (!this.canCreateDocs) {
                 this.displayNotification({
                     title: _t('Forbidden'),
@@ -2709,24 +2805,35 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             var line = parseInt(ev.currentTarget.dataset.line, 10);
             if (!line || !this._planId()) return;
+            var snap = this._snapshotSupScroll();
+            var $btn = this._lockSupBtn(ev);
             this._rpcPlan('action_create_mos',
                 [this._planId(), [line]]).then(function (res) {
                 self.supSummary = res && res.supplier_summary ?
                     res.supplier_summary : self.supSummary;
                 self._renderSup();
+                self._restoreSupScroll(snap);
                 var n = (res && res.created ? res.created.length : 0);
-                var sk = (res && res.skipped ? res.skipped.length : 0);
-                self.displayNotification({
-                    title: n ? _t('Success') : _t('Skipped'),
-                    message: n ? _t('Draft MO created.') :
-                        ((res && res.skipped && res.skipped[0] &&
-                            res.skipped[0].reason) ||
+                // Success toast removed (inline MO list already shows
+                // it); keep only the Skipped warning so a no-op is
+                // still explained.
+                if (!n) {
+                    var sk = (res && res.skipped ? res.skipped.length : 0);
+                    self.displayNotification({
+                        title: _t('Skipped'),
+                        message: ((res && res.skipped && res.skipped[0] &&
+                                res.skipped[0].reason) ||
                             _t('No MO created.')) +
-                        (sk ? ' (' + sk + ')' : ''),
-                    type: n ? 'success' : 'warning',
-                });
+                            (sk ? ' (' + sk + ')' : ''),
+                        type: 'warning',
+                    });
+                }
+                self._restoreSupScrollSoon(snap);
             }, function (err) {
+                self._restoreSupScroll(snap);
                 self._notifyErr(err);
+                self._restoreSupScrollSoon(snap);
+                self._unlockSupBtn($btn);
             });
         },
     });
