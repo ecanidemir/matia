@@ -53,6 +53,10 @@
                 </button>
                 <span class="mpp-slot-status text-muted"/>
             </div>
+            <!-- Released/closed lock banner (toggled by _updateLockUi). -->
+            <div class="mpp-lock-banner alert alert-warning d-none" style="font-size:0.8rem;" role="status">
+                <i class="fa fa-lock mr-1"></i><span class="mpp-lock-banner-text"/>
+            </div>
 
             <!-- TAB 1: single-page plan (quantities + tree + cost) -->
             <div class="mpp-pane" data-pane="1">

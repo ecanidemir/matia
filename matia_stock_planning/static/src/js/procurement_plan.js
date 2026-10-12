@@ -272,6 +272,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     (icons[g.key] || 'fa-cube') + '"></i></div>' +
                     '<input type="number" min="0" value="' + n + '" ' +
                     'class="form-control form-control-sm mpp-fill-n" ' +
+                    (self.planLocked ? 'disabled="disabled" ' : '') +
                     'data-group="' + g.key + '" ' +
                     'title="Devices wanted for this group; per-top Needed = devices x usage, then Rebuild"/>' +
                     '</div>';
@@ -572,6 +573,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // the server until Rebuild: edit as many rows as you like, then
         // apply them all at once.
         _onNeedInput: function (ev) {
+            // Locked plans keep every Needed input disabled; this is
+            // defense-in-depth (the server blocks target writes too).
+            if (this.planLocked) return;
             var pid = parseInt(ev.currentTarget.dataset.pid, 10);
             if (!pid) return;
             var val = Math.max(0,
@@ -605,6 +609,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // No server call here by design: the user edits as many rows
         // as needed, then applies everything at once with Rebuild.
         _onNeedBlur: function (ev) {
+            if (this.planLocked) return;
             var pid = parseInt(ev.currentTarget.dataset.pid, 10);
             if (!pid) return;
             var val = Math.max(0,
@@ -629,6 +634,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // other parents pools into Planned on rebuild.
         _onFillNInput: function (ev) {
             var self = this;
+            if (this.planLocked) return;
             if (!this.summary || !this._planId()) return;
             var key = ev.currentTarget.dataset.group;
             if (!key) return;
@@ -658,6 +664,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // Blur/enter only normalizes the card value into fillN.
         // No server call here by design (see _onFillNInput).
         _onFillNBlur: function (ev) {
+            if (this.planLocked) return;
             var key = ev.currentTarget.dataset.group;
             if (!key) return;
             var n = parseInt(ev.currentTarget.value, 10);
@@ -675,6 +682,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return this._rpcPlan('get_supplier_summary', [pid]).then(
                 function (res) {
                     self.supSummary = res;
+                    // Admin gate lives here too (not only in the row
+                    // renderer): Release can be opened before the
+                    // Suppliers tab ever renders, and a stale false
+                    // produced a bogus "administrators only" warning.
+                    self.canCreateDocs = !!(
+                        res && res.can_create_docs);
                     self._updateLockUi();
                     if (self.activeTab === 2) self._renderSup();
                 }, function (err) {
@@ -1341,6 +1354,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<td class="td-req">' + (level === 0 ?
                     '<input type="number" min="0" ' +
                     'class="form-control form-control-sm mpp-need" ' +
+                    (this.planLocked ? 'disabled="disabled" ' : '') +
                     'data-pid="' + r.product_id + '" ' +
                     'data-avail="' + avail + '" ' +
                     'data-prod="' + prod + '" ' +
@@ -2974,6 +2988,22 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 'Plan is released/closed - revise it from the Release tab to edit.' :
                 'Recalculate the whole plan from live data.');
             $btn.toggleClass('mpp-locked', this.planLocked);
+            // Needed inputs (rows + cost-card N) go passive and grey;
+            // the slot note and Save write target_json too, so they
+            // lock as well (server blocks the write regardless).
+            this.$('.mpp-need').prop('disabled', this.planLocked);
+            this.$('.mpp-fill-n').prop('disabled', this.planLocked);
+            this.$('.mpp-slot-note').prop('disabled', this.planLocked);
+            this.$('.mpp-btn-slot-save').prop('disabled',
+                this.planLocked);
+            var $banner = this.$('.mpp-lock-banner');
+            if ($banner.length) {
+                $banner.toggleClass('d-none', !this.planLocked);
+                if (this.planLocked) {
+                    $banner.find('.mpp-lock-banner-text').text(
+                        _t('This study is released and locked - revise it from the Release tab to make changes.'));
+                }
+            }
         },
 
         // Opens tab 3: a locked plan shows the frozen tracking view, a
@@ -2984,22 +3014,26 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 if (ev.preventDefault) ev.preventDefault();
                 if (ev.stopPropagation) ev.stopPropagation();
             }
-            if (!this.canCreateDocs) {
-                this.displayNotification({
-                    title: _t('Forbidden'),
-                    message: _t('Only administrators can release plans.'),
-                    type: 'warning',
-                });
-                return;
-            }
             var pid = this._planId();
             if (!pid) return;
-            this._showTab(3);
-            this.$('.mpp-rel-body').html(
-                '<div class="alert alert-info">Loading…</div>');
-            var method = this.planLocked ?
+            // The Suppliers tab may never have loaded (no supSummary
+            // yet): fetch first so canCreateDocs/lock state is real
+            // instead of warning an admin by mistake.
+            var openNow = function () {
+                if (!self.canCreateDocs) {
+                    self.displayNotification({
+                        title: _t('Forbidden'),
+                        message: _t('Only administrators can release plans.'),
+                        type: 'warning',
+                    });
+                    return;
+                }
+                self._showTab(3);
+                self.$('.mpp-rel-body').html(
+                    '<div class="alert alert-info">Loading…</div>');
+            var method = self.planLocked ?
                 'get_release_tracking' : 'get_release_preview';
-            this._rpcPlan(method, [pid]).then(function (res) {
+            self._rpcPlan(method, [pid]).then(function (res) {
                 self.releaseData = self.planLocked ?
                     {view: 'tracking', tracking: res} :
                     {view: 'preview', preview: res};
@@ -3014,6 +3048,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     _t('Retry') + '</button></div>');
                 self._notifyErr(err);
             });
+            };
+            if (!self.supSummary) {
+                self._showTab(3);
+                self.$('.mpp-rel-body').html(
+                    '<div class="alert alert-info">Loading…</div>');
+                self._fetchSupSummary().then(function () {
+                    openNow();
+                });
+                return;
+            }
+            openNow();
         },
 
         _renderRelease: function () {
