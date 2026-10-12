@@ -44,9 +44,13 @@ class PurchaseOrderMppWatcher(models.Model):
             plans = self.env['matia.procurement.plan'].browse()
             if origins:
                 try:
+                    # Both locked states are watched: released plans are
+                    # live, closed plans stay locked but can still be
+                    # re-opened for revision, so a cancelled/deleted PO
+                    # must surface on their tracking screens too.
                     plans = self.env['matia.procurement.plan'].search([
                         ('name', 'in', origins),
-                        ('release_state', '=', 'released'),
+                        ('release_state', 'in', ['released', 'closed']),
                     ])
                 except Exception:
                     _logger.warning(

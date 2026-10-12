@@ -634,7 +634,9 @@ class MatiaProcurementPlanRfq(models.Model):
         body = '<p>%s</p><ul>%s</ul>' % (
             _xml_escape(_('BOM detail from %s:') % plan.name),
             ''.join(items))
-        po.message_post(
+        # Post as the acting user: po is a sudo record, so browse it
+        # through the caller env to keep the author correct.
+        self.env['purchase.order'].browse(po.id).message_post(
             body=body, message_type='comment',
             subtype_xmlid='mail.mt_note')
 

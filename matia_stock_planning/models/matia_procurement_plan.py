@@ -1194,6 +1194,25 @@ class MatiaProcurementPlan(models.Model):
     create_date = fields.Datetime(readonly=True)
     create_uid = fields.Many2one('res.users', readonly=True)
 
+    def copy(self, default=None):
+        """Duplicate as a fresh draft study.
+
+        A released/closed plan duplicated via the UI would otherwise
+        carry its release lock + snapshot to the copy; the copy starts
+        unlocked with no history and unbound from study slots.
+        @param default: optional override values.
+        @return: new plan record.
+        """
+        default = dict(default or {})
+        default.update({
+            'release_state': 'draft',
+            'release_snapshot': False,
+            'released_rev': 0,
+            'needs_revision': False,
+            'slot': -1,
+        })
+        return super(MatiaProcurementPlan, self).copy(default)
+
     @api.depends('line_ids.subtotal')
     def _compute_total_cost(self):
         for plan in self:
@@ -1282,13 +1301,18 @@ class MatiaProcurementPlan(models.Model):
         company = self.env['res.company'].browse(_MPP_TR_COMPANY_ID)
         seq = self.env['ir.sequence'].sudo().next_by_code(
             'matia.procurement.plan') or _('MPP')
-        plan = self.sudo().create({
-            'name': seq,
-            'company_id': company.id,
-            'state': 'draft',
-            'target_json': json.dumps(targets),
-            'currency_id': company.currency_id.id,
-        })
+        try:
+            plan = self.sudo().create({
+                'name': seq,
+                'company_id': company.id,
+                'state': 'draft',
+                'target_json': json.dumps(targets),
+                'currency_id': company.currency_id.id,
+            })
+        except Exception as exc:
+            _logger.warning('MPP create_plan failed: %s', exc)
+            raise UserError(_(
+                'Could not create the plan. Please try again.'))
         return {'plan_id': plan.id, 'name': plan.name}
 
     # ------------------------------------------------------------------
@@ -2613,7 +2637,13 @@ class MatiaProcurementPlan(models.Model):
             elif cur != new:
                 diff[field] = new
         if diff:
-            line.write(diff)
+            try:
+                line.write(diff)
+            except Exception as exc:
+                _logger.warning(
+                    'MPP line write failed for line %s: %s',
+                    getattr(line, 'id', '?'), exc)
+                return False
             return True
         return False
 
@@ -2861,7 +2891,8 @@ class MatiaProcurementPlan(models.Model):
         if not plan:
             plan = env_sudo['matia.procurement.plan'].search(
                 [], order='id desc', limit=1)
-            if plan and not isinstance(plan.slot, int):
+            if plan and plan.release_state == 'draft' \
+                    and not isinstance(plan.slot, int):
                 plan.write({'slot': 0})
         if not plan:
             plan = self._mpp_create_slot_plan(env_sudo, 0)
@@ -2908,14 +2939,21 @@ class MatiaProcurementPlan(models.Model):
         company = env_sudo['res.company'].browse(_MPP_TR_COMPANY_ID)
         seq = env_sudo['ir.sequence'].sudo().next_by_code(
             'matia.procurement.plan') or _('MPP')
-        return env_sudo['matia.procurement.plan'].create({
-            'name': seq,
-            'company_id': company.id,
-            'state': 'draft',
-            'slot': int(slot),
-            'target_json': '{}',
-            'currency_id': company.currency_id.id,
-        })
+        try:
+            return env_sudo['matia.procurement.plan'].create({
+                'name': seq,
+                'company_id': company.id,
+                'state': 'draft',
+                'slot': int(slot),
+                'target_json': '{}',
+                'currency_id': company.currency_id.id,
+            })
+        except Exception as exc:
+            _logger.warning(
+                'MPP slot plan creation failed for slot %s: %s',
+                slot, exc)
+            raise UserError(_(
+                'Could not create the study. Please try again.'))
 
     @api.model
     def get_slot_list(self):
@@ -4714,13 +4752,19 @@ class MatiaProcurementPlan(models.Model):
                 _MPP_TR_COMPANY_ID)
             seq = env_sudo['ir.sequence'].sudo().next_by_code(
                 'matia.procurement.plan') or _('MPP')
-            plan = env_sudo['matia.procurement.plan'].create({
-                'name': seq,
-                'company_id': company.id,
-                'state': 'draft',
-                'target_json': '{}',
-                'currency_id': company.currency_id.id,
-            })
+            try:
+                plan = env_sudo['matia.procurement.plan'].create({
+                    'name': seq,
+                    'company_id': company.id,
+                    'state': 'draft',
+                    'target_json': '{}',
+                    'currency_id': company.currency_id.id,
+                })
+            except Exception as exc:
+                _logger.warning(
+                    'MPP price-overview plan creation failed: %s', exc)
+                raise UserError(_(
+                    'Could not create the plan. Please try again.'))
         Product = env_sudo['product.product']
         Bom = env_sudo['mrp.bom']
         kits = _mpp_find_kit_boms(env_sudo)

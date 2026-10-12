@@ -29,6 +29,7 @@
         <field name="arch" type="xml">
             <form>
                 <header>
+                    <field name="release_state" widget="statusbar"/>
                     <field name="state" widget="statusbar"/>
                 </header>
                 <sheet>
@@ -37,7 +38,7 @@
                         <field name="company_id" readonly="1"/>
                         <field name="currency_id" readonly="1"/>
                         <field name="total_cost" readonly="1"/>
-                        <field name="note"/>
+                        <field name="note" attrs="{'readonly': [('release_state', 'in', ['released', 'closed'])]}"/>
                     </group>
                     <notebook>
                         <page string="Lines">
