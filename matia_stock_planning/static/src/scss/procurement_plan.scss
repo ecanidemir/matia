@@ -330,9 +330,25 @@
        tint; the supplier name looks clickable. */
     .mpp-sup-name {
         cursor: pointer;
+        border-radius: 3px;
     }
     .mpp-sup-name:hover {
         text-decoration: underline;
+        color: #1d4ed8;
+    }
+    .mpp-sup-name:focus-visible,
+    .mpp-btn-sup-toggle:focus-visible {
+        outline: 2px solid #2563eb;
+        outline-offset: 1px;
+    }
+    // Open supplier row stays highlighted so the user sees which
+    // supplier owns the detail lines below it (no page jump +
+    // visible anchor replaces the lost scroll context).
+    table.msp-table tbody tr.mpp-sup-open td {
+        background-color: #eff6ff;
+    }
+    table.msp-table tbody tr.mpp-sup-open td:first-child {
+        box-shadow: inset 3px 0 0 #2563eb;
     }
     table.msp-table tbody tr.mpp-sup-sub-row td {
         background-color: #f0f9ff;

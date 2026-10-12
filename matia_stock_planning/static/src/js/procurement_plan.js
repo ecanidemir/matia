@@ -26,6 +26,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             'click .mpp-btn-excel-tree': '_onExportPlanPopup',
             'click .mpp-btn-create-rfq': '_onCreateRfq',
             'click .mpp-btn-confirm-rfq': '_onConfirmRfq',
+            'click .mpp-btn-update-rfq': '_onUpdateRfq',
             'click .mpp-btn-create-mo': '_onCreateMo',
             'input .mpp-need': '_onNeedInput',
             'change .mpp-need': '_onNeedBlur',
@@ -77,6 +78,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             // with every supplier summary; server enforces it too).
             this.canCreateDocs = false;
             this.pendingRfqSeller = null;
+            this.pendingRfqUpdatable = null;
             this.expandedSup = {};
             this.collapsedSupGroups = {};
             this._expanding = false;
@@ -291,6 +293,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.collapsedGroups = {};
             this.supSummary = null;
             this.pendingRfqSeller = null;
+            this.pendingRfqUpdatable = null;
             this.expandedSup = {};
             this.collapsedSupGroups = {};
             this.treeSearch = '';
@@ -1978,30 +1981,20 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
 
         // ---------------- tab 2: suppliers + production ----------------
         _renderSup: function () {
+            var self = this;
+            this._preserveSupScroll(function () {
+                self._renderSupInner();
+            });
+        },
+
+        _renderSupInner: function () {
             var s = this.supSummary;
             this.canCreateDocs = !!(s && s.can_create_docs);
-            // Async fills (RFQ/MO creation, summary fetch) replace the
-            // tables: keep the scroll offsets so the page stays put.
-            var $root = this.$el ? this.$('.o_matia_procurement_plan') :
-                null;
-            var rootTop = ($root && $root.length) ?
-                $root.scrollTop() : 0;
-            var winTop = (typeof $ !== 'undefined') ?
-                $(window).scrollTop() || 0 : window.pageYOffset || 0;
-            var restore = function () {
-                if ($root && $root.length) $root.scrollTop(rootTop);
-                if (typeof $ !== 'undefined') {
-                    $(window).scrollTop(winTop);
-                } else if (winTop) {
-                    window.scrollTo(0, winTop);
-                }
-            };
             if (!s) {
                 this.$('.mpp-sup-cards').html('');
                 this.$('.mpp-sup-body').html(
                     '<div class="alert alert-info">Loading…</div>');
                 this.$('.mpp-prod-body').html('');
-                restore();
                 return;
             }
             var stats = this._supCompanyStats(s);
@@ -2048,7 +2041,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this.$('.mpp-sup-cards').html(cards);
             this._renderSuppliers(s);
             this._renderProduction(s);
-            restore();
         },
 
         // Suppliers grouped under separate TR / USA sections (user rule).
@@ -2147,23 +2139,91 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Re-rendering the supplier table must not move the page:
-        // remember the scroll offsets of the action root (the real
-        // scroller) and the window, then restore them after painting.
+        // remember the scroll offsets of every candidate scroller
+        // (widget root, closest .o_content, global .o_content, window)
+        // then restore them after painting. Odoo 15 scrolls .o_content,
+        // not window, so saving window alone loses the position.
+        _supScrollers: function () {
+            var list = [];
+            var add = function (el) {
+                if (el && list.indexOf(el) < 0) list.push(el);
+            };
+            if (this.$el) {
+                var $root = this.$('.o_matia_procurement_plan');
+                if ($root && $root.length) add($root[0]);
+                var $own = this.$el.closest('.o_content');
+                if ($own && $own.length) add($own[0]);
+            }
+            var docContent = document.querySelector(
+                '.o_action_manager .o_content') ||
+                document.querySelector('.o_content');
+            add(docContent);
+            return list;
+        },
+
         _preserveSupScroll: function (fn) {
-            var $root = this.$el ? this.$('.o_matia_procurement_plan') :
-                null;
-            var rootTop = ($root && $root.length) ?
-                $root.scrollTop() : 0;
+            var scrollers = this._supScrollers();
+            var tops = scrollers.map(function (el) {
+                return el.scrollTop;
+            });
+            var lefts = scrollers.map(function (el) {
+                return el.scrollLeft;
+            });
             var hasJQ = typeof $ !== 'undefined';
             var winTop = hasJQ ? $(window).scrollTop() || 0 :
                 window.pageYOffset || 0;
+            var winLeft = hasJQ ? $(window).scrollLeft() || 0 :
+                window.pageXOffset || 0;
             fn.call(this);
-            if ($root && $root.length) $root.scrollTop(rootTop);
+            scrollers.forEach(function (el, i) {
+                try {
+                    el.scrollTop = tops[i];
+                    el.scrollLeft = lefts[i];
+                } catch (e) { /* noop */ }
+            });
             if (hasJQ) {
                 $(window).scrollTop(winTop);
             } else if (winTop) {
                 window.scrollTo(0, winTop);
             }
+        },
+
+        // Keep an expanded row in view without jumping: block:'nearest'
+        // is a no-op when the row is already visible, so opening a
+        // supplier never scrolls the page to the top.
+        _keepSupRowVisible: function ($row) {
+            if (!$row || !$row.length || !$row[0].scrollIntoView) return;
+            try {
+                $row[0].scrollIntoView({
+                    block: 'nearest',
+                    inline: 'nearest',
+                    behavior: 'auto',
+                });
+            } catch (e) { /* older browsers: ignore */ }
+        },
+
+        _findSupByKey: function (key) {
+            var found = null;
+            ((this.supSummary || {}).suppliers || []).forEach(function (sp) {
+                if (!found && this._supKey(sp) === key) found = sp;
+            }, this);
+            return found;
+        },
+
+        // Sync toggle icon + aria state on one supplier row (used by the
+        // in-place expand below and by full re-renders alike).
+        _setSupRowOpen: function ($row, isOpen) {
+            $row.toggleClass('mpp-sup-open', !!isOpen);
+            var $btn = $row.find('.mpp-btn-sup-toggle');
+            var label = (isOpen ? 'Hide' : 'Show') +
+                ' parts bought from this supplier';
+            $btn.attr('aria-expanded', isOpen ? 'true' : 'false');
+            $btn.attr('aria-label', label).attr('title', 'Click to ' +
+                (isOpen ? 'hide' : 'show') +
+                ' which parts are bought from this supplier');
+            $btn.find('.msp-bom-arrow')
+                .toggleClass('fa-caret-down', !!isOpen)
+                .toggleClass('fa-caret-right', !isOpen);
         },
 
         // Per-company cash totals + distinct-vendor counts for the KPI
@@ -2207,18 +2267,47 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             ev.stopPropagation();
             if (ev.preventDefault) ev.preventDefault();
             var el = ev.currentTarget;
-            var key = el.dataset.supKey;
-            if (!key) return;
             var self = this;
-            if (!self.supSummary) return;
-            this._preserveSupScroll(function () {
-                if (self.expandedSup[key]) {
-                    delete self.expandedSup[key];
-                } else {
-                    self.expandedSup[key] = true;
+            var key = el.dataset.supKey;
+            if (!key || !this.supSummary) return;
+            var sp = this._findSupByKey(key);
+            if (!sp) return;
+            // In-place expand/collapse: insert or remove only the sub-rows
+            // after the clicked row. No full table re-render, so scroll
+            // position and focus survive and the page never jumps to top.
+            var willOpen = !this.expandedSup[key];
+            if (willOpen) {
+                this.expandedSup[key] = true;
+            } else {
+                delete this.expandedSup[key];
+            }
+            var $row = $(el).closest('tr');
+            if (!$row || !$row.length) {
+                this._preserveSupScroll(function () {
+                    self._renderSuppliers(self.supSummary);
+                });
+                return;
+            }
+            this._setSupRowOpen($row, willOpen);
+            var $next = $row.next();
+            while ($next.length && $next.hasClass('mpp-sup-sub-row')) {
+                var $tmp = $next.next();
+                $next.remove();
+                $next = $tmp;
+            }
+            if (willOpen) {
+                $row.after(this._supplierLinesHtml(sp));
+                this._keepSupRowVisible($row);
+            }
+            // Keep keyboard/screen-reader focus on the control the user
+            // activated; preventScroll avoids any focus-driven jump.
+            if (el && el.focus && document.activeElement !== el) {
+                try {
+                    el.focus({preventScroll: true});
+                } catch (e) {
+                    try { el.focus(); } catch (_e) { /* noop */ }
                 }
-                self._renderSuppliers(self.supSummary);
-            });
+            }
         },
 
         // Open a purchase.order form in a new browser tab.
@@ -2350,6 +2439,24 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 entry[0] + '</span>';
         },
 
+        // Update button for the needs_confirm box: shown only while the
+        // server reported an updatable draft RFQ for this supplier.
+        // The existing draft keeps its prices; open quantities are
+        // added on top (same product bumps the line, new products
+        // open a line).
+        _updatableBtnHtml: function (seller, company) {
+            var list = this.pendingRfqUpdatable || [];
+            if (!list.length) return '';
+            var names = list.map(function (q) {
+                return q.name + (q.currency ? ' ' + q.currency : '');
+            }).join(', ');
+            return '<button type="button" class="btn btn-success btn-sm mpp-btn-update-rfq mr-1" ' +
+                'data-seller="' + seller + '" data-company="' +
+                (company || '') + '" title="Add the open quantities to: ' +
+                String(names).replace(/"/g, '&quot;') + '">' +
+                '<i class="fa fa-plus mr-1"></i>Update RFQ</button>';
+        },
+
         _supplierRowHtml: function (sp) {
             var self = this;
             var rfqs = '';
@@ -2387,18 +2494,23 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 (self.pendingRfqSeller === key ?
                     '<div class="alert alert-warning mt-1 mb-0" style="font-size:0.8rem;">' +
                     'Draft RFQ(s) already exist for this supplier + company. ' +
+                    self._updatableBtnHtml(sp.seller_id, sp.company_id) +
                     '<button type="button" class="btn btn-warning btn-sm mpp-btn-confirm-rfq" ' +
                     'data-seller="' + sp.seller_id + '" data-company="' +
-                    (sp.company_id || '') + '">Create Again</button></div>' : '') :
+                    (sp.company_id || '') + '">Create new</button></div>' : '') :
                 '<span class="badge badge-success">Covered</span>';
             var unpricedNote = (sp.unpriced_count || 0) > 0 ?
                 ' <span class="badge badge-warning" title="Lines without price are counted as 0 USD">' +
                 sp.unpriced_count + ' no price</span>' : '';
-            return '<tr class="item-row">' +
+            return '<tr class="item-row' + (isOpen ? ' mpp-sup-open' : '') + '">' +
                 '<td class="td-product">' +
                 '<button type="button" class="btn btn-sm btn-link mpp-btn-sup-toggle p-0 mr-1 text-primary"' +
                 ' data-sup-key="' + supKey + '"' +
-                ' title="Click to show which parts are bought from this supplier">' +
+                ' aria-expanded="' + (isOpen ? 'true' : 'false') + '"' +
+                ' aria-label="' + (isOpen ? 'Hide' : 'Show') +
+                ' parts bought from this supplier"' +
+                ' title="Click to ' + (isOpen ? 'hide' : 'show') +
+                ' which parts are bought from this supplier">' +
                 '<i class="fa ' + (isOpen ? 'fa-caret-down' : 'fa-caret-right') +
                 ' msp-bom-arrow"></i></button>' +
                 '<span class="prod-name mpp-sup-name" data-sup-key="' + supKey + '"' +
