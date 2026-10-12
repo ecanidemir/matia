@@ -739,3 +739,14 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Canni kanit: ayni plumbing ile `get_supplier_summary([30])` (`@api.model` var) staging+prod'da OK donerken `get_rfq_preview([30])` iki instance'ta da ayni TypeError'u verdi.
 - Cozum: 3 metoda `@api.model` eklendi (3 satir, `py_compile` OK). `get_rfq_preview`/`action_create_draft_rfqs`'un su an cagiricisi YOK (olu kod yolu) ama ayni siniftan oldugu icin onlar da duzeltildi. TEHLIKE NOTU: seller id plan id ile cakisirsa YANLIS plana RFQ uretilebilirdi (mevcut ID'lerde cakisma yok: seller 941+, plan 1-30).
 - Kural: `(model, method, args)` formunda JS'ten cagrilan ve args[0]'i is-id'si olan HER metoda `@api.model` sart; `ensure_one` yoklugu yetmez, dekorator taramasi da yap (`dec=YOK` taramasi). Deploy: Python var -> Git Deploy + restart (mesai disi + backup) + modul Upgrade + Ctrl+F5; sonrasi slot 5'te TR RFQ ile teyit. Commit/push kullanici onayiyla.
+
+## RFQ Chatter Ust-Urun Kullanim Kirilimi (2026-10-12, kodlandi - push/deploy BEKLIYOR)
+
+- Istek: RFQ chatter'inda hammadde satirinda "bu miktar nereye gidiyor" kirilimi (orn. lama 3500mm -> "200mm x 10 adet = 2000mm"). Mevcut chatter TERS yondeydi (siparis urununun ALT bilesenlerini aciyordu).
+- Yontem (NET bazli, kullanici tercihi): `edge_json` ({parent: {child: qty}}, miktar cocuk UoM'inde) tersine cevrilir; ilk satirli ata `edge qty x order_qty` ile listelenir. Satirsiz atalar (phantom kit) faktor biriktirilerek gecilir, net-sifir ustler atlanir, satir basi en buyuk 10 ust + tasi note. Toplam siparise degil ust-suruculu talebe esittir (cocuk stogu farki kapatir) - plan 30 canli verisiyle simule edildi (orn. M1MGRN15: 5 ust, katki toplami 375 vs brut 825).
+- Kod: `_rfq_usage_map` + `_rfq_usage_lines` + `_rfq_bom_chatter` genisletmesi (asagiya dogru BOM listesi korunur, alta "uses: ..." satirlari eklenir). py_compile OK + gercek veri simulasyonu OK. Deploy: Git Deploy + restart + Upgrade (Python).
+
+## RFQ Satir Aciklamasi Standartlasmasi (2026-10-12, kodlandi - push/deploy BEKLIYOR)
+
+- Istek: modül PO satir `name`'ine `[plan] urun` yazmasin; standart satin alma aciklamasi gelsin.
+- Cozum: `_rfq_std_line_name` helper (stok purchase onchange aynasi: tedarikci dilinde `display_name` + varsa `description_purchase`, partner context dahil). Iki RFQ uretim blogundaki `[%s] %s` kaldirildi. `description_purchase` fields_get ile dogrulandi. py_compile OK.

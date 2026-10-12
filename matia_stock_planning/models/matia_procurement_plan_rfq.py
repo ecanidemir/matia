@@ -21,6 +21,7 @@ Rules:
 from odoo import api, fields, models, _
 from odoo.exceptions import AccessError, UserError
 from xml.sax.saxutils import escape as _xml_escape
+import json
 import logging
 
 from .matia_procurement_plan import (
@@ -218,6 +219,112 @@ class MatiaProcurementPlanRfq(models.Model):
             return str(int(round(qty)))
         return ('%.2f' % qty).rstrip('0').rstrip('.')
 
+    def _rfq_std_line_name(self, po, product):
+        """Standard purchase line description (no module prefix).
+
+        Mirrors the stock purchase onchange: variant display name
+        plus the product's Purchase Description, in the vendor's
+        language (partner context included, like the UI). The
+        module never invents its own '[plan] ...' prefix.
+        @param po: purchase.order record (vendor lang source).
+        @param product: product.product record.
+        @return: description string.
+        """
+        ctx = {'partner_id': po.partner_id.id}
+        if po.partner_id.lang:
+            ctx['lang'] = po.partner_id.lang
+        prod = product.with_context(**ctx)
+        name = prod.display_name or ''
+        if prod.description_purchase:
+            name += '\n' + prod.description_purchase
+        return name
+
+    def _rfq_usage_map(self, plan):
+        """Invert the plan explosion edges (child -> parents).
+
+        edge_json stores {parent: {child: qty}} with qty per
+        parent unit in the CHILD's UoM. Inverting gives, for
+        every child, its direct parents plus per-unit usage.
+        @param plan: matia.procurement.plan record.
+        @return: ({child_id: [(parent_id, qty_per_unit)]},
+            {product_id: plan line}).
+        """
+        try:
+            edges = json.loads(plan.edge_json or '{}')
+        except ValueError:
+            edges = {}
+        parents = {}
+        for _p, _ch in (edges or {}).items():
+            try:
+                _pi = int(_p)
+            except (TypeError, ValueError):
+                continue
+            for _c, _q in (_ch or {}).items():
+                try:
+                    parents.setdefault(int(_c), []).append(
+                        (_pi, float(_q or 0.0)))
+                except (TypeError, ValueError):
+                    continue
+        lines = {}
+        for _line in plan.line_ids:
+            lines.setdefault(_line.product_id.id, _line)
+        return parents, lines
+
+    def _rfq_usage_lines(self, parents, lines_by_pid, child_id,
+                         child_uom):
+        """Net-based where-used breakdown for one child product.
+
+        Walks the inverted edges upward; the first ancestor
+        holding a plan line consumes (edge qty x line order_qty,
+        i.e. the parent's NET need). Lineless ancestors
+        (phantom kits) are passed through with an accumulated
+        factor. Zero-net parents are skipped, so the parts sum
+        to the parent-driven demand, not to the ordered qty
+        (the child's own stock covers the rest).
+        @param parents: inverted edge map from _rfq_usage_map.
+        @param lines_by_pid: {product_id: plan line}.
+        @param child_id: product.product id of the RFQ line.
+        @param child_uom: UoM name of the RFQ line.
+        @return: list of display strings, biggest first (max 10,
+            plus an overflow note when more parents exist).
+        """
+        found = []
+        seen = set()
+        queue = [(child_id, 1.0)]
+        guard = 0
+        while queue and guard < 500:
+            guard += 1
+            _pid, _factor = queue.pop(0)
+            for _pp, _q in parents.get(_pid, []):
+                _nf = _factor * float(_q or 0.0)
+                if _nf <= 0 or _pp in seen:
+                    continue
+                seen.add(_pp)
+                _pl = lines_by_pid.get(_pp)
+                if _pl is None:
+                    queue.append((_pp, _nf))
+                    continue
+                _n = float(_pl.order_qty or 0.0)
+                if _n <= 0:
+                    continue
+                _contrib = _nf * _n
+                _puom = (_pl.uom_id.name
+                         if _pl.uom_id else '')
+                found.append((_contrib,
+                    '[%s] %s: %s %s x %s %s = %s %s' % (
+                        _pl.product_id.default_code or '',
+                        _pl.product_id.display_name or '',
+                        self._rfq_fmt_qty(_nf), child_uom,
+                        self._rfq_fmt_qty(_n), _puom,
+                        self._rfq_fmt_qty(_contrib),
+                        child_uom)))
+        found.sort(key=lambda t: -t[0])
+        res = [t[1] for t in found[:10]]
+        if len(found) > 10:
+            res.append(_('... and %d more parents') % (
+                len(found) - 10))
+        return res
+
     def _rfq_bom_chatter(self, env_sudo, plan, po, lines):
         """Post a BOM-detail note on a freshly created RFQ.
 
@@ -226,8 +333,11 @@ class MatiaProcurementPlanRfq(models.Model):
         level and scaled by the ordered quantity, e.g.
         '[M3TLMN01] Wheel Tool 2 Milling - 26 Units' with component
         '[M3TLTN02] Wheel Tool 2 Lathe - 26 Units (1 per)'.
-        Lines without a BOM render as themselves only. Posted as an
-        internal note so the vendor is not emailed.
+        Lines without a BOM render as themselves only. Raw-material
+        lines additionally list their NET-based usage (which parent
+        products consume how much per piece, e.g. a 3500 mm bar
+        shows '[M3PRT01] Bracket: 200 mm x 10 Units = 2000 mm').
+        Posted as an internal note so the vendor is not emailed.
 
         @param env_sudo: sudo environment.
         @param plan: matia.procurement.plan record.
@@ -236,45 +346,49 @@ class MatiaProcurementPlanRfq(models.Model):
         @return: None.
         """
         items = []
+        usage_parents, lines_by_pid = self._rfq_usage_map(plan)
         for line in lines:
             prod = line.product_id
             src_uom = (line.uom_id or prod.uom_id
                        or prod.uom_po_id)
+            src_uom_name = src_uom.name if src_uom else ''
             head = '[%s] %s - %s %s' % (
                 prod.default_code or '',
                 prod.display_name or '',
                 self._rfq_fmt_qty(line.order_qty),
-                src_uom.name if src_uom else '')
+                src_uom_name)
             bom = self._rfq_find_bom(
                 env_sudo, prod, po.company_id.id)
-            if not bom:
-                items.append('<li>%s</li>' % _xml_escape(head))
-                continue
-            try:
-                need = src_uom._compute_quantity(
-                    line.order_qty or 0.0, bom.product_uom_id)
-            except Exception:
-                need = line.order_qty or 0.0
-            factor = (need / bom.product_qty) if bom.product_qty \
-                else 0.0
-            comps = []
-            for bl in bom.bom_line_ids:
-                cprod = bl.product_id
-                cqty = (bl.product_qty or 0.0) * factor
-                comps.append('[%s] %s - %s %s (%s per %s %s)' % (
-                    cprod.default_code or '',
-                    cprod.display_name or '',
-                    self._rfq_fmt_qty(cqty),
-                    bl.product_uom_id.name,
-                    self._rfq_fmt_qty(bl.product_qty),
-                    self._rfq_fmt_qty(bom.product_qty),
-                    bom.product_uom_id.name))
-            if comps:
+            subs = []
+            if bom:
+                try:
+                    need = src_uom._compute_quantity(
+                        line.order_qty or 0.0, bom.product_uom_id)
+                except Exception:
+                    need = line.order_qty or 0.0
+                factor = (need / bom.product_qty) if bom.product_qty \
+                    else 0.0
+                for bl in bom.bom_line_ids:
+                    cprod = bl.product_id
+                    cqty = (bl.product_qty or 0.0) * factor
+                    subs.append('[%s] %s - %s %s (%s per %s %s)' % (
+                        cprod.default_code or '',
+                        cprod.display_name or '',
+                        self._rfq_fmt_qty(cqty),
+                        bl.product_uom_id.name,
+                        self._rfq_fmt_qty(bl.product_qty),
+                        self._rfq_fmt_qty(bom.product_qty),
+                        bom.product_uom_id.name))
+            for _use in self._rfq_usage_lines(
+                    usage_parents, lines_by_pid, prod.id,
+                    src_uom_name):
+                subs.append(_('uses: %s') % _use)
+            if subs:
                 items.append(
                     '<li>%s<ul><li>%s</li></ul></li>' % (
                         _xml_escape(head),
                         '</li><li>'.join(
-                            _xml_escape(c) for c in comps)))
+                            _xml_escape(c) for c in subs)))
             else:
                 items.append('<li>%s</li>' % _xml_escape(head))
         if not items:
@@ -421,8 +535,8 @@ class MatiaProcurementPlanRfq(models.Model):
                         'product_qty': line.order_qty,
                         'product_uom': uom,
                         'price_unit': _conv,
-                        'name': '[%s] %s' % (
-                            plan.name, line.product_id.display_name),
+                        'name': self._rfq_std_line_name(
+                            po, line.product_id),
                         'date_planned': fields.Date.today(),
                     })
                     line.write({
@@ -556,8 +670,8 @@ class MatiaProcurementPlanRfq(models.Model):
                         'product_qty': line.order_qty,
                         'product_uom': uom,
                         'price_unit': _conv2,
-                        'name': '[%s] %s' % (
-                            plan.name, line.product_id.display_name),
+                        'name': self._rfq_std_line_name(
+                            po, line.product_id),
                         'date_planned': fields.Date.today(),
                     })
                     line.write({
