@@ -844,3 +844,10 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Odoo quirk (bizim kod DEGIL): standart `purchase.order button_cancel` None doner -> odoobulut XML-RPC 'cannot marshal None' Fault verir; Fault response'ta olur, cancel COMMIT olur. Test: Fault tolerate et + state re-read ile dogrula.
 - Script dersleri: execute_kw'de args/kwargs POZISYONEL (`[ids]` tek katman; cift katman 'unhashable list'); transient `create(vals)` default_get'i BYPASS eder -> wizard'lari `[{}]` + `{'context': {'default_plan_id': ..}}` ile ac; snapshot created/updated/relinked girdileri dict (id+name+...) -> karsilastirmada id cikar.
 - Bilinen aciklar (plana gore): released'da eski satir-butonlar gizlenmiyor (sadece yeni butonlarda attrs); §2.3 revizyon-delta akisi yok (unrelease duz kilit-acma); §2.7 gelismis takip kodlari yok (sadece baz status); 2 bos-body mail.message (sebebi belirsiz, minor).
+
+## Release Upgrade ParseError + Stale-View Cleanup (2026-10-12, staging, cozuldu - v15.0.2.10.1)
+
+- Belirti: staging Upgrade (`button_immediate_upgrade`) ParseError: `procurement_plan_views.xml` yuklenirken combined-arch'ta `action_open_release_wizard is not a valid action`. Lokal dosyada o buton YOK (77 satir, temiz) + repo grep temiz -> sorun DB'deki bayat kayit.
+- Kok neden: silinen `procurement_plan_release_views.xml`'in 4 view'u (form_release inherit + tree_release inherit + 2 wizard formu) staging DB'de duruyordu; base form view reload'da `_inverse_arch` combined-arch'i bayat inherit ile birlestirip silinen metoda takildi. Odoo silinen dosya kayitlarini upgrade SONUNDA temizler, o faza gelinemedi. Basarisiz upgrade transactional -> DB kirlenmesi YOK (modul eski versiyonda kaldi).
+- Duzeltme: `views/procurement_plan_release_cleanup.xml` (search-tabanli 4x `<delete>`, fresh install'da no-op) manifest data sirasinda view dosyasindan ONCE; commit a55f299. KURAL: inherit view iceren XML dosyasi silinirse, ayni upgrade'te once `<delete>` cleanup sart (dosya silmek yetmez).
+- Not: CloudPepper checkout dizinindeki `6ab5064b9c4d3` bizim git SHA degil (ic dusum isimlendirme); icerik fb8d495 ile eslesiyor (metod yok + dosya yok).
