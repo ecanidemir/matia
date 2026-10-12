@@ -215,7 +215,46 @@ class MatiaProcurementPlanRelease(models.Model):
         plan = env_sudo['matia.procurement.plan'].browse(int(plan_id))
         if not plan.exists():
             raise UserError(_('Plan not found.'))
+        mpp = env_sudo['matia.procurement.plan']
         lines, summary, counts = self._release_preview_data(plan)
+        # Dashboard contract (see _releasePreviewHtml in
+        # procurement_plan.js): grouped RFQ rows with an estimated USD
+        # total + a create/update action, and checkbox MO rows.
+        # _rfq_groups subtotals are in group currency, so convert to
+        # USD for the estimate (best effort: raw subtotal on failure).
+        usd = env_sudo['res.currency'].search(
+            [('name', '=', 'USD')], limit=1)
+        groups, _skipped = mpp._rfq_groups(plan)
+        groups_out = []
+        for grp in groups:
+            updatable = mpp._rfq_find_updatable(
+                plan, grp['seller_id'], grp['company_id'],
+                grp['currency_id'])
+            total = grp['subtotal']
+            cur = env_sudo['res.currency'].browse(
+                grp['currency_id'])
+            if usd and cur.exists() and cur.id != usd.id:
+                try:
+                    total = cur._convert(
+                        total, usd,
+                        env_sudo['res.company'].browse(
+                            grp['company_id']),
+                        fields.Date.today())
+                except Exception:
+                    total = grp['subtotal']
+            groups_out.append({
+                'name': '%s (%s / %s)' % (
+                    grp['seller_name'], grp['currency_name'],
+                    grp['company']),
+                'line_count': len(grp['lines']),
+                'total_usd': round(total or 0.0, 2),
+                'action': 'update' if updatable else 'create',
+            })
+        mo_eligible = [{
+            'line_id': line['plan_line_id'],
+            'product': line['product_name'],
+            'qty': line['qty'],
+        } for line in lines if line.get('kind') == 'mo']
         return {
             'plan_id': plan.id,
             'release_state': plan.release_state,
@@ -226,6 +265,8 @@ class MatiaProcurementPlanRelease(models.Model):
             'skipped_count': counts['skipped'],
             'draft_rfq_count': counts['draft_rfqs'],
             'mo_count': counts['mos'],
+            'groups': groups_out,
+            'mo_eligible': mo_eligible,
             'lines': lines,
         }
 

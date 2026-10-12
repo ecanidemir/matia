@@ -3041,6 +3041,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 'style="font-size:0.8rem;">' +
                 _t('Preview of everything one Release creates. Nothing is created until you press Release.') +
                 '</div>';
+            if (p.summary) {
+                html += '<div class="text-muted mb-2" ' +
+                    'style="font-size:0.8rem;">' + p.summary + '</div>';
+            }
             var groups = p.groups || [];
             html += '<h6>' + _t('Draft RFQs') + ' (' + groups.length +
                 ')</h6>';
@@ -3113,7 +3117,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // filter, confirm-all, revise and close actions.
         _releaseTrackingHtml: function (t) {
             t = t || {};
-            var st = t.plan_state || 'released';
+            var st = t.release_state || 'released';
             var closed = (st === 'closed');
             var stateTxt = (closed ? _t('Closed') : _t('Released')) +
                 ' ' + _t('rev') + ' ' + (t.released_rev || 0);
@@ -3172,12 +3176,15 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     (l.status || '') + '</span>' :
                     '<span class="badge badge-info">' +
                     (l.status || '') + '</span>';
-                var doc = l.po_name ?
-                    (l.po_name + ' (' + (l.po_state || '') + ')') :
+                var poName = l.po_name || l.rfq_name;
+                var poState = l.po_state || l.rfq_state;
+                var doc = poName ?
+                    (poName + ' (' + (poState || '') + ')') :
                     (l.mo_name ?
                         (l.mo_name + ' (' + (l.mo_state || '') +
                             ')') : '-');
-                html += '<tr><td>' + (l.product || '') + '</td><td>' +
+                html += '<tr><td>' + (l.product || l.product_name ||
+                    '') + '</td><td>' +
                     (l.route || '') + '</td><td>' + badge + '</td><td>' +
                     doc + '</td></tr>';
             });
