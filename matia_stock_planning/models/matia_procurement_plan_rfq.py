@@ -15,6 +15,10 @@ Rules:
   chain). ``make`` lines stay in production scope (draft MOs).
 - Price snapshot: ``price_unit`` = line ``last_price`` with the PO
   currency = line ``last_currency_id`` (no conversion on write).
+- PO lines use the product purchase UoM (``uom_po_id``): plan lines
+  live in the stock UoM (e.g. mm for cable) while the commercial
+  document quotes the purchase UoM (e.g. m); quantities and prices
+  are converted together so line totals are unchanged.
 - Repeat protection: creating again while RFQs are linked requires
   explicit ``confirm=True`` from the client.
 """
@@ -88,8 +92,9 @@ class MatiaProcurementPlanRfq(models.Model):
                     line.last_company_id.id if line.last_company_id
                     else plan.company_id.id),
             }
-        # RFQ PO lines use the plan line UoM, so the PO-UoM snapshot
-        # must be converted first (e.g. per-m price -> per-mm price).
+        # RFQ PO lines use the product purchase UoM, so the
+        # plan-line-UoM snapshot is converted back to the purchase
+        # UoM by _rfq_po_line_vals (e.g. per-mm price -> per-m price).
         return {
             'price': (line.last_price or 0.0)
             * _mpp_line_uom_factor(line),
@@ -100,6 +105,57 @@ class MatiaProcurementPlanRfq(models.Model):
             'company_id': line.last_company_id.id
             if line.last_company_id else plan.company_id.id,
         }
+
+    @api.model
+    def _rfq_po_line_vals(self, line, qty, price):
+        """PO-line UoM, quantity and price in the purchase UoM.
+
+        Plan lines live in the stock UoM (e.g. mm for cable) while the
+        commercial document must use the product purchase UoM
+        (``uom_po_id``, e.g. m): Odoo's own purchase onchange picks
+        ``uom_po_id`` for new PO lines, and supplier prices are quoted
+        per purchase UoM. Quantity and price are converted together so
+        the line total is unchanged (e.g. 58090 mm x 0.00023/mm
+        becomes 58.09 m x 0.23/m). Conversion failure falls back to
+        the raw plan-UoM values (fail-safe: old behaviour, warning
+        logged).
+        @param line: matia.procurement.plan.line record.
+        @param qty: ordered quantity in the plan line UoM.
+        @param price: unit price per plan line UoM.
+        @return: {'uom_id': int/False, 'qty': float, 'price': float}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        prod = line.product_id
+        line_uom = line.uom_id
+        po_uom = prod.uom_po_id or line_uom or prod.uom_id
+        if not line_uom or not po_uom or line_uom.id == po_uom.id:
+            return {
+                'uom_id': (line_uom.id if line_uom
+                           else po_uom.id if po_uom else False),
+                'qty': qty,
+                'price': price,
+            }
+        try:
+            qty_po = line_uom._compute_quantity(qty, po_uom)
+            per_po = po_uom._compute_quantity(
+                1.0, line_uom, round=False)
+            if not per_po:
+                raise ValueError('zero UoM factor')
+            return {
+                'uom_id': po_uom.id,
+                'qty': qty_po,
+                'price': price * per_po,
+            }
+        except Exception as exc:
+            _logger.warning(
+                'MPP RFQ UoM fallback for product %s: %s; '
+                'using plan UoM values.',
+                prod.default_code or prod.id, exc)
+            return {
+                'uom_id': line_uom.id,
+                'qty': qty,
+                'price': price,
+            }
 
     def _rfq_groups(self, plan):
         """Bucket RFQ-eligible lines by (seller, currency, company).
@@ -275,17 +331,15 @@ class MatiaProcurementPlanRfq(models.Model):
                 _delta[line.id] = _rem
                 _amount += _add * (_target.price_unit or 0.0)
             else:
-                _uom = (line.uom_id.id if line.uom_id
-                        else line.product_id.uom_po_id.id
-                        if line.product_id.uom_po_id else False)
                 _conv = self._rfq_line_eff(
                     env_sudo, usd, plan, line, overrides)['price']
+                _vals = self._rfq_po_line_vals(line, _rem, _conv)
                 _po_line = env_sudo['purchase.order.line'].create({
                     'order_id': po.id,
                     'product_id': line.product_id.id,
-                    'product_qty': _rem,
-                    'product_uom': _uom,
-                    'price_unit': _conv,
+                    'product_qty': _vals['qty'],
+                    'product_uom': _vals['uom_id'],
+                    'price_unit': _vals['price'],
                     'name': self._rfq_std_line_name(po, line.product_id),
                     'date_planned': fields.Date.today(),
                 })
@@ -297,7 +351,7 @@ class MatiaProcurementPlanRfq(models.Model):
                     line.product_id.id, []).append(_po_line)
                 _added += 1
                 _delta[line.id] = _rem
-                _amount += _rem * _conv
+                _amount += _vals['qty'] * _vals['price']
         if _delta:
             try:
                 self._rfq_bom_chatter(
@@ -595,6 +649,9 @@ class MatiaProcurementPlanRfq(models.Model):
                     env_sudo, usd, plan, line, overrides)
                 _rem = grp['qty_map'].get(line.id,
                                            line.order_qty)
+                _pvals = self._rfq_po_line_vals(
+                    line, _rem, _eff['price'])
+                _puom = line.product_id.uom_po_id or line.uom_id
                 _plines.append({
                     'product_id': line.product_id.id,
                     'code': line.product_id.default_code or '',
@@ -603,6 +660,10 @@ class MatiaProcurementPlanRfq(models.Model):
                     'covered_qty': (line.order_qty or 0.0) - _rem,
                     'last_price': _eff['price'],
                     'last_currency': _eff['currency_name'],
+                    'po_qty': _pvals['qty'],
+                    'po_uom_id': _pvals['uom_id'],
+                    'po_uom': _puom.name if _puom else '',
+                    'po_price': _pvals['price'],
                 })
             _eff_cur = self._rfq_resolve_currency(
                 env_sudo, grp['company_id'], grp['currency_id'])
@@ -741,20 +802,18 @@ class MatiaProcurementPlanRfq(models.Model):
                 })
                 amount = 0.0
                 for line in grp['lines']:
-                    uom = (line.uom_id.id if line.uom_id
-                           else line.product_id.uom_po_id.id
-                           if line.product_id.uom_po_id else False)
                     _conv = self._rfq_line_eff(
                         env_sudo, usd, plan, line,
                         overrides)['price']
                     _rem = grp['qty_map'].get(line.id,
                                               line.order_qty)
+                    _vals = self._rfq_po_line_vals(line, _rem, _conv)
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,
-                        'product_qty': _rem,
-                        'product_uom': uom,
-                        'price_unit': _conv,
+                        'product_qty': _vals['qty'],
+                        'product_uom': _vals['uom_id'],
+                        'price_unit': _vals['price'],
                         'name': self._rfq_std_line_name(
                             po, line.product_id),
                         'date_planned': fields.Date.today(),
@@ -763,7 +822,7 @@ class MatiaProcurementPlanRfq(models.Model):
                         'purchase_order_id': po.id,
                         'purchase_line_id': po_line.id,
                     })
-                    amount += (_rem * _conv)
+                    amount += (_vals['qty'] * _vals['price'])
                 try:
                     self._rfq_bom_chatter(
                         env_sudo, plan, po, grp['lines'],
@@ -912,20 +971,19 @@ class MatiaProcurementPlanRfq(models.Model):
                 })
                 amount = 0.0
                 for line in grp['lines']:
-                    uom = (line.uom_id.id if line.uom_id
-                           else line.product_id.uom_po_id.id
-                           if line.product_id.uom_po_id else False)
                     _conv2 = self._rfq_line_eff(
                         env_sudo, usd, plan, line,
                         overrides)['price']
                     _rem2 = grp['qty_map'].get(line.id,
                                                line.order_qty)
+                    _vals2 = self._rfq_po_line_vals(
+                        line, _rem2, _conv2)
                     po_line = env_sudo['purchase.order.line'].create({
                         'order_id': po.id,
                         'product_id': line.product_id.id,
-                        'product_qty': _rem2,
-                        'product_uom': uom,
-                        'price_unit': _conv2,
+                        'product_qty': _vals2['qty'],
+                        'product_uom': _vals2['uom_id'],
+                        'price_unit': _vals2['price'],
                         'name': self._rfq_std_line_name(
                             po, line.product_id),
                         'date_planned': fields.Date.today(),
@@ -934,7 +992,7 @@ class MatiaProcurementPlanRfq(models.Model):
                         'purchase_order_id': po.id,
                         'purchase_line_id': po_line.id,
                     })
-                    amount += (_rem2 * _conv2)
+                    amount += (_vals2['qty'] * _vals2['price'])
                 try:
                     self._rfq_bom_chatter(
                         env_sudo, plan, po, grp['lines'],
