@@ -2276,12 +2276,30 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return html;
         },
 
+        // RFQ durum rozeti: ham state kodu yerine Turkce etiket
+        // (Taslak mavi / Gonderildi-Onay Bekliyor turuncu /
+        // Onaylandi yesil; iptal edilenler sunucuda gizli).
+        _rfqStateBadge: function (state) {
+            var map = {
+                draft: ['Taslak', 'badge-info'],
+                sent: ['Gönderildi', 'badge-warning'],
+                'to approve': ['Onay Bekliyor', 'badge-warning'],
+                purchase: ['Onaylandı', 'badge-success'],
+                done: ['Onaylandı', 'badge-success'],
+                cancel: ['İptal', 'badge-secondary'],
+            };
+            var entry = map[state] || [state, 'badge-secondary'];
+            return '<span class="badge ' + entry[1] + '">' +
+                entry[0] + '</span>';
+        },
+
         _supplierRowHtml: function (sp) {
             var self = this;
             var rfqs = '';
             (sp.rfqs || []).forEach(function (q) {
-                rfqs += '<div><strong>' + q.name + '</strong> (' +
-                    q.state + ') ' + (q.currency || '') + ' ' +
+                rfqs += '<div><strong>' + q.name + '</strong> ' +
+                    self._rfqStateBadge(q.state) + ' ' +
+                    (q.currency || '') + ' ' +
                     self._fmtNum(q.amount_total, 2) + '</div>';
             });
             var key = this._rfqKey(sp.seller_id, sp.company_id);

@@ -755,3 +755,4 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 
 - Belirti (staging canli teyitli): iptal edilen `PO/26-00055` (state cancel, origin MPP) supplier satirinda gorunmeye devam ediyor.
 - Cozum: `get_supplier_summary` (po_by_seller + rfq_count + production satirindaki po), `get_rfq_preview` (existing_*), `_plan_summary` override (rfqs + rfq_count) artik `state == 'cancel'` PO'lari atliyor. Yeniden olusturma mantigi zaten sadece `draft`'a baktigi icin iptal sonrasi tekrar RFQ acilabiliyor (degismedi). Slot-bar `rfq_count` ve stored `rfq_count` tarihce oldugu icin ELLEMEDI (overwrite uyarisi guvenli tarafta kalsin). py_compile OK.
+- JS-only: supplier satirindaki RFQ durumunda ham kod yerine rozet (`_rfqStateBadge`: Taslak mavi / Gonderildi+Onay Bekliyor turuncu / Onaylandi yesil; node --check OK). Deploy: Upgrade + Ctrl+F5 yeterli (Python yok).
