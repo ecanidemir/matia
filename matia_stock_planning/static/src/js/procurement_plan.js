@@ -303,7 +303,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'class="form-control form-control-sm mpp-fill-n" ' +
                     (self.planLocked ? 'disabled="disabled" ' : '') +
                     'data-group="' + g.key + '" ' +
-                    'title="Devices wanted for this group; per-top Needed = devices x usage, then Rebuild"/>' +
+                    'title="' + _t('Devices wanted for this group; per-top Needed = devices x usage, then Rebuild') + '"/>' +
                     '</div>';
             });
             this.$('.mpp-cost-kpi-grid').html(html);
@@ -1311,7 +1311,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     ' data-uid="' + uid + '" data-pid="' + r.product_id + '"' +
                     ' data-net="' + net + '" data-level="' + level + '"' +
                     ' data-group="' + groupKey + '"' +
-                    ' title="Click to view sub-assembly BOM components">' +
+                     ' title="' + _t('Click to view sub-assembly BOM components') + '">' +
                     '<i class="fa ' + (isOpen ? 'fa-caret-down' : 'fa-caret-right') +
                     ' msp-bom-arrow"></i></button>';
             } else {
@@ -1387,7 +1387,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'data-pid="' + r.product_id + '" ' +
                     'data-avail="' + avail + '" ' +
                     'data-prod="' + prod + '" ' +
-                    'title="Wanted units, gross (stock and shared use net into Planned on Rebuild)" value="' +
+                    'title="' + _t('Wanted units, gross (stock and shared use net into Planned on Rebuild)') + '" value="' +
                     need + '"/>' :
                     '<span class="text-muted">—</span>') + '</td>' +
                 '<td class="td-req"' + breakdown + '>' + (net <= 0 ?
@@ -2558,7 +2558,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     self._routeLabel(ln.route) + '</span></td>' +
                     '<td class="td-stock text-right"><strong>' +
                     self._fmtNum(ln.total_usd, 2) + ' USD</strong>' +
-                    '<small class="text-muted d-block" style="font-weight:400;" title="Net gap cost (own + net child shares)">' +
+                    '<small class="text-muted d-block" style="font-weight:400;" title="' + _t('Net gap cost (own + net child shares)') + '">' +
                     'Net ' +
                     self._fmtNum(ln.rolled_usd, 2) + ' x ' +
                     self._fmtNum(ln.order_qty, 0) + ' = ' +
@@ -2609,7 +2609,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }).join(', ');
             return '<button type="button" class="btn btn-success btn-sm mpp-btn-update-rfq mr-1" ' +
                 'data-seller="' + seller + '" data-company="' +
-                (company || '') + '" title="Add the open quantities to: ' +
+                (company || '') + '" title="' + _t('Add the open quantities to: ') +
                 names + '">' +
                 '<i class="fa fa-plus mr-1"></i>' + _t('Update RFQ') +
                 '</button>';
@@ -2678,7 +2678,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<i class="fa ' + (isOpen ? 'fa-caret-down' : 'fa-caret-right') +
                 ' msp-bom-arrow"></i></button>' +
                 '<span class="prod-name mpp-sup-name" data-sup-key="' + supKey + '"' +
-                ' title="Click to show which parts are bought from this supplier">' +
+                 ' title="' + _t('Click to show which parts are bought from this supplier') + '">' +
                 '<strong>' + sp.seller_name +
                 '</strong></span>' +
                 ((sp.currencies || []).length ?

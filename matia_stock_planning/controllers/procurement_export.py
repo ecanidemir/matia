@@ -423,14 +423,18 @@ def _row_net(r):
 
 
 def _avail_total(r):
-    """_availTotal port: avail_total ?? avail_tr."""
+    """_availTotal port: avail_total ?? avail_tr + avail_us.
+
+    Both legs are always present on export rows; falling back to the
+    TR leg alone would silently drop the US stock in the export.
+    """
     a = r.get('avail_total')
     if a is None or a == '':
-        return _fnum(r.get('avail_tr'))
+        return _fnum(r.get('avail_tr')) + _fnum(r.get('avail_us'))
     try:
         return float(a)
     except (TypeError, ValueError):
-        return _fnum(r.get('avail_tr'))
+        return _fnum(r.get('avail_tr')) + _fnum(r.get('avail_us'))
 
 
 def _producible_of(r, avail):

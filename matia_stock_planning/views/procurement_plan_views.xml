@@ -42,7 +42,7 @@
                     </group>
                     <notebook>
                         <page string="Lines">
-                            <field name="line_ids">
+                            <field name="line_ids" attrs="{'readonly': [('release_state', 'in', ['released', 'closed'])]}">
                                 <tree>
                                     <field name="product_id"/>
                                     <field name="route_type"/>
