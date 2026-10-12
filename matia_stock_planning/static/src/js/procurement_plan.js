@@ -3446,22 +3446,45 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             }
             var pid = this._planId();
             if (!pid) return;
-            Dialog.confirm(this,
-                _t('Re-open this release for revision? The snapshot stays for comparison.'),
-                {
-                    title: _t('Revise release'),
-                    confirmButtonText: _t('Revise'),
-                    confirm_callback: function () {
-                        self._rpcPlan('action_release_unrelease',
-                            [pid]).then(function (res) {
-                            self._reloadReleaseTracking(
-                                (res && res.message) ||
-                                _t('Re-opened.'));
-                        }, function (err) {
-                            self._notifyErr(err);
-                        });
+            var $content = $('<div>' +
+                '<p>' +
+                _t('Re-open this release for revision? The snapshot stays for comparison.') +
+                '</p>' +
+                '<label style="display:block;font-size:0.8rem;' +
+                'font-weight:600;margin-top:8px;">' +
+                _t('Reason (optional)') + '</label>' +
+                '<input type="text" ' +
+                'class="o_input mpp-revise-reason" style="width:100%;" ' +
+                'placeholder="' +
+                _t('Why is this being revised?') + '"/>' +
+                '</div>');
+            new Dialog(self, {
+                title: _t('Revise release'),
+                $content: $content,
+                buttons: [
+                    {
+                        text: _t('Cancel'),
+                        classes: 'btn-secondary',
+                        close: true,
                     },
-                });
+                    {
+                        text: _t('Revise'),
+                        classes: 'btn-primary',
+                        click: function () {
+                            var reason = $content.find(
+                                '.mpp-revise-reason').val() || false;
+                            self._rpcPlan('action_release_unrelease',
+                                [pid, reason]).then(function (res) {
+                                self._reloadReleaseTracking(
+                                    (res && res.message) ||
+                                    _t('Re-opened.'));
+                            }, function (err) {
+                                self._notifyErr(err);
+                            });
+                        },
+                    },
+                ],
+            }).open();
         },
 
         _onReleaseClose: function (ev) {

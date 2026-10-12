@@ -20,6 +20,7 @@ Odoo 15 notes: ``auth='public'`` env is unprivileged, so internal calls
 use recordset ``.sudo()`` (``Environment.sudo()`` does not exist in 15).
 """
 import json
+import logging
 
 from odoo import _, http
 from odoo.http import request
@@ -27,6 +28,8 @@ from odoo.http import request
 _QTY_MIN = 1
 _QTY_MAX = 10000
 _CONFIG_KEY = 'web_quote.key'
+
+_logger = logging.getLogger(__name__)
 
 
 def _quote_key_ok(provided):
@@ -121,7 +124,12 @@ def _build_quote(qty):
             'note': 'Slot 0 plan engine result (all Needed = qty, Rebuild).',
         }
     except Exception as exc:
-        return {'error': _('Hesaplama hatası: %s') % exc}
+        # Never leak internals (SQL, paths) to anonymous callers:
+        # detail goes to the server log, the API returns a generic
+        # message.
+        _logger.warning('Web quote failed for qty %s: %s', qty, exc)
+        return {'error': _('Could not calculate the quote. '
+                           'Please try again.')}
 
 
 class WebQuoteController(http.Controller):
