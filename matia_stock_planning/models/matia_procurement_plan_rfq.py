@@ -167,6 +167,148 @@ class MatiaProcurementPlanRfq(models.Model):
             bucket['subtotal'] += _rem * eff['price']
         return list(groups.values()), skipped
 
+    @api.model
+    def _rfq_resolve_currency(self, env_sudo, company_id, currency_id):
+        """Effective PO currency for an RFQ group.
+
+        Falls back to the company currency when the group carries
+        no snapshot currency (mixed/unknown price basis).
+        @param env_sudo: sudo environment.
+        @param company_id: res.company id.
+        @param currency_id: group snapshot currency id (or 0/False).
+        @return: res.currency id.
+        """
+        if currency_id:
+            return currency_id
+        _comp = env_sudo['res.company'].browse(company_id)
+        if _comp.exists():
+            return _comp.currency_id.id
+        return False
+
+    @api.model
+    def _rfq_find_updatable(self, plan, seller_id, company_id,
+                            currency_id):
+        """Find the draft RFQ that can take a group's remainder.
+
+        Only a linked RFQ in state 'draft' with the same vendor,
+        company and currency qualifies. Sent/confirmed/cancelled
+        documents are never touched: changing a document the vendor
+        may already have seen (or that already drives receipts) is
+        a commercial risk, so those groups always open a new RFQ.
+        @param plan: matia.procurement.plan record (sudo env).
+        @param seller_id: res.partner id.
+        @param company_id: res.company id.
+        @param currency_id: effective PO currency id.
+        @return: purchase.order record or False.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        for po in plan.purchase_order_ids:
+            if po.state != 'draft':
+                continue
+            if po.partner_id.id != seller_id:
+                continue
+            if po.company_id.id != company_id:
+                continue
+            if (po.currency_id.id or False) != (currency_id or False):
+                continue
+            return po
+        return False
+
+    @api.model
+    def _rfq_add_lines(self, env_sudo, plan, po, grp, usd, overrides):
+        """Add a group's remaining quantities to an existing draft RFQ.
+
+        A plan line whose product already sits on the RFQ bumps that
+        PO line (remaining converted into the PO line UoM); otherwise
+        a new PO line opens with the plan price snapshot. Existing PO
+        line prices are NEVER overwritten (manual vendor negotiations
+        must survive a top-up); only brand-new lines take the
+        snapshot price. The plan line traceability always points at
+        the document holding its newest remainder.
+        @param env_sudo: sudo environment.
+        @param plan: matia.procurement.plan record (sudo env).
+        @param po: purchase.order record (state 'draft').
+        @param grp: one _rfq_groups bucket (lines + qty_map).
+        @param usd: res.currency USD record (or False).
+        @param overrides: _mpp_price_overrides() map.
+        @return: {'added': int, 'bumped': int, 'amount': float}.
+        """
+        # No ensure_one: called model-style (empty recordset) from JS.
+        po_by_product = {}
+        for _pl in po.order_line:
+            # Section/note lines carry no product quantity.
+            if _pl.display_type or not _pl.product_id:
+                continue
+            po_by_product.setdefault(_pl.product_id.id, []).append(_pl)
+        _added = 0
+        _bumped = 0
+        _amount = 0.0
+        _delta = {}
+        for line in grp['lines']:
+            _rem = float(grp['qty_map'].get(line.id, line.order_qty)
+                         or 0.0)
+            if not _rem > 1e-9:
+                continue
+            _cands = po_by_product.get(line.product_id.id, [])
+            _target = _cands[0] if _cands else False
+            if _target:
+                try:
+                    _add = line.uom_id._compute_quantity(
+                        _rem, _target.product_uom) \
+                        if line.uom_id and _target.product_uom \
+                        else _rem
+                except Exception:
+                    _logger.warning(
+                        'MPP RFQ update: UoM conversion failed for '
+                        'product %s, adding raw qty %s.',
+                        line.product_id.default_code or
+                        line.product_id.id, _rem)
+                    _add = _rem
+                _target.write({
+                    'product_qty': (_target.product_qty or 0.0) + _add,
+                })
+                line.write({
+                    'purchase_order_id': po.id,
+                    'purchase_line_id': _target.id,
+                })
+                _bumped += 1
+                _delta[line.id] = _rem
+                _amount += _add * (_target.price_unit or 0.0)
+            else:
+                _uom = (line.uom_id.id if line.uom_id
+                        else line.product_id.uom_po_id.id
+                        if line.product_id.uom_po_id else False)
+                _conv = self._rfq_line_eff(
+                    env_sudo, usd, plan, line, overrides)['price']
+                _po_line = env_sudo['purchase.order.line'].create({
+                    'order_id': po.id,
+                    'product_id': line.product_id.id,
+                    'product_qty': _rem,
+                    'product_uom': _uom,
+                    'price_unit': _conv,
+                    'name': self._rfq_std_line_name(po, line.product_id),
+                    'date_planned': fields.Date.today(),
+                })
+                line.write({
+                    'purchase_order_id': po.id,
+                    'purchase_line_id': _po_line.id,
+                })
+                po_by_product.setdefault(
+                    line.product_id.id, []).append(_po_line)
+                _added += 1
+                _delta[line.id] = _rem
+                _amount += _rem * _conv
+        if _delta:
+            try:
+                self._rfq_bom_chatter(
+                    env_sudo, plan, po,
+                    [ln for ln in grp['lines'] if ln.id in _delta],
+                    _delta)
+            except Exception:
+                _logger.warning(
+                    'MPP BOM chatter failed for PO %s.', po.id)
+        return {'added': _added, 'bumped': _bumped, 'amount': _amount}
+
     def _rfq_plan(self, plan_id):
         """Load the plan in sudo env and validate its state.
 
@@ -435,7 +577,9 @@ class MatiaProcurementPlanRfq(models.Model):
 
         @param plan_id: database id of the plan.
         @return: dict with supplier groups, line counts, subtotals,
-            skipped counters and already linked RFQs.
+            skipped counters and already linked RFQs. Each group also
+            carries 'updatable_po' ({id, name} or False) when an
+            existing draft RFQ can take its remainder.
         """
         # No ensure_one: called model-style (empty recordset) from JS.
         env_sudo, plan = self._rfq_plan(plan_id)
@@ -460,6 +604,10 @@ class MatiaProcurementPlanRfq(models.Model):
                     'last_price': _eff['price'],
                     'last_currency': _eff['currency_name'],
                 })
+            _eff_cur = self._rfq_resolve_currency(
+                env_sudo, grp['company_id'], grp['currency_id'])
+            _up = self._rfq_find_updatable(
+                plan, grp['seller_id'], grp['company_id'], _eff_cur)
             preview_groups.append({
                 'seller_id': grp['seller_id'],
                 'seller_name': grp['seller_name'],
@@ -470,6 +618,9 @@ class MatiaProcurementPlanRfq(models.Model):
                 'line_count': len(grp['lines']),
                 'subtotal': grp['subtotal'],
                 'lines': _plines,
+                'updatable_po': ({
+                    'id': _up.id, 'name': _up.name,
+                } if _up else False),
             })
         return {
             'plan_id': plan.id,
@@ -489,18 +640,24 @@ class MatiaProcurementPlanRfq(models.Model):
         }
 
     @api.model
-    def action_create_draft_rfqs(self, plan_id, confirm=False):
+    def action_create_draft_rfqs(self, plan_id, confirm=False,
+                                 mode='create'):
         """Create one draft RFQ per (supplier, currency) group.
 
         @param plan_id: database id of the plan.
         @param confirm: True when the user confirmed repeat creation.
-        @return: dict with created RFQs (id, name, partner, lines,
-            amount) or {'needs_confirm': True} when RFQs already exist.
+        @param mode: 'create' opens new RFQs; 'update' first reuses the
+            matching draft RFQ per group (same vendor, company and
+            currency) and only opens a new RFQ where none qualifies.
+        @return: dict with created/updated RFQs (id, name, partner,
+            lines, amount) or {'needs_confirm': True} when RFQs
+            already exist.
         """
         # No ensure_one: called model-style (empty recordset) from JS.
         if not _mpp_can_create_docs(self):
             raise AccessError(_(
                 'Only administrators can create draft RFQs.'))
+        mode = 'update' if mode == 'update' else 'create'
         env_sudo, plan = self._rfq_plan(plan_id)
         existing = plan.purchase_order_ids
         if existing and not confirm:
@@ -511,9 +668,14 @@ class MatiaProcurementPlanRfq(models.Model):
                     'id': po.id, 'name': po.name,
                     'partner': po.partner_id.display_name,
                 } for po in existing],
+                'updatable': [{
+                    'id': po.id, 'name': po.name,
+                    'partner': po.partner_id.display_name,
+                } for po in existing if po.state == 'draft'],
                 'message': _(
-                    'This plan already has %d draft RFQ(s). '
-                    'Creating again will add new RFQs; existing '
+                    'This plan already has %d RFQ(s). '
+                    'Update the existing draft RFQ(s) with the open '
+                    'quantities, or create new RFQs; existing '
                     'records are kept.') % len(existing),
             }
         groups, skipped = self._rfq_groups(plan)
@@ -543,15 +705,35 @@ class MatiaProcurementPlanRfq(models.Model):
             [('name', '=', 'USD')], limit=1)
         overrides = _mpp_price_overrides(env_sudo)
         created = []
+        updated = []
         try:
             for grp in groups:
                 gcomp = env_sudo['res.company'].browse(
                     grp['company_id'])
+                _eff_cur = self._rfq_resolve_currency(
+                    env_sudo, grp['company_id'], grp['currency_id'])
+                _po = False
+                if mode == 'update':
+                    _po = self._rfq_find_updatable(
+                        plan, grp['seller_id'], grp['company_id'],
+                        _eff_cur)
+                if _po:
+                    _res = self._rfq_add_lines(
+                        env_sudo, plan, _po, grp, usd, overrides)
+                    updated.append({
+                        'id': _po.id,
+                        'name': _po.name,
+                        'partner': grp['seller_name'],
+                        'currency': grp['currency_name'],
+                        'line_count': _res['added'] + _res['bumped'],
+                        'amount': _res['amount'],
+                    })
+                    continue
                 picking = _incoming(grp['company_id'])
                 po = env_sudo['purchase.order'].create({
                     'partner_id': grp['seller_id'],
                     'company_id': grp['company_id'],
-                    'currency_id': grp['currency_id']
+                    'currency_id': _eff_cur
                     or gcomp.currency_id.id,
                     'picking_type_id': picking.id,
                     'origin': plan.name,
@@ -609,13 +791,15 @@ class MatiaProcurementPlanRfq(models.Model):
         return {
             'needs_confirm': False,
             'created': created,
+            'updated': updated,
             'skipped': skipped,
             'summary': self._plan_summary(env_sudo, plan),
         }
 
     @api.model
     def action_create_supplier_rfq(self, plan_id, seller_id,
-                                   company_id=None, confirm=False):
+                                   company_id=None, confirm=False,
+                                   mode='create'):
         """Create draft RFQ(s) for ONE supplier in ONE company.
 
         The tab-3 button (TR RFQ / US RFQ) passes the row's company: one
@@ -626,13 +810,17 @@ class MatiaProcurementPlanRfq(models.Model):
         @param seller_id res.partner ID.
         @param company_id res.company ID (row's source company).
         @param confirm True when the user confirmed repeat creation.
-        @return Dict with created POs or {'needs_confirm': True}, plus
-            a fresh supplier summary for tab 3.
+        @param mode: 'create' opens new RFQs; 'update' first reuses the
+            matching draft RFQ per (seller, currency) group and only
+            opens a new RFQ where none qualifies.
+        @return Dict with created/updated POs or {'needs_confirm': True},
+            plus a fresh supplier summary for tab 3.
         """
         # No ensure_one: called model-style (empty recordset) from JS.
         if not _mpp_can_create_docs(self):
             raise AccessError(_(
                 'Only administrators can create draft RFQs.'))
+        mode = 'update' if mode == 'update' else 'create'
         env_sudo, plan = self._rfq_plan(plan_id)
         try:
             seller_id = int(seller_id)
@@ -667,10 +855,16 @@ class MatiaProcurementPlanRfq(models.Model):
                 'existing': [{
                     'id': po.id, 'name': po.name,
                 } for po in existing],
+                'updatable': [{
+                    'id': po.id, 'name': po.name,
+                    'currency': po.currency_id.name
+                    if po.currency_id else '',
+                } for po in existing],
                 'message': _(
                     'This supplier already has %d draft RFQ(s) from '
-                    'this plan in %s. Creating again will add new '
-                    'RFQs; existing records are kept.') % (
+                    'this plan in %s. Update the existing draft(s) '
+                    'with the open quantities, or create new RFQs; '
+                    'existing records are kept.') % (
                         len(existing), groups[0]['company']),
             }
         company = env_sudo['res.company'].browse(company_id)
@@ -685,12 +879,32 @@ class MatiaProcurementPlanRfq(models.Model):
             [('name', '=', 'USD')], limit=1)
         overrides = _mpp_price_overrides(env_sudo)
         created = []
+        updated = []
         try:
             for grp in groups:
+                _eff_cur2 = self._rfq_resolve_currency(
+                    env_sudo, company.id, grp['currency_id'])
+                _po2 = False
+                if mode == 'update':
+                    _po2 = self._rfq_find_updatable(
+                        plan, grp['seller_id'], company.id, _eff_cur2)
+                if _po2:
+                    _res2 = self._rfq_add_lines(
+                        env_sudo, plan, _po2, grp, usd, overrides)
+                    updated.append({
+                        'id': _po2.id,
+                        'name': _po2.name,
+                        'partner': grp['seller_name'],
+                        'company': grp['company'],
+                        'currency': grp['currency_name'],
+                        'line_count': _res2['added'] + _res2['bumped'],
+                        'amount': _res2['amount'],
+                    })
+                    continue
                 po = env_sudo['purchase.order'].create({
                     'partner_id': grp['seller_id'],
                     'company_id': company.id,
-                    'currency_id': grp['currency_id']
+                    'currency_id': _eff_cur2
                     or company.currency_id.id,
                     'picking_type_id': picking.id,
                     'origin': plan.name,
@@ -749,6 +963,7 @@ class MatiaProcurementPlanRfq(models.Model):
         return {
             'needs_confirm': False,
             'created': created,
+            'updated': updated,
             'skipped': skipped,
             'supplier_summary': self.get_supplier_summary(plan.id),
         }

@@ -2447,13 +2447,21 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _updatableBtnHtml: function (seller, company) {
             var list = this.pendingRfqUpdatable || [];
             if (!list.length) return '';
+            var esc = function (s) {
+                return String(s === undefined || s === null ? '' : s)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            };
             var names = list.map(function (q) {
-                return q.name + (q.currency ? ' ' + q.currency : '');
+                return esc(q.name) +
+                    (q.currency ? ' ' + esc(q.currency) : '');
             }).join(', ');
             return '<button type="button" class="btn btn-success btn-sm mpp-btn-update-rfq mr-1" ' +
                 'data-seller="' + seller + '" data-company="' +
                 (company || '') + '" title="Add the open quantities to: ' +
-                String(names).replace(/"/g, '&quot;') + '">' +
+                names + '">' +
                 '<i class="fa fa-plus mr-1"></i>Update RFQ</button>';
         },
 
@@ -2611,6 +2619,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 [this._planId(), seller, company, false]).then(function (res) {
                 if (res && res.needs_confirm) {
                     self.pendingRfqSeller = self._rfqKey(seller, company);
+                    self.pendingRfqUpdatable =
+                        (res && res.updatable) || null;
                     self._renderSup();
                     self.displayNotification({
                         title: _t('Already exists'),
@@ -2621,6 +2631,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     return;
                 }
                 self.pendingRfqSeller = null;
+                self.pendingRfqUpdatable = null;
                 self.supSummary = res && res.supplier_summary ?
                     res.supplier_summary : self.supSummary;
                 self._renderSup();
@@ -2650,12 +2661,45 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             this._rpcPlan('action_create_supplier_rfq',
                 [this._planId(), seller, company, true]).then(function (res) {
                 self.pendingRfqSeller = null;
+                self.pendingRfqUpdatable = null;
                 self.supSummary = res && res.supplier_summary ?
                     res.supplier_summary : self.supSummary;
                 self._renderSup();
                 self.displayNotification({
                     title: _t('Success'),
                     message: _t('Draft RFQ created.'),
+                    type: 'success',
+                });
+            }, function (err) {
+                self._notifyErr(err);
+            });
+        },
+
+        _onUpdateRfq: function (ev) {
+            var self = this;
+            if (!this.canCreateDocs) {
+                this.displayNotification({
+                    title: _t('Forbidden'),
+                    message: _t('Only administrators can update draft RFQs.'),
+                    type: 'warning',
+                });
+                return;
+            }
+            var seller = parseInt(ev.currentTarget.dataset.seller, 10);
+            var company = parseInt(ev.currentTarget.dataset.company, 10) || null;
+            if (!seller || !this._planId()) return;
+            this._rpcPlan('action_create_supplier_rfq',
+                [this._planId(), seller, company, true, 'update']).then(function (res) {
+                self.pendingRfqSeller = null;
+                self.pendingRfqUpdatable = null;
+                self.supSummary = res && res.supplier_summary ?
+                    res.supplier_summary : self.supSummary;
+                self._renderSup();
+                var crt = (res && res.created) || [];
+                self.displayNotification({
+                    title: _t('Success'),
+                    message: _t('Draft RFQ updated.') +
+                        (crt.length ? ' ' + _t('New RFQ(s) opened where no draft matched.') : ''),
                     type: 'success',
                 });
             }, function (err) {
