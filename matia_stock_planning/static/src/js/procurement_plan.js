@@ -252,7 +252,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<input type="number" min="0" value="' + n + '" ' +
                     'class="form-control form-control-sm mpp-fill-n" ' +
                     'data-group="' + g.key + '" ' +
-                    'title="Needed quantity for this group, then Rebuild"/>' +
+                    'title="Devices wanted for this group; per-top Needed = devices x usage, then Rebuild"/>' +
                     '</div>';
             });
             this.$('.mpp-cost-kpi-grid').html(html);
@@ -596,8 +596,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         },
 
         // Cost-card N inputs (inside the Plan header cards): typing N
-        // sets Needed = N (gross want) for every top in that group
-        // LOCALLY and immediately (no server call, no Apply button).
+        // sets Needed = N x usage (gross want in UNITS) for every top
+        // in that group LOCALLY and immediately (no server call, no
+        // Apply button). N itself means DEVICES; each top's row keeps
+        // units, so a top with Per-Parent Qty 2 gets Needed = 2N.
         // The tree re-renders so the Needed numbers update visually,
         // Rebuild turns red (dirty); press Rebuild to net stock and
         // recalculate. Empty/invalid input leaves the group untouched.
@@ -615,10 +617,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (isNaN(n) || n < 0) return;
             this.fillN[key] = n;
             var count = 0;
-            var nFill = Math.max(0, Math.ceil(n));
             this.treeGroups.forEach(function (g) {
                 if (g.key !== key) return;
                 (g.items || []).forEach(function (r) {
+                    var bq = parseFloat(r.bom_qty) || 1.0;
+                    var nFill = Math.max(0, Math.ceil(n * bq));
                     self.needMap[r.product_id] = nFill;
                     // Rows render r.need first (server value) and fall
                     // back to needMap only when it is missing, so the
@@ -1400,9 +1403,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'assemblable pool from children (differs from ' +
                     'Capacity self-stock figure)') +
                 th('need', 'Needed', 'th-req',
-                    'Your wanted qty, typed here (gross want; ' +
-                    'editable, applied with Rebuild). TR+US stock and ' +
-                    'shared use are netted into Planned.') +
+                    'Your wanted qty in UNITS, typed here (gross want; ' +
+                    'editable, applied with Rebuild). The group box above ' +
+                    'takes DEVICES and multiplies by each top\u2019s usage. ' +
+                    'TR+US stock and shared use are netted into Planned.') +
                 th('planned', 'Planned', 'th-req',
                     'Planned = net units to actually build/procure: ' +
                     'gross minus pooled TR+US net stock (on-hand ' +
