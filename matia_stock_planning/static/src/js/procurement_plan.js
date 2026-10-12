@@ -17,7 +17,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
     var ProcurementPlanDashboard = AbstractAction.extend({
         template: 'MatiaProcurementPlan.Dashboard',
         events: {
-            'click .mpp-btn-reload': '_onReload',
             'click .mpp-btn-rebuild': '_onRebuild',
             'click .mpp-nav-tab': '_onNavTab',
             'change .mpp-slot-select': '_onSlotChange',
@@ -479,33 +478,6 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             doSave();
         },
 
-        // Refresh re-reads the SAVED plan (no recalculation, RFQ/MO
-        // links kept). It discards unsaved Needed edits, so a dirty
-        // screen asks for confirmation first. Use it to undo local
-        // edits or to pick up changes saved by someone else.
-        _onReload: function () {
-            var self = this;
-            var doReload = function () {
-                self._fetchStartup().then(function () {
-                    self._renderTree();
-                    self._updateRebuildBtn();
-                }, function (err) {
-                    self._notifyErr(err);
-                });
-            };
-            if (this.dirtyNeeds || this.dirtySlotNote) {
-                Dialog.confirm(this,
-                    _t('Reload the saved plan? Unsaved Needed changes and the slot description will be lost.'),
-                    {
-                        title: _t('Discard unsaved changes'),
-                        confirmButtonText: _t('Reload'),
-                        confirm_callback: doReload,
-                    });
-                return;
-            }
-            doReload();
-        },
-
         // Rebuild is the ONLY persist path for Needed numbers: it saves
         // the whole needMap and recalculates the plan from LIVE master
         // data (routes, BOMs, stock, prices, suppliers). Lines are
@@ -534,6 +506,17 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             [pid, self.needMap, true]).then(function (res) {
                             self._applySummary(res);
                             self._renderTree();
+                            // Supplier rows (RFQ states, coverage) come
+                            // from a separate payload: repaint Loading
+                            // first (supSummary was just nulled), then
+                            // fetch live rows - otherwise a cancelled
+                            // RFQ stays visible until a full page reload.
+                            // Tab switches fetch it lazily (see
+                            // _onNavTab), same as slot save/load.
+                            if (self.activeTab === 2) {
+                                self._renderSup();
+                                self._fetchSupSummary();
+                            }
                             self._updateRebuildBtn();
                             self.displayNotification({
                                 title: _t('Rebuilt'),
