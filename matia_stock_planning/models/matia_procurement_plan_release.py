@@ -111,6 +111,39 @@ class MatiaProcurementPlanRelease(models.Model):
     # with [plan_id, ...] without recordset-dispatch ambiguity). ----
 
     @api.model
+    def _cleanup_release_transient_selection_rows(self):
+        """One-shot upgrade helper: drop selection rows of deleted models.
+
+        Removes ``ir.model.fields.selection`` rows left behind by the
+        deleted release wizard/tracking transient models
+        (v15.0.2.10.x removed them when Release moved to the dashboard).
+        Plain ORM unlink cannot be used here:
+        ``ir.model.fields.selection._process_ondelete`` resolves
+        ``self.env[selection.field_id.model]`` which raises ``KeyError``
+        because those models no longer exist in the registry (this broke
+        the upgrade at ``ir.model.data._process_end``). Raw SQL bypasses
+        the ORM unlink path entirely. Safe no-op on fresh installs.
+        Called once from ``procurement_plan_release_cleanup.xml``.
+        @return: number of deleted rows.
+        """
+        stale_models = (
+            'matia.procurement.plan.release.wizard',
+            'matia.procurement.plan.release.wizard.line',
+            'matia.procurement.plan.tracking',
+            'matia.procurement.plan.tracking.line',
+        )
+        self.env.cr.execute(
+            """
+            DELETE FROM ir_model_fields_selection AS sel
+            USING ir_model_fields AS fld
+            WHERE sel.field_id = fld.id
+              AND fld.model IN %s
+            """,
+            (stale_models,),
+        )
+        return self.env.cr.rowcount
+
+    @api.model
     def _release_preview_data(self, plan):
         """Shared preview computation (wizard default_get + JS RPC).
 

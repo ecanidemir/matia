@@ -11,4 +11,9 @@
     <delete model="ir.ui.view" search="[('name', '=', 'matia.procurement.plan.tree.release')]"/>
     <delete model="ir.ui.view" search="[('name', '=', 'matia.procurement.plan.release.wizard.form')]"/>
     <delete model="ir.ui.view" search="[('name', '=', 'matia.procurement.plan.tracking.form')]"/>
+    <!-- Drop selection-option rows of the deleted transient models via raw
+         SQL (ORM unlink would KeyError on the missing models, see helper
+         docstring). Runs inside the upgrade, before _process_end GC. -->
+    <function model="matia.procurement.plan"
+              name="_cleanup_release_transient_selection_rows"/>
 </odoo>
