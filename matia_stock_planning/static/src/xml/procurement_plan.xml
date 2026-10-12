@@ -15,17 +15,17 @@
                 <div class="mpp-actions">
                     <ul class="nav mpp-nav-tabs mpp-nav-tabs--header" role="tablist">
                         <li class="nav-item" role="presentation">
-                            <a href="#" class="nav-link mpp-nav-tab active" data-tab="1" role="tab" aria-selected="true">
+                            <a href="#" class="nav-link mpp-nav-tab active" data-tab="1" role="tab" aria-selected="true" tabindex="0">
                                 <i class="fa fa-sitemap mr-1"></i>1. Plan
                             </a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a href="#" class="nav-link mpp-nav-tab" data-tab="2" role="tab" aria-selected="false">
+                            <a href="#" class="nav-link mpp-nav-tab" data-tab="2" role="tab" aria-selected="false" tabindex="0">
                                 <i class="fa fa-truck mr-1"></i>2. Suppliers &amp; Production
                             </a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a href="#" class="nav-link mpp-nav-tab" data-tab="3" role="tab" aria-selected="false">
+                            <a href="#" class="nav-link mpp-nav-tab" data-tab="3" role="tab" aria-selected="false" tabindex="0">
                                 <i class="fa fa-rocket mr-1"></i>3. Release
                             </a>
                         </li>

@@ -88,6 +88,35 @@
         }
     }
 
+    /* Release-lock + section-heading tokens: single source for
+     * the lock signal colors used by the release bar, the lock
+     * banner and the per-row Locked hints. */
+    $mpp-lock-bg: #fffbeb;
+    $mpp-lock-border: #fde68a;
+    $mpp-lock-text: #92400e;
+
+    .mpp-lock-banner {
+        background-color: $mpp-lock-bg;
+        border: 1px solid $mpp-lock-border;
+        color: $mpp-lock-text;
+        font-weight: 600;
+    }
+
+    /* Release preview section headings (h3, same visual size as
+     * the former h6 so the layout does not shift). */
+    .mpp-rel-h {
+        font-size: 0.8rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }
+
+    /* Keyboard focus ring for the tablist (tabs are keyboard
+     * operable: Enter/Space activates, arrows move). */
+    .mpp-nav-tabs .mpp-nav-tab:focus-visible {
+        outline: 2px solid #7c2d12;
+        outline-offset: 2px;
+    }
+
     /* Step navigation: white card strip, Capacity-like active accent */
     .mpp-nav-tabs {
         background: #ffffff;

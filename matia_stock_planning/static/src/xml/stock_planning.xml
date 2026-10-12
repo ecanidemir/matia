@@ -350,7 +350,7 @@
                                                 <span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>
                                             </t>
                                             <t t-else="">
-                                                <span class="badge-req-need"><t t-esc="item.req_20_val"/></span>
+                                                <span class="badge-req-need"><i class="fa fa-exclamation-triangle mr-1"></i><t t-esc="item.req_20_val"/></span>
                                             </t>
                                         </td>
 
@@ -362,7 +362,7 @@
                                                     <span class="badge-req-ok"><i class="fa fa-check mr-1"></i> OK</span>
                                                 </t>
                                                 <t t-elif="dyn_need">
-                                                    <span class="badge-req-need"><t t-esc="dyn_need.val"/></span>
+                                                    <span class="badge-req-need"><i class="fa fa-exclamation-triangle mr-1"></i><t t-esc="dyn_need.val"/></span>
                                                 </t>
                                                 <t t-else="">-</t>
                                             </td>

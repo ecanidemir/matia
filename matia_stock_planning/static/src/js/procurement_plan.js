@@ -20,6 +20,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         events: {
             'click .mpp-btn-rebuild': '_onRebuild',
             'click .mpp-nav-tab': '_onNavTab',
+            'keydown .mpp-nav-tab': '_onNavTabKey',
             'change .mpp-slot-select': '_onSlotChange',
             'click .mpp-btn-slot-save': '_onSlotSave',
             'input .mpp-slot-note': '_onSlotNoteInput',
@@ -177,6 +178,34 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 return;
             }
             this._showTab(n);
+        },
+
+        // Keyboard tablist (WAI pattern): Enter/Space activates the
+        // focused tab, arrows move between tabs.
+        _onNavTabKey: function (ev) {
+            var key = ev.which || ev.keyCode;
+            var cur = parseInt(
+                ev.currentTarget.dataset.tab, 10) || 1;
+            if (key === 13 || key === 32) {
+                ev.preventDefault();
+                this._onNavTab(ev);
+                return;
+            }
+            var next = 0;
+            if (key === 39 || key === 40) {
+                next = cur >= 3 ? 1 : cur + 1;
+            } else if (key === 37 || key === 38) {
+                next = cur <= 1 ? 3 : cur - 1;
+            }
+            if (next) {
+                ev.preventDefault();
+                var $next = this.$(
+                    '.mpp-nav-tab[data-tab="' + next + '"]');
+                $next.focus();
+                // Same path as a mouse click (loading guard + lazy
+                // fetch included).
+                $next.click();
+            }
         },
 
         // ---------------- tab 1: plan (startup + needed) ----------------
@@ -1520,11 +1549,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<button type="button" class="btn btn-sm msp-btn-toggle-group ml-2 ' +
                     (collapsed ? 'msp-btn-group-show' : 'msp-btn-group-hide') +
                     '" data-group-key="' + g.key + '"' +
-                    ' title="' + (collapsed ? 'Show this BOM group' : 'Hide this BOM group') + '"' +
+                    ' title="' + (collapsed ? _t('Show this BOM group') : _t('Hide this BOM group')) + '"' +
                     ' style="padding:1px 10px; font-size:0.75rem; font-weight:600;">' +
                     (collapsed ?
-                        '<i class="fa fa-eye mr-1"></i>Show' :
-                        '<i class="fa fa-eye-slash mr-1"></i>Hide') +
+                        '<i class="fa fa-eye mr-1"></i>' + _t('Show') :
+                        '<i class="fa fa-eye-slash mr-1"></i>' + _t('Hide')) +
                     '</button></div></td></tr>';
                 if (!collapsed) {
                     var out = [];
@@ -2023,7 +2052,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (!s) {
                 this.$('.mpp-sup-cards').html('');
                 this.$('.mpp-sup-body').html(
-                    '<div class="alert alert-info">Loading…</div>');
+                    '<div class="alert alert-info">' + _t('Loading…') +
+                '</div>');
                 this.$('.mpp-prod-body').html('');
                 return;
             }
@@ -2082,7 +2112,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var sups = s.suppliers || [];
             if (!sups.length) {
                 this.$('.mpp-sup-body').html(
-                    '<div class="alert alert-info">No supplier lines with quantity.</div>');
+                    '<div class="alert alert-info">' +
+                _t('No supplier lines with quantity.') + '</div>');
                 return;
             }
             var order = {'USA': 0, 'TR': 1};
@@ -2102,21 +2133,23 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 html += '<div class="alert alert-warning" style="font-size:0.8rem;">' +
                     '<i class="fa fa-exclamation-triangle mr-1"></i>' +
                     '<strong>' + (s.unsourced_count || 0) +
-                    '</strong> ordered line(s) have no supplier' +
-                    (s.unsourced_count ? ' (see No supplier group below)' : '') +
-                    ' and <strong>' + (s.unpriced_count || 0) +
-                    '</strong> have no price (counted as 0 USD). ' +
-                    'Fix sellers/prices before ordering.' +
+                    '</strong> ' + _t('ordered line(s) have no supplier') +
+                    (s.unsourced_count ? ' (' + _t('see No supplier group below') + ')' : '') +
+                    ' ' + _t('and') + ' <strong>' + (s.unpriced_count || 0) +
+                    '</strong> ' + _t('have no price (counted as 0 USD).') +
+                    ' ' + _t('Fix sellers/prices before ordering.') +
                     '</div>';
             }
             html += self._releaseBarHtml(s);
             html += '<div class="table-responsive"><table class="msp-table">' +
                 '<thead><tr>' +
-                '<th class="th-product">Supplier</th>' +
-                '<th>Lines</th>' +
-                '<th>Routes</th>' +
-                '<th class="th-stock" title="PO-value estimate: own last-buy USD x order">Est. Total USD</th>' +
-                '<th>RFQs</th>' +
+                '<th class="th-product">' + _t('Supplier') + '</th>' +
+                '<th>' + _t('Lines') + '</th>' +
+                '<th>' + _t('Routes') + '</th>' +
+                '<th class="th-stock" title="' +
+                _t('PO-value estimate: own last-buy USD x order') + '">' +
+                _t('Est. Total USD') + '</th>' +
+                '<th>' + _t('RFQs') + '</th>' +
                 '<th></th>' +
                 '</tr></thead><tbody>';
             names.forEach(function (c) {
@@ -2143,11 +2176,11 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<button type="button" class="btn btn-sm mpp-btn-sup-group-toggle ml-2 ' +
                     (collapsed ? 'msp-btn-group-show' : 'msp-btn-group-hide') +
                     '" data-group-key="' + (c || '') + '"' +
-                    ' title="' + (collapsed ? 'Show this company group' : 'Hide this company group') + '"' +
+                    ' title="' + (collapsed ? _t('Show this company group') : _t('Hide this company group')) + '"' +
                     ' style="padding:1px 10px; font-size:0.75rem; font-weight:600;">' +
                     (collapsed ?
-                        '<i class="fa fa-eye mr-1"></i>Show' :
-                        '<i class="fa fa-eye-slash mr-1"></i>Hide') +
+                        '<i class="fa fa-eye mr-1"></i>' + _t('Show') :
+                        '<i class="fa fa-eye-slash mr-1"></i>' + _t('Hide')) +
                     '</button></div></td></tr>';
                 if (collapsed) return;
                 rows.forEach(function (sp) {
@@ -2323,12 +2356,12 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _setSupRowOpen: function ($row, isOpen) {
             $row.toggleClass('mpp-sup-open', !!isOpen);
             var $btn = $row.find('.mpp-btn-sup-toggle');
-            var label = (isOpen ? 'Hide' : 'Show') +
-                ' parts bought from this supplier';
+            var label = (isOpen ? _t('Hide') : _t('Show')) + ' ' +
+                _t('parts bought from this supplier');
             $btn.attr('aria-expanded', isOpen ? 'true' : 'false');
-            $btn.attr('aria-label', label).attr('title', 'Click to ' +
-                (isOpen ? 'hide' : 'show') +
-                ' which parts are bought from this supplier');
+            $btn.attr('aria-label', label).attr('title', _t('Click to ') +
+                (isOpen ? _t('hide') : _t('show')) + ' ' +
+                _t('which parts are bought from this supplier'));
             $btn.find('.msp-bom-arrow')
                 .toggleClass('fa-caret-down', !!isOpen)
                 .toggleClass('fa-caret-right', !isOpen);
@@ -2434,32 +2467,39 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (!lines.length) {
                 return '<tr class="mpp-sup-sub-row">' +
                     '<td></td><td colspan="5">' +
-                    '<span class="text-muted">No part lines.</span>' +
+                    '<span class="text-muted">' + _t('No part lines.') +
+                    '</span>' +
                     '</td></tr>';
             }
             var html = '';
             lines.forEach(function (ln) {
                 var badges = '';
                 if (ln.no_seller) {
-                    badges += ' <span class="badge badge-warning">No supplier</span>';
+                    badges += ' <span class="badge badge-warning">' +
+                        '<i class="fa fa-exclamation-triangle mr-1"></i>' +
+                        _t('No supplier') + '</span>';
                 }
                 if (ln.route === 'unknown') {
-                    badges += ' <span class="badge badge-warning" title="Set Buy, Make or Subcontract route on the product">Unknown route</span>';
+                    badges += ' <span class="badge badge-warning" title="' +
+                        _t('Set Buy, Make or Subcontract route on the product') +
+                        '">' + _t('Unknown route') + '</span>';
                 }
                 if (ln.no_price) {
-                    badges += ' <span class="badge badge-warning" title="No last-buy or pricelist price; counted as 0 USD">No price</span>';
+                    badges += ' <span class="badge badge-warning" title="' +
+                        _t('No last-buy or pricelist price; counted as 0 USD') +
+                        '">' + _t('No price') + '</span>';
                 }
                 // Same 6 columns as the supplier row above (Supplier /
                 // Lines / Routes / Est. Total USD / RFQs / action) so the
                 // detail lines stay visually aligned with the headers.
                 var lastInfo = ln.last_price ?
-                    '<small class="text-muted">Last: ' +
+                    '<small class="text-muted">' + _t('Last: ') +
                     self._fmtNum(ln.last_price, 2) + ' ' +
                     (ln.last_currency || '') +
                     (ln.last_date ? ' (' + ln.last_date + ')' : '') +
                     '</small>' :
                     '<small class="text-muted">' +
-                    (ln.note || 'No purchase history') + '</small>';
+                    (ln.note || _t('No purchase history')) + '</small>';
                 // Live RFQ/PO coverage: fully covered lines get a green
                 // note, partially covered ones show the open remainder.
                 // Covering documents, listed visibly so tracking is
@@ -2515,7 +2555,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     '<small class="text-muted">' +
                     (ln.uom || '') + '</small>' + covInfo + '</td>' +
                     '<td class="text-center"><span class="badge badge-info">' +
-                    (ln.route || '') + '</span></td>' +
+                    self._routeLabel(ln.route) + '</span></td>' +
                     '<td class="td-stock text-right"><strong>' +
                     self._fmtNum(ln.total_usd, 2) + ' USD</strong>' +
                     '<small class="text-muted d-block" style="font-weight:400;" title="Net gap cost (own + net child shares)">' +
@@ -2530,19 +2570,20 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             return html;
         },
 
-        // RFQ durum rozeti: ham state kodu yerine Turkce etiket
-        // (Taslak mavi / Gonderildi-Onay Bekliyor turuncu /
-        // Onaylandi yesil; iptal edilenler sunucuda gizli).
+        // RFQ status badge: readable English label instead of the
+        // raw state code (Draft blue / Sent-Awaiting orange /
+        // Confirmed green; cancelled ones stay hidden server-side).
         _rfqStateBadge: function (state) {
             var map = {
-                draft: ['Taslak', 'badge-info'],
-                sent: ['Gönderildi', 'badge-warning'],
-                'to approve': ['Onay Bekliyor', 'badge-warning'],
-                purchase: ['Onaylandı', 'badge-success'],
-                done: ['Onaylandı', 'badge-success'],
-                cancel: ['İptal', 'badge-secondary'],
+                draft: [_t('Draft'), 'badge-info'],
+                sent: [_t('Sent'), 'badge-warning'],
+                'to approve': [_t('Awaiting approval'), 'badge-warning'],
+                purchase: [_t('Confirmed'), 'badge-success'],
+                done: [_t('Confirmed'), 'badge-success'],
+                cancel: [_t('Cancelled'), 'badge-secondary'],
             };
-            var entry = map[state] || [state, 'badge-secondary'];
+            var entry = map[state] ||
+                [state, 'badge-secondary'];
             return '<span class="badge ' + entry[1] + '">' +
                 entry[0] + '</span>';
         },
@@ -2570,7 +2611,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 'data-seller="' + seller + '" data-company="' +
                 (company || '') + '" title="Add the open quantities to: ' +
                 names + '">' +
-                '<i class="fa fa-plus mr-1"></i>Update RFQ</button>';
+                '<i class="fa fa-plus mr-1"></i>' + _t('Update RFQ') +
+                '</button>';
         },
 
         _supplierRowHtml: function (sp) {
@@ -2583,7 +2625,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     self._fmtNum(q.amount_total, 2) + '</div>';
             });
             var key = this._rfqKey(sp.seller_id, sp.company_id);
-            var label = sp.rfq_label || 'Create RFQ';
+            var label = sp.rfq_label || _t('Create RFQ');
             var supKey = this._supKey(sp);
             var isOpen = !!this.expandedSup[supKey];
             var lineCount = (sp.lines || []).length || sp.line_count;
@@ -2599,9 +2641,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<small class="text-muted d-block">' + coveredTotal +
                 '/' + lineCount + ' covered</small>' : '';
             var rfqBtn = !sp.seller_id ?
-                '<span class="text-muted" style="font-size:0.75rem;">Assign a seller first</span>' :
+                '<span class="text-muted" style="font-size:0.75rem;">' +
+                _t('Assign a seller first') + '</span>' :
                 !self.canCreateDocs ?
-                '<span class="text-muted" style="font-size:0.75rem;">Admin only</span>' :
+                '<span class="text-muted" style="font-size:0.75rem;">' + _t('Admin only') + '</span>' :
                 self.planLocked ?
                 self._lockedHintHtml() :
                 openCount > 0 ?
@@ -2611,24 +2654,27 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 '<i class="fa fa-file-text-o mr-1"></i>' + label + '</button>' + openNote +
                 (self.pendingRfqSeller === key ?
                     '<div class="alert alert-warning mt-1 mb-0" style="font-size:0.8rem;">' +
-                    'Draft RFQ(s) already exist for this supplier + company. ' +
+                    _t('Draft RFQ(s) already exist for this supplier + company. ') +
                     self._updatableBtnHtml(sp.seller_id, sp.company_id) +
                     '<button type="button" class="btn btn-warning btn-sm mpp-btn-confirm-rfq" ' +
                     'data-seller="' + sp.seller_id + '" data-company="' +
-                    (sp.company_id || '') + '">Create new</button></div>' : '') :
-                '<span class="badge badge-success">Covered</span>';
+                    (sp.company_id || '') + '">' + _t('Create new') +
+                    '</button></div>' : '') :
+                '<span class="badge badge-success">' + _t('Covered') +
+                '</span>';
             var unpricedNote = (sp.unpriced_count || 0) > 0 ?
-                ' <span class="badge badge-warning" title="Lines without price are counted as 0 USD">' +
-                sp.unpriced_count + ' no price</span>' : '';
+                ' <span class="badge badge-warning" title="' +
+                _t('Lines without price are counted as 0 USD') + '">' +
+                sp.unpriced_count + ' ' + _t('no price') + '</span>' : '';
             return '<tr class="item-row' + (isOpen ? ' mpp-sup-open' : '') + '">' +
                 '<td class="td-product">' +
                 '<button type="button" class="btn btn-sm btn-link mpp-btn-sup-toggle p-0 mr-1 text-primary"' +
                 ' data-sup-key="' + supKey + '"' +
                 ' aria-expanded="' + (isOpen ? 'true' : 'false') + '"' +
-                ' aria-label="' + (isOpen ? 'Hide' : 'Show') +
-                ' parts bought from this supplier"' +
-                ' title="Click to ' + (isOpen ? 'hide' : 'show') +
-                ' which parts are bought from this supplier">' +
+                ' aria-label="' + (isOpen ? _t('Hide') : _t('Show')) +
+                ' ' + _t('parts bought from this supplier') + '"' +
+                ' title="' + _t('Click to ') + (isOpen ? _t('hide') : _t('show')) +
+                ' ' + _t('which parts are bought from this supplier') + '">' +
                 '<i class="fa ' + (isOpen ? 'fa-caret-down' : 'fa-caret-right') +
                 ' msp-bom-arrow"></i></button>' +
                 '<span class="prod-name mpp-sup-name" data-sup-key="' + supKey + '"' +
@@ -2674,7 +2720,9 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                         doc = '<strong>' + r.mo.name + '</strong> (' +
                             r.mo.state + ')';
                     } else if (!r.mo_creatable) {
-                        doc = '<span class="badge-req-need">No normal BOM</span>';
+                        doc = '<span class="badge-req-need">' +
+                        '<i class="fa fa-exclamation-triangle mr-1"></i>' +
+                        _t('No normal BOM') + '</span>';
                     } else if (self.planLocked) {
                         act = self._lockedHintHtml();
                     } else if (self.canCreateDocs) {
@@ -2682,7 +2730,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             'data-line="' + r.line_id + '">' +
                             '<i class="fa fa-cogs mr-1"></i>Create MO</button>';
                     } else {
-                        act = '<span class="text-muted" style="font-size:0.75rem;">Admin only</span>';
+                        act = '<span class="text-muted" style="font-size:0.75rem;">' + _t('Admin only') + '</span>';
                     }
                 } else {
                     if (r.po) {
@@ -2697,7 +2745,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     (r.code || '') + '</span></td>' +
                     '<td class="td-product"><span class="prod-name">' +
                     (self._plainName(r.code, r.name) || '') + '</span></td>' +
-                    '<td><span class="badge badge-info">' + (r.route || '') +
+                    '<td><span class="badge badge-info">' +
+                    self._routeLabel(r.route) +
                     '</span></td>' +
                     '<td class="td-stock">' + r.order_qty + ' ' +
                     (r.uom || '') + '</td>' +
@@ -2935,6 +2984,48 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // Locked-plan hint shared by the supplier and MO rows: on a
         // released/closed plan the per-row buttons are NOT rendered -
         // a warning toast alone would be a clickable-looking dead end.
+        // Single source for the release-lock predicate: the release
+        // bar, the lock banner/button gating and the tracking header
+        // all read this (C6 - one status signal, three presentations).
+        _isLockedState: function (st) {
+            return st === 'released' || st === 'closed';
+        },
+
+        // Release tracking status codes (server: mpp_release_common
+        // line_tracking_status) as readable, translatable labels.
+        // Every case uses a _t() literal so the string is extracted
+        // for translation; never pass a variable to _t().
+        _trackStatusLabel: function (code) {
+            switch (code) {
+                case 'no_mo': return _t('No MO');
+                case 'mo_draft': return _t('MO draft');
+                case 'mo_open': return _t('MO open');
+                case 'mo_done': return _t('MO done');
+                case 'mo_cancelled': return _t('MO cancelled');
+                case 'no_rfq': return _t('No RFQ');
+                case 'rfq_draft': return _t('RFQ draft');
+                case 'rfq_sent': return _t('RFQ sent');
+                case 'po_confirmed': return _t('PO confirmed');
+                case 'po_cancelled': return _t('PO cancelled');
+                case 'no_need': return _t('No order');
+                case 'unknown': return _t('Unknown');
+                default: return code || '';
+            }
+        },
+
+        // Route codes as readable, translatable labels (same rule:
+        // _t() literals only).
+        _routeLabel: function (route) {
+            switch (route) {
+                case 'make': return _t('Make');
+                case 'buy': return _t('Buy');
+                case 'subcontract': return _t('Subcontract');
+                case 'kit': return _t('Kit');
+                case 'unknown': return _t('Unknown');
+                default: return route || '';
+            }
+        },
+
         _lockedHintHtml: function () {
             return '<span class="text-muted" ' +
                 'style="font-size:0.75rem;" title="' +
@@ -2947,7 +3038,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             s = s || {};
             var st = s.release_state || 'draft';
             var rev = s.released_rev || 0;
-            var locked = (st === 'released' || st === 'closed');
+            var locked = this._isLockedState(st);
             var badgeCls = st === 'released' ? 'badge-success' :
                 (st === 'closed' ? 'badge-secondary' : 'badge-info');
             var stateTxt = st === 'released' ? _t('Released rev ') + rev :
@@ -2979,14 +3070,14 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         _updateLockUi: function () {
             var s = this.supSummary;
             var st = s && s.release_state;
-            this.planLocked = (st === 'released' || st === 'closed');
+            this.planLocked = this._isLockedState(st);
             if (!this.$el) return;
             var $btn = this.$('.mpp-btn-rebuild');
             if (!$btn.length) return;
             $btn.prop('disabled', this.planLocked);
             $btn.attr('title', this.planLocked ?
-                'Plan is released/closed - revise it from the Release tab to edit.' :
-                'Recalculate the whole plan from live data.');
+                _t('Plan is released/closed - revise it from the Release tab to edit.') :
+                _t('Recalculate the whole plan from live data.'));
             $btn.toggleClass('mpp-locked', this.planLocked);
             // Needed inputs (rows + cost-card N) go passive and grey;
             // the slot note and Save write target_json too, so they
@@ -3030,7 +3121,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 }
                 self._showTab(3);
                 self.$('.mpp-rel-body').html(
-                    '<div class="alert alert-info">Loading…</div>');
+                    '<div class="alert alert-info">' + _t('Loading…') +
+                '</div>');
             var method = self.planLocked ?
                 'get_release_tracking' : 'get_release_preview';
             self._rpcPlan(method, [pid]).then(function (res) {
@@ -3052,7 +3144,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             if (!self.supSummary) {
                 self._showTab(3);
                 self.$('.mpp-rel-body').html(
-                    '<div class="alert alert-info">Loading…</div>');
+                    '<div class="alert alert-info">' + _t('Loading…') +
+                '</div>');
                 self._fetchSupSummary().then(function () {
                     openNow();
                 });
@@ -3067,7 +3160,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var d = this.releaseData;
             if (!d) {
                 $body.html(
-                    '<div class="alert alert-info">Loading…</div>');
+                    '<div class="alert alert-info">' + _t('Loading…') +
+                '</div>');
                 return;
             }
             if (d.view === 'tracking') {
@@ -3091,8 +3185,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     'style="font-size:0.8rem;">' + p.summary + '</div>';
             }
             var groups = p.groups || [];
-            html += '<h6>' + _t('Draft RFQs') + ' (' + groups.length +
-                ')</h6>';
+            html += '<h3 class="mpp-rel-h">' + _t('Draft RFQs') + ' (' +
+                groups.length + ')</h3>';
             if (!groups.length) {
                 html += '<div class="alert alert-warning" ' +
                     'style="font-size:0.8rem;">' +
@@ -3120,8 +3214,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                 html += '</tbody></table></div>';
             }
             var mos = p.mo_eligible || [];
-            html += '<h6 class="mt-3">' + _t('Production MOs') + ' (' +
-                mos.length + ')</h6>';
+            html += '<h3 class="mpp-rel-h mt-3">' + _t('Production MOs') +
+                ' (' + mos.length + ')</h3>';
             if (!mos.length) {
                 html += '<div class="text-muted" ' +
                     'style="font-size:0.8rem;">' +
@@ -3140,7 +3234,10 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
             var hasWork = groups.length || mos.length;
             html += '<div class="mt-3" style="display:flex;gap:10px;' +
                 'align-items:center;">' +
-                '<select class="o_input mpp-rel-mode" aria-label="' +
+                '<label class="text-muted" for="mpp-rel-mode" ' +
+                'style="font-size:0.8rem;">' + _t('RFQ create mode') +
+                '</label>' +
+                '<select id="mpp-rel-mode" class="o_input mpp-rel-mode" aria-label="' +
                 _t('RFQ create mode') + '">' +
                 '<option value="update">' +
                 _t('Update existing drafts') + '</option>' +
@@ -3162,6 +3259,7 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
         // filter, confirm-all, revise and close actions.
         _releaseTrackingHtml: function (t) {
             t = t || {};
+            var self = this;
             var st = t.release_state || 'released';
             var closed = (st === 'closed');
             var stateTxt = (closed ? _t('Closed') : _t('Released')) +
@@ -3216,11 +3314,20 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                     _t('No lines.') + '</td></tr>';
             }
             lines.forEach(function (l) {
-                var badge = l.attention ?
-                    '<span class="badge badge-danger">! ' +
-                    (l.status || '') + '</span>' :
-                    '<span class="badge badge-info">' +
-                    (l.status || '') + '</span>';
+                var statusLabel = self._trackStatusLabel(l.status);
+                var badge;
+                if (l.status === 'no_need') {
+                    badge = '<span class="badge badge-secondary">' +
+                        statusLabel + '</span>';
+                } else {
+                    badge = l.attention ?
+                        '<span class="badge badge-danger">' +
+                        '<i class="fa fa-exclamation-triangle mr-1"></i>' +
+                        statusLabel + ' - ' + _t('Attention') + '</span>' :
+                        '<span class="badge badge-info">' +
+                        '<i class="fa fa-info-circle mr-1"></i>' +
+                        statusLabel + '</span>';
+                }
                 var poName = l.po_name || l.rfq_name;
                 var poState = l.po_state || l.rfq_state;
                 var doc = poName ?
@@ -3230,7 +3337,8 @@ odoo.define('matia_procurement_plan.dashboard', function (require) {
                             ')') : '-');
                 html += '<tr><td>' + (l.product || l.product_name ||
                     '') + '</td><td>' +
-                    (l.route || '') + '</td><td>' + badge + '</td><td>' +
+                    self._routeLabel(l.route) + '</td><td>' + badge +
+                    '</td><td>' +
                     doc + '</td></tr>';
             });
             html += '</tbody></table></div>';
