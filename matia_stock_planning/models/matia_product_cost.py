@@ -29,6 +29,7 @@ from .matia_procurement_plan import (
     _mpp_norm_bom_qty,
     _mpp_price_overrides,
     _mpp_product_routes,
+    _mpp_resolve_bom,
     _mpp_search_kit_forest,
     _mpp_stock_per_po_factor,
     _mpp_uom_en,
@@ -112,6 +113,11 @@ class MatiaProductCost(models.AbstractModel):
         # guards mirror the procurement explosion logic).
         children = {}
         bom_cache = {}
+        # Prices locations: a located product walks through its own
+        # company's BOM, not the unordered bulk-cache pick.
+        _mpc_ovr = _mpp_price_overrides(env_sudo)
+        _mpc_co = _mpp_last_buy_scope(_mpc_ovr)
+        _mpc_rbom = {}
         seen = set()
         stack = []
         for entries in tops.values():
@@ -140,6 +146,15 @@ class MatiaProductCost(models.AbstractModel):
                         [('product_tmpl_id', '=', tmpl_id)], limit=1)
                 bom_cache[tmpl_id] = bom
             bom = bom_cache[tmpl_id]
+            _mco = _mpc_co.get(pid)
+            if _mco and (not bom or
+                         (bom.company_id.id or 0) != _mco):
+                # Prices location wins over the bulk-cache pick.
+                _mb = _mpp_resolve_bom(
+                    env_sudo, pid, tmpl_id, overrides=_mpc_ovr,
+                    cache=_mpc_rbom)
+                if _mb:
+                    bom = _mb
             if bom and bom.bom_line_ids:
                 edges = children.setdefault(pid, {})
                 for bl in bom.bom_line_ids:

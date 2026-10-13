@@ -757,6 +757,11 @@ def _mpp_search_kit_forest(env_sudo, query, cap=100):
     matches = []
     prod_cache = {}
     bom_cache = {}
+    # Prices locations: the walk follows each located product's
+    # own-company BOM (same rule as the plan tree walks).
+    _for_ovr = _mpp_price_overrides(env_sudo)
+    _for_co = _mpp_last_buy_scope(_for_ovr)
+    _for_rbom = {}
 
     def _info(pid):
         if pid in prod_cache:
@@ -779,13 +784,22 @@ def _mpp_search_kit_forest(env_sudo, query, cap=100):
         try:
             prod = env_sudo['product.product'].browse(pid)
             if prod.exists():
-                bom = env_sudo['mrp.bom'].search([
-                    ('product_tmpl_id', '=', prod.product_tmpl_id.id),
-                    ('product_id', '=', prod.id),
-                ], limit=1)
+                if _for_co.get(prod.id):
+                    # Prices location: the product's own-company BOM
+                    # wins over the unordered legacy pick.
+                    bom = _mpp_resolve_bom(
+                        env_sudo, prod.id, prod.product_tmpl_id.id,
+                        overrides=_for_ovr, cache=_for_rbom)
                 if not bom:
                     bom = env_sudo['mrp.bom'].search([
-                        ('product_tmpl_id', '=', prod.product_tmpl_id.id),
+                        ('product_tmpl_id', '=',
+                         prod.product_tmpl_id.id),
+                        ('product_id', '=', prod.id),
+                    ], limit=1)
+                if not bom:
+                    bom = env_sudo['mrp.bom'].search([
+                        ('product_tmpl_id', '=',
+                         prod.product_tmpl_id.id),
                     ], limit=1)
         except Exception:
             bom = False
@@ -917,6 +931,65 @@ def _mpp_last_buy_scope(ovr_map):
     return {pid: _MPP_OVERRIDE_COMPANY[o.get('location')]
             for pid, o in (ovr_map or {}).items()
             if o.get('location') in _MPP_OVERRIDE_COMPANY}
+
+
+def _mpp_resolve_bom(env_sudo, pid, tmpl_id, overrides=None, cache=None):
+    """Single BOM for a product, honoring the Prices manual location.
+
+    Without a location the two legacy searches run unchanged (variant
+    first, then template, both limit=1 with no ordering), so nothing
+    changes for location-less products.  With a location (Prices tab,
+    'tr'/'us'), the same company's BOM wins first (variant, then
+    template, deterministic order='id'); when the company owns no BOM,
+    the legacy search is used as fallback so shared company-False
+    BOMs keep working.
+
+    @param env_sudo: sudo environment.
+    @param pid: product.product ID (0/None for template-only callers).
+    @param tmpl_id: product.template ID.
+    @param overrides: _mpp_price_overrides() map (optional).
+    @param cache: {(tmpl_id, pid, company): bom_id or False} dict
+        filled by this helper to avoid repeated searches (optional).
+    @return: mrp.bom recordset (empty when no BOM exists).
+    """
+    Bom = env_sudo['mrp.bom']
+    co = None
+    if overrides:
+        loc = (overrides.get(pid) or {}).get('location')
+        co = _MPP_OVERRIDE_COMPANY.get(loc)
+    ckey = (tmpl_id, pid or 0, co or 0)
+    if cache is not None and ckey in cache:
+        bid = cache[ckey]
+        return Bom.browse(bid) if bid else Bom
+    bom = Bom
+    if co:
+        bom = Bom.search([
+            ('product_id', '=', pid),
+            ('company_id', '=', co),
+            ('active', '=', True),
+        ], limit=1, order='id')
+        if not bom and tmpl_id:
+            # Template-level BOMs only (product_id=False): a sibling
+            # variant's BOM must never stand in for this product.
+            bom = Bom.search([
+                ('product_tmpl_id', '=', tmpl_id),
+                ('product_id', '=', False),
+                ('company_id', '=', co),
+                ('active', '=', True),
+            ], limit=1, order='id')
+    if not bom and pid:
+        bom = Bom.search([
+            ('product_id', '=', pid),
+            ('active', '=', True),
+        ], limit=1)
+    if not bom and tmpl_id:
+        bom = Bom.search([
+            ('product_tmpl_id', '=', tmpl_id),
+            ('active', '=', True),
+        ], limit=1)
+    if cache is not None:
+        cache[ckey] = bom.id if bom else False
+    return bom
 
 
 def _mpp_kit_tmpl_ids(env_sudo, tmpl_ids):
@@ -1432,6 +1505,12 @@ class MatiaProcurementPlan(models.Model):
 
         tmpl_ids_to_load = set(tmpl_of.values())
         loaded_tmpls = set()
+        # Prices manual locations: a located product explodes through
+        # its own company's BOM (see _mpp_resolve_bom), not through
+        # whatever the unordered bulk cache finds first.
+        _loc_ovr = _mpp_price_overrides(env_sudo)
+        _loc_co = _mpp_last_buy_scope(_loc_ovr)
+        _rbom_cache = {}
 
         def _load_boms(tmpl_ids):
             todo = [t for t in tmpl_ids if t not in loaded_tmpls]
@@ -1462,6 +1541,14 @@ class MatiaProcurementPlan(models.Model):
             if tmpl_id not in loaded_tmpls:
                 _load_boms([tmpl_id])
             bom = bom_cache.get(tmpl_id)
+            _co = _loc_co.get(pid)
+            if _co and (not bom or
+                        (bom.company_id.id or 0) != _co):
+                # Prices location wins: this product explodes through
+                # its own company's BOM, not the bulk-cache pick.
+                bom = _mpp_resolve_bom(
+                    env_sudo, pid, tmpl_id, overrides=_loc_ovr,
+                    cache=_rbom_cache)
             if not bom:
                 # Leaf: purchased part (with the multiplier from above)
                 need[pid] = need.get(pid, 0.0) + mult
@@ -2168,8 +2255,18 @@ class MatiaProcurementPlan(models.Model):
                 key = b.product_tmpl_id.id
                 if key not in bom_cache or b.product_id:
                     bom_cache[key] = b
+            _nc_ovr = _mpp_price_overrides(env_sudo)
+            _nc_co = _mpp_last_buy_scope(_nc_ovr)
+            _nc_rbom = {}
             for pid in all_pids:
                 b = bom_cache.get(tmpl_of.get(pid))
+                _co = _nc_co.get(pid)
+                if _co and (not b or
+                            (b.company_id.id or 0) != _co):
+                    # Prices location wins over the bulk-cache pick.
+                    b = _mpp_resolve_bom(
+                        env_sudo, pid, tmpl_of.get(pid),
+                        overrides=_nc_ovr, cache=_nc_rbom)
                 if b:
                     btype[pid] = b.type
         except Exception as exc:
@@ -3302,7 +3399,13 @@ class MatiaProcurementPlan(models.Model):
                     'share_pct': 100.0,
                     'share_n': _pn,
                     'share_note': use_notes.get(pid, ''),
-                    'net': line.net_qty if line else 0.0,
+                    # net: the client badge prefers this field; a lineless
+                    # top (exploded phantom kit such as N2PGAN02) has no
+                    # stored net, so fall back to need minus avail exactly
+                    # like 'planned' above -- otherwise a wanted top with
+                    # zero stock renders a false green 'OK' badge.
+                    'net': line.net_qty if line
+                    else max(0.0, need - avail),
                     'order_qty': line.order_qty if line else 0.0,
                     'seller': line.seller_id.display_name
                     if line and line.seller_id else '',
@@ -3473,12 +3576,21 @@ class MatiaProcurementPlan(models.Model):
         Product = env_sudo['product.product']
         Bom = env_sudo['mrp.bom']
         bom_cache = {}
+        _np_ovr = _mpp_price_overrides(env_sudo)
+        _np_co = _mpp_last_buy_scope(_np_ovr)
+        _np_rbom = {}
 
         def _bom_of(pid):
             prod = Product.browse(pid)
             if not prod.exists():
                 return False
             tid = prod.product_tmpl_id.id
+            if _np_co.get(pid):
+                # Prices location: the product's own-company BOM
+                # wins over the unordered legacy pick.
+                return _mpp_resolve_bom(
+                    env_sudo, pid, tid, overrides=_np_ovr,
+                    cache=_np_rbom)
             if tid not in bom_cache:
                 b = Bom.search(
                     [('product_tmpl_id', '=', tid),
@@ -3742,6 +3854,15 @@ class MatiaProcurementPlan(models.Model):
             bom = env_sudo['mrp.bom'].search(
                 [('product_tmpl_id', '=', prod.product_tmpl_id.id)],
                 limit=1)
+        _sub_ovr = _mpp_price_overrides(env_sudo, pids=[prod.id])
+        if _mpp_last_buy_scope(_sub_ovr).get(prod.id):
+            # Prices location: the product's own-company BOM wins
+            # over the unordered legacy pick above.
+            _sub_bom = _mpp_resolve_bom(
+                env_sudo, prod.id, prod.product_tmpl_id.id,
+                overrides=_sub_ovr)
+            if _sub_bom:
+                bom = _sub_bom
         if not bom:
             return {'items': []}
         try:
@@ -3836,6 +3957,11 @@ class MatiaProcurementPlan(models.Model):
         # variant-first resolution as get_sub_bom_cost). BFS order so
         # parents always precede their children in the build phase.
         bom_cache = {}
+        # Prices locations load here (not in Phase 2): the walk itself
+        # must follow each located product's own-company BOM.
+        _full_ovr = _mpp_price_overrides(env_sudo)
+        _full_co = _mpp_last_buy_scope(_full_ovr)
+        _full_rbom = {}
 
         def _kids_bom(pid):
             if pid in bom_cache:
@@ -3844,10 +3970,18 @@ class MatiaProcurementPlan(models.Model):
             try:
                 prod = env_sudo['product.product'].browse(int(pid))
                 if prod.exists():
-                    bom = env_sudo['mrp.bom'].search(
-                        [('product_tmpl_id', '=',
-                          prod.product_tmpl_id.id),
-                         ('product_id', '=', prod.id)], limit=1)
+                    if _full_co.get(prod.id):
+                        # Prices location: the product's own-company
+                        # BOM wins over the unordered legacy pick.
+                        bom = _mpp_resolve_bom(
+                            env_sudo, prod.id,
+                            prod.product_tmpl_id.id,
+                            overrides=_full_ovr, cache=_full_rbom)
+                    if not bom:
+                        bom = env_sudo['mrp.bom'].search(
+                            [('product_tmpl_id', '=',
+                              prod.product_tmpl_id.id),
+                             ('product_id', '=', prod.id)], limit=1)
                     if not bom:
                         bom = env_sudo['mrp.bom'].search(
                             [('product_tmpl_id', '=',
@@ -3914,7 +4048,6 @@ class MatiaProcurementPlan(models.Model):
         missing = [c for c in all_pids if c not in snap]
         usd = env_sudo['res.currency'].search(
             [('name', '=', 'USD')], limit=1)
-        _full_ovr = _mpp_price_overrides(env_sudo)
         last_buy = self._mpp_last_buys(
             env_sudo, missing, _mpp_last_buy_scope(_full_ovr))
         tmpl_of = {}
@@ -4023,6 +4156,11 @@ class MatiaProcurementPlan(models.Model):
         cap = 100
         prod_cache = {}
         bom_cache = {}
+        # Prices locations: the walk must follow each located
+        # product's own-company BOM (as in get_full_tree).
+        _sea_ovr = _mpp_price_overrides(env_sudo)
+        _sea_co = _mpp_last_buy_scope(_sea_ovr)
+        _sea_rbom = {}
 
         def _info(pid):
             hit = prod_cache.get(pid)
@@ -4044,10 +4182,18 @@ class MatiaProcurementPlan(models.Model):
             try:
                 prod = env_sudo['product.product'].browse(int(pid))
                 if prod.exists():
-                    bom = env_sudo['mrp.bom'].search(
-                        [('product_tmpl_id', '=',
-                          prod.product_tmpl_id.id),
-                         ('product_id', '=', prod.id)], limit=1)
+                    if _sea_co.get(prod.id):
+                        # Prices location: the product's own-company
+                        # BOM wins over the unordered legacy pick.
+                        bom = _mpp_resolve_bom(
+                            env_sudo, prod.id,
+                            prod.product_tmpl_id.id,
+                            overrides=_sea_ovr, cache=_sea_rbom)
+                    if not bom:
+                        bom = env_sudo['mrp.bom'].search(
+                            [('product_tmpl_id', '=',
+                              prod.product_tmpl_id.id),
+                             ('product_id', '=', prod.id)], limit=1)
                     if not bom:
                         bom = env_sudo['mrp.bom'].search(
                             [('product_tmpl_id', '=',
@@ -4773,6 +4919,11 @@ class MatiaProcurementPlan(models.Model):
         # BFS walk of all 4 kits (variant BOM wins, depth + cycle
         # guards mirror the explosion logic).
         bom_cache = {}
+        # Prices locations: a located product walks through its own
+        # company's BOM, not the unordered bulk-cache pick.
+        _rte_ovr = _mpp_price_overrides(env_sudo)
+        _rte_co = _mpp_last_buy_scope(_rte_ovr)
+        _rte_rbom = {}
         seen = set()
         pids = set()
         stack = []
@@ -4804,6 +4955,15 @@ class MatiaProcurementPlan(models.Model):
                         [('product_tmpl_id', '=', tmpl_id)], limit=1)
                 bom_cache[tmpl_id] = bom
             bom = bom_cache[tmpl_id]
+            _rco = _rte_co.get(pid)
+            if _rco and (not bom or
+                         (bom.company_id.id or 0) != _rco):
+                # Prices location wins over the bulk-cache pick.
+                _rb = _mpp_resolve_bom(
+                    env_sudo, pid, tmpl_id, overrides=_rte_ovr,
+                    cache=_rte_rbom)
+                if _rb:
+                    bom = _rb
             if bom:
                 for bl in bom.bom_line_ids:
                     stack.append(
