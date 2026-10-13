@@ -892,3 +892,11 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Reviewer: KRITIK yok (deploy proseduru haric: Git Deploy/restart + backup, mesai disi); 4 DUSUK nottan biri uygulandi (sablon+company `product_id=False` filtresi), digerleri kenar-durum bilgi notu.
 - KURAL: ayni sablonun birden fazla company-BOM'u varsa secim location'suz durumda DB sansina kalir; Prices location'i olan urunlerde `_mpp_resolve_bom` deterministik company-BOM secer. Yeni BOM-secimi yazan her yere helper kullanilir, cift `search limit=1` kopyalanmaz.
 
+## Satirsiz Phantom Top: Karti Esitleyen Satir Fix'i (2026-10-13, lokal duzeltme - push/deploy BEKLIYOR)
+
+- Onceki girdideki "No-line grubu veya hedef topa satir sarti" kararinin uygulamasi: kullanici "cocuk maliyetleri base'e eklensin + N2PGAN02 Est. USD dolsun" istedi; cozum satir acmak oldu (ayri grup gerekmedi).
+- Fix A (explode, phantom dali): `pid in targets` ise need'e yazilir -> satir acilir; ara phantom'lar eski yolda (satirsiz, pass-through). Fix B (`_mpp_net_costs`): `phantom and p not in want` ise want_w=0, yoksa want (hedef+component uclusu vida ornegiyle ayni exact-partition). Ek: `_mpp_need_per_top` tooltip hedef-phantom'a self-entry (`N2PGAN02x55`).
+- Neden base'e otomatik duser: `_plan_summary` satirlari `_kit_of` ile toplar; 1244 sabit kit BOM'unun dogrudan satiri oldugundan base grubuna +1527.90 isler, kart 138242.04 ~= grand 138241.99 olur.
+- Guvenlik matrisi (canli salt-okunur teyitli): 1244 route Manufacture(6)+purchase_ok=false -> satir make; make own_usd HER ZAMAN 0 (override bile reddedilir) -> supplier cift sayim YOK (ayrica PO gecmisi 0 -> last_price 0). MO: normal-BOM yok (1715+1600 ikisi de phantom) -> `mo_creatable=False` + toplu uretimde `No normal-type BOM found` skip, exception YOK. Simulasyon: retain(152790,want=55,push=0)=(152790,0) - kokte eski kural da ayni sonucu verirdi (tot=0 -> retain-all); sizinti satir yoklugundandi (`_compute_rollup` 2519-2543 sadece `line_by_pid`'e yazar), Fix B uclu durumu duzeltir.
+- Reviewer: KRITIK yok; DUSUK 1 (tooltip onarildi). py_compile temiz. Deploy: Git Deploy/restart + backup, mesai disi (button_immediate_upgrade Python yuklemez).
+

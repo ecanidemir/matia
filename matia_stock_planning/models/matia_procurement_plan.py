@@ -1562,6 +1562,19 @@ class MatiaProcurementPlan(models.Model):
                 # Edges still recorded so rolled cost flows through.
                 # Phantom passes the FULL demand down (no stock held).
                 btype[pid] = 'phantom'
+                if pid in targets:
+                    # Entered-top phantom (e.g. a kit typed as phantom
+                    # and entered directly as a target): it still gets
+                    # a need entry so a plan line is opened for it.
+                    # Without a line its want share has no row to
+                    # retain on and the pushed subtree cost drops out
+                    # of the Plan cards (live N2PGAN02: 1527.90 USD).
+                    # Demand still passes through in full below.
+                    need[pid] = need.get(pid, 0.0) + mult
+                    m = meta.setdefault(pid, {'level': level,
+                                              'paths': set()})
+                    m['level'] = min(m['level'], level)
+                    m['paths'].add(path)
                 edge = edges.setdefault(pid, {})
                 for bl in bom.bom_line_ids:
                     # Edge qty in the CHILD's stock UoM (not the raw
@@ -2199,8 +2212,10 @@ class MatiaProcurementPlan(models.Model):
         over children C of the exact cent shares of the PUSHED part
         of net_cost(C) (largest-remainder split over the parent
         contributions, so the pushed shares always add up to exactly
-        the pushed part). Each node retains its want-attributable
-        part (entry demand share; phantoms retain nothing), each
+        the pushed         part). Each node retains its want-attributable
+        part (entry demand share; only intermediate phantoms retain
+        nothing — an entered-top phantom keeps its want share, having
+        no parent row to push it to), each
         parent therefore carries only its gap share (stock-covered
         material is never charged). Integer cents make the retained
         sums telescoping: summed over the kit tops they ALWAYS equal
@@ -2347,11 +2362,14 @@ class MatiaProcurementPlan(models.Model):
             # sum); only the pushed part flows upward to the parents.
             # Buckets always partition the net exactly, so the card
             # sums telescope to the flat PO-value total of
-            # get_supplier_summary. Phantoms retain nothing
-            # (pass-through). A row that is both an entered top and
-            # someone's component (e.g. a screw used inside a base
-            # assembly) therefore counts once: retained here, pushed
-            # parts on the parent rows.
+            # get_supplier_summary. Intermediate phantoms retain
+            # nothing (pass-through); a phantom entered directly as a
+            # target keeps its want share (it has no parent row to
+            # receive the pushed part, so dropping it would leak the
+            # whole subtree out of the Plan cards). A row that is both
+            # an entered top and someone's component (e.g. a screw used
+            # inside a base assembly) therefore counts once: retained
+            # here, pushed parts on the parent rows.
             _pars = [pp for pp, ch in children.items() if p in ch]
             _push_w = 0.0
             for pp in _pars:
@@ -2359,7 +2377,7 @@ class MatiaProcurementPlan(models.Model):
                     _push_w += float(contrib.get((pp, p), 0.0))
                 except (TypeError, ValueError):
                     continue
-            if btype.get(p) == 'phantom':
+            if btype.get(p) == 'phantom' and p not in want:
                 _want_w = 0.0
             else:
                 try:
@@ -3618,6 +3636,12 @@ class MatiaProcurementPlan(models.Model):
                 contrib[pid][top] += mult
                 continue
             if bom.type == 'phantom':
+                if pid in targets:
+                    # Entered-top phantom opens a plan line now, so it
+                    # gets a self entry for the breakdown tooltip
+                    # (pass-through for intermediate phantoms stays).
+                    contrib.setdefault(pid, {}).setdefault(top, 0.0)
+                    contrib[pid][top] += mult
                 for bl in bom.bom_line_ids:
                     stack.append((bl.product_id.id,
                                   mult * _mpp_norm_bom_qty(bl),
