@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Matia TekRMD Stock & Capacity Planning',
-    'version': '15.0.2.10.6',
+    'version': '15.0.2.10.7',
     'category': 'Inventory/Inventory',
     'summary': 'Device Production Capacity & Stock Analysis based on TekRMD BOMs',
     'description': """
@@ -39,6 +39,7 @@ across TR and USA warehouse locations to calculate:
         'views/procurement_plan_menus.xml',
         'views/product_cost_views.xml',
         'views/product_cost_menus.xml',
+        'views/count_sheet_templates.xml',
     ],
     'assets': {
         'web.assets_backend': [

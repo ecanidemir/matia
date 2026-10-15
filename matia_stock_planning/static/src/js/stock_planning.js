@@ -14,6 +14,8 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
         events: {
             'click .msp-btn-refresh': '_onRefresh',
             'click .msp-btn-excel': '_onExportExcel',
+            'click .msp-btn-count-tr': '_onCountSheetTR',
+            'click .msp-btn-count-us': '_onCountSheetUS',
             'change .msp-check-tr': '_onChangeLocation',
             'change .msp-check-usa': '_onChangeLocation',
             'click .msp-btn-toggle-bom': '_onToggleBomQty',
@@ -1311,6 +1313,18 @@ odoo.define('matia_stock_planning.dashboard', function (require) {
             document.body.appendChild(form);
             form.submit();
             document.body.removeChild(form);
+        },
+
+        _onCountSheetTR: function (ev) {
+            ev.preventDefault();
+            window.open('/matia_stock_planning/count_sheet/tr',
+                '_blank');
+        },
+
+        _onCountSheetUS: function (ev) {
+            ev.preventDefault();
+            window.open('/matia_stock_planning/count_sheet/us',
+                '_blank');
         },
     });
 

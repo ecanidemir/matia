@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 import math
+from datetime import datetime
 from odoo import models, api, _
 from odoo.exceptions import UserError
-from .matia_procurement_plan import _mpp_search_kit_forest
+from .matia_procurement_plan import (
+    _MPP_MAX_LEVEL,
+    _mpp_find_kit_boms,
+    _mpp_search_kit_forest,
+)
 
 # Common UoM name translations (Odoo stores them in the language of the DB)
 _UOM_NAME_MAP = {
@@ -640,4 +645,204 @@ class MatiaStockPlanning(models.AbstractModel):
             'bottleneck_product': bottleneck_product,
             'total_items': len(lines_list),
         }
+
+    @api.model
+    def get_count_sheet(self, company):
+        """Printable stock-count rows for one company (Count List pages).
+
+        Explodes the 4 kit BOMs to the lowest level (variant BOM wins,
+        depth + cycle guards mirror the price-overview walk), then keeps
+        only products with stock (quantity > 0) in that company's Stock
+        locations. One row per product: code, name, stock location names
+        (a location is listed once even with several serial/lot quants)
+        and total quantity with UoM. Rows sort by location first, then
+        code, then name. Labels are fixed per company (TR page Turkish,
+        US page English), independent of the user's language.
+
+        @param company: 'tr' or 'us'.
+        @return: {'company', 'lang', 'title', 'subtitle', 'headers',
+            'rows', 'generated', 'count', 'file_base', 'print_label',
+            'excel_label'}; each row carries 'no', 'code', 'name',
+            'locs', 'qty', 'uom', 'qty_text'.
+        """
+        company = (company or '').strip().lower()
+        if company not in ('tr', 'us'):
+            raise UserError(_("Count sheet company must be 'tr' or 'us'."))
+        is_tr = company == 'tr'
+        if is_tr:
+            labels = {
+                'lang': 'tr',
+                'title': 'TR Stok Sayım Listesi - 4 Kapasite BOM (en alt seviye)',
+                'headers': ['Kod', 'Ürün Adı', 'Depo / Lokasyon', 'Miktar'],
+                'print_label': 'Yazdır',
+                'excel_label': "Excel'e Aktar",
+                'file_base': 'TekRMD_TR_Sayim_Listesi',
+            }
+        else:
+            labels = {
+                'lang': 'en',
+                'title': 'US Stock Count List - 4 Capacity BOMs (lowest level)',
+                'headers': ['Code', 'Product Name', 'Warehouse Location', 'Quantity'],
+                'print_label': 'Print',
+                'excel_label': 'Export Excel',
+                'file_base': 'TekRMD_US_Count_List',
+            }
+
+        all_company_ids = self.env['res.company'].with_context(
+            active_test=False).sudo().search([]).ids
+        env_sudo = self.with_context(
+            allowed_company_ids=all_company_ids,
+            active_test=False
+        ).sudo().env
+
+        # 1. Company stock locations: same classifier as the capacity
+        # page (WHTR/Stock* or WHUS/Stock*, internal, NCR excluded).
+        # Subcontracting locations stay out of the count scope.
+        prefix = 'WHTR/Stock' if is_tr else 'WHUS/Stock'
+        loc_ids = []
+        for loc in env_sudo['stock.location'].search(
+                [('usage', '=', 'internal')]):
+            cname = loc.complete_name or ''
+            if 'NCR' in cname:
+                continue
+            if 'Subcontract' in cname:
+                continue
+            if cname.startswith(prefix):
+                loc_ids.append(loc.id)
+
+        generated = datetime.now().strftime('%Y-%m-%d %H:%M')
+        empty = dict(labels)
+        empty.update({
+            'company': company,
+            'subtitle': '%s | %s: %s' % (
+                generated,
+                'Ürün' if is_tr else 'Products', 0),
+            'rows': [],
+            'generated': generated,
+            'count': 0,
+        })
+        if not loc_ids:
+            return empty
+
+        # 2. Explode the 4 kit BOMs to the lowest level.
+        kits = _mpp_find_kit_boms(env_sudo)
+        if not kits:
+            raise UserError(_('No kit BOM found.'))
+        Product = env_sudo['product.product']
+        Bom = env_sudo['mrp.bom']
+        # Variant BOMs cache by product (a template's variants may each
+        # carry their own BOM); template BOMs cache by template.
+        variant_bom_cache = {}
+        tmpl_bom_cache = {}
+        seen = set()
+        pids = set()
+        stack = []
+        for kit in kits:
+            for bl in kit['bom'].bom_line_ids:
+                stack.append((bl.product_id.id, 0, ()))
+        guard = 0
+        while stack:
+            guard += 1
+            if guard > 60000:
+                raise UserError(
+                    _('Tree too deep/wide, explosion limited.'))
+            pid, level, path = stack.pop()
+            if pid in path or level > _MPP_MAX_LEVEL:
+                continue
+            pids.add(pid)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            prod = Product.browse(pid)
+            if not prod.exists():
+                continue
+            tmpl_id = prod.product_tmpl_id.id
+            if pid in variant_bom_cache:
+                bom = variant_bom_cache[pid]
+            else:
+                bom = Bom.search([('product_id', '=', pid)], limit=1)
+                if bom:
+                    variant_bom_cache[pid] = bom
+                else:
+                    if tmpl_id not in tmpl_bom_cache:
+                        tmpl_bom_cache[tmpl_id] = Bom.search(
+                            [('product_tmpl_id', '=', tmpl_id)], limit=1)
+                    bom = tmpl_bom_cache[tmpl_id]
+            if bom:
+                for bl in bom.bom_line_ids:
+                    stack.append(
+                        (bl.product_id.id, level + 1, path + (pid,)))
+        if not pids:
+            return empty
+
+        # 3. Per-(product, location) stock. The groupby merges
+        # serial/lot quants, so each location appears once per product.
+        # Only locations with quantity > 0 are kept.
+        prod_locs = {}
+        for rg in env_sudo['stock.quant'].read_group(
+                [('product_id', 'in', sorted(pids)),
+                 ('location_id', 'in', loc_ids)],
+                ['product_id', 'location_id', 'quantity'],
+                ['product_id', 'location_id']):
+            _p = rg.get('product_id')
+            _l = rg.get('location_id')
+            if not _p or not _l:
+                continue
+            qty = float(rg.get('quantity') or 0.0)
+            if qty <= 0.0:
+                continue
+            prod_locs.setdefault(_p[0], {})[_l[0]] = qty
+        if not prod_locs:
+            return empty
+
+        # 4. Bulk identity + location names, then sort by location,
+        # code, name.
+        used_loc_ids = {lid for loc_qty in prod_locs.values()
+                        for lid in loc_qty}
+        loc_names = {loc.id: (loc.complete_name or loc.name or '')
+                     for loc in env_sudo['stock.location'].browse(
+                         list(used_loc_ids))}
+        info = {}
+        for pr in Product.browse(list(prod_locs)).read(
+                ['default_code', 'name', 'uom_id']):
+            info[pr['id']] = pr
+        rows = []
+        for pid, loc_qty in prod_locs.items():
+            pr = info.get(pid) or {}
+            names = sorted({loc_names.get(lid, '')
+                            for lid in loc_qty})
+            names = [n for n in names if n]
+            total = sum(loc_qty.values())
+            total_disp = (int(total) if float(total).is_integer()
+                          else round(total, 2))
+            uom = (pr.get('uom_id') or [False, ''])[1] or 'Units'
+            if is_tr and uom == 'Units':
+                uom = 'Adet'
+            code = pr.get('default_code') or ''
+            name = pr.get('name') or ''
+            rows.append({
+                'code': code,
+                'name': name,
+                'locs': names,
+                'qty': total_disp,
+                'uom': uom,
+                'qty_text': '%s %s' % (total_disp, uom),
+            })
+        rows.sort(key=lambda r: (
+            [n.lower() for n in r['locs']],
+            (r['code'] or '').lower(), (r['name'] or '').lower()))
+        for idx, row in enumerate(rows, 1):
+            row['no'] = idx
+
+        result = dict(labels)
+        result.update({
+            'company': company,
+            'subtitle': '%s | %s: %s' % (
+                generated,
+                'Ürün' if is_tr else 'Products', len(rows)),
+            'rows': rows,
+            'generated': generated,
+            'count': len(rows),
+        })
+        return result
 

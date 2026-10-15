@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Printable TR/US stock-count sheets (Count List buttons).
+         Full standalone page rendered by controllers/count_sheet.py.
+         All wording comes from the server (TR page Turkish, US page
+         English), so this template stays language-neutral. -->
+    <template id="count_sheet_page" name="Stock Count Sheet">
+        <html t-att-lang="sheet.get('lang', 'en')">
+            <head>
+                <meta charset="utf-8"/>
+                <title><t t-esc="sheet.get('title', '')"/></title>
+                <style>
+                    @page { size: A4 portrait; margin: 8mm; }
+                    body { font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111; margin: 0; padding: 8px; }
+                    h1 { font-size: 13pt; margin: 0 0 2px; }
+                    .sub { color: #444; margin: 0 0 8px; font-size: 8pt; }
+                    .toolbar { margin-bottom: 10px; }
+                    .toolbar button, .toolbar a.btn { font-size: 10pt; padding: 6px 14px; margin-right: 8px; cursor: pointer; border: 1px solid #555; border-radius: 4px; background: #f0f0f0; color: #111; text-decoration: none; display: inline-block; }
+                    .toolbar button.primary { background: #1e40af; border-color: #1e40af; color: #fff; }
+                    table { border-collapse: collapse; width: 100%; }
+                    th, td { border: 1px solid #888; padding: 2px 4px; vertical-align: top; }
+                    thead { display: table-header-group; }
+                    tr { page-break-inside: avoid; }
+                    th { background: #eee; }
+                    td.n { width: 30px; text-align: right; color: #555; }
+                    td.c { white-space: nowrap; font-weight: bold; }
+                    td.l { font-size: 8pt; }
+                    td.q { text-align: right; white-space: nowrap; }
+                    @media print { .toolbar { display: none; } body { padding: 0; } }
+                </style>
+            </head>
+            <body>
+                <div class="toolbar">
+                    <button class="primary" onclick="window.print()"><t t-esc="sheet.get('print_label', 'Print')"/></button>
+                    <a class="btn" t-attf-href="/matia_stock_planning/count_sheet/#{sheet.get('company', '')}/xlsx"><t t-esc="sheet.get('excel_label', 'Excel')"/></a>
+                </div>
+                <h1><t t-esc="sheet.get('title', '')"/></h1>
+                <p class="sub"><t t-esc="sheet.get('subtitle', '')"/></p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>No</th>
+                            <th t-foreach="sheet.get('headers', [])" t-as="h"><t t-esc="h"/></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr t-foreach="sheet.get('rows', [])" t-as="r">
+                            <td class="n"><t t-esc="r.get('no', '')"/></td>
+                            <td class="c"><t t-esc="r.get('code', '')"/></td>
+                            <td><t t-esc="r.get('name', '')"/></td>
+                            <td class="l"><t t-foreach="r.get('locs', [])" t-as="ln"><t t-esc="ln"/><t t-if="not ln_last"><br/></t></t></td>
+                            <td class="q"><t t-esc="r.get('qty_text', '')"/></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </body>
+        </html>
+    </template>
+</odoo>

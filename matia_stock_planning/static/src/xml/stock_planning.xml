@@ -21,6 +21,12 @@
                     <button class="btn btn-success btn-sm msp-btn-excel" title="Export Current Visible Table to Excel">
                         <i class="fa fa-file-excel-o mr-1"></i> Export Excel
                     </button>
+                    <button class="btn btn-outline-light btn-sm msp-btn-count-tr" title="TR Stok Sayım Listesi">
+                        <i class="fa fa-clipboard mr-1"></i> TR Sayım Listesi
+                    </button>
+                    <button class="btn btn-outline-light btn-sm msp-btn-count-us" title="US Stock Count List">
+                        <i class="fa fa-clipboard mr-1"></i> US Count List
+                    </button>
                 </div>
             </div>
 
