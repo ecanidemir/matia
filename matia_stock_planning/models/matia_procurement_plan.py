@@ -1811,32 +1811,45 @@ class MatiaProcurementPlan(models.Model):
             if _best_c is not None:
                 driver_map[_pp] = _best_c
 
-        # Info: confirmed incoming POs + open MO output (NOT netted, display only)
+        # Info: REMAINING incoming from open POs + REMAINING output of
+        # open MOs (NOT netted, display only). 'done' (Locked) POs are
+        # excluded: nothing more will arrive from them. Partially
+        # received/produced lines count only their remainder, so stale
+        # fully-received orders (e.g. PO/24-00304, 99 ordered / 100
+        # received) no longer inflate the info columns.
         incoming, mo_out = {}, {}
         po_ids = env_sudo['purchase.order'].search([
             ('company_id', 'in', [_MPP_TR_COMPANY_ID, _MPP_US_COMPANY_ID]),
-            ('state', 'in', ['purchase', 'done']),
+            ('state', '=', 'purchase'),
         ])
         if po_ids:
             for g in env_sudo['purchase.order.line'].read_group(
                     [('order_id', 'in', po_ids.ids),
                      ('product_id', 'in', pids)],
-                    ['product_id', 'product_qty'],
+                    ['product_id', 'product_qty', 'qty_received'],
                     ['product_id']):
-                incoming[g['product_id'][0]] = float(
-                    g.get('product_qty') or 0.0)
+                if g.get('product_id'):
+                    _rem = float(g.get('product_qty') or 0.0) - float(
+                        g.get('qty_received') or 0.0)
+                    if _rem > 0:
+                        incoming[g['product_id'][0]] = _rem
         mo_ids = env_sudo['mrp.production'].search([
             ('company_id', 'in', [_MPP_TR_COMPANY_ID, _MPP_US_COMPANY_ID]),
             ('state', 'in', ['confirmed', 'progress', 'to_close']),
         ])
         if mo_ids:
-            for g in env_sudo['mrp.production'].read_group(
+            # qty_produced is non-stored: read per MO (open MOs are
+            # few) instead of read_group, then aggregate remainders.
+            for _mo in env_sudo['mrp.production'].search_read(
                     [('id', 'in', mo_ids.ids)],
-                    ['product_id', 'product_qty'],
-                    ['product_id']):
-                if g.get('product_id'):
-                    mo_out[g['product_id'][0]] = float(
-                        g.get('product_qty') or 0.0)
+                    ['product_id', 'product_qty', 'qty_produced']):
+                _mpid = (_mo.get('product_id') or [False])[0]
+                if not _mpid:
+                    continue
+                _mrem = float(_mo.get('product_qty') or 0.0) - float(
+                    _mo.get('qty_produced') or 0.0)
+                if _mrem > 0:
+                    mo_out[_mpid] = mo_out.get(_mpid, 0.0) + _mrem
 
         # Route + UoM info (bulk read)
         prod_info = {}
@@ -5426,10 +5439,12 @@ class MatiaProcurementPlanLine(models.Model):
     avail_us = fields.Float(digits=(16, 3))
     incoming_info = fields.Float(
         digits=(16, 3),
-        help='Info: confirmed incoming PO qty (NOT netted).')
+        help='Info: remaining incoming qty from open POs '
+             '(ordered minus received, NOT netted).')
     open_mo_info = fields.Float(
         digits=(16, 3),
-        help='Info: open MO production (NOT netted).')
+        help='Info: remaining open MO output '
+             '(to produce minus produced, NOT netted).')
     net_qty = fields.Float(digits=(16, 3))
     order_qty = fields.Float(digits=(16, 3))
     uom_id = fields.Many2one('uom.uom')

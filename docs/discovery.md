@@ -923,3 +923,8 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Route'lar (auth=user, salt-okunur): GET `/matia_stock_planning/count_sheet/<tr|us>` (QWeb `views/count_sheet_templates.xml`) + GET `.../<tr|us>/xlsx` (xlsxwriter varsa .xlsx yoksa BOM'lu CSV). Dosyalar: `controllers/count_sheet.py`, manifest version 15.0.2.10.7.
 - Kapsam notu: stoku olan ara montajlar da listelenir (scratch 525/166 sayimlariyla ayni kural); basliktaki "en alt seviye" patlatma derinligini ifade eder, yaprak-only DEGIL.
 - Deploy: Python degisikligi -> `button_immediate_upgrade` YUKLEMEZ; odoobulut Git Deploy + servis restart, mesai disi + oncesi backup. Once staging-matia'da dene.
+
+## RFQ Birlestirme 138+139+140 -> PO/26-00142 (2026-10-15)
+- 139'daki 4 urun 138'de de vardi (farkli miktar): rev2 update-modu manuel PO'yu (138) guncelleyemeyip yeni RFQ (139) acmis. Toplamlar 35'e tamamliyordu (29+6, 5+30, 5+30, 25+10). Birlestirme = ayni (urun,uom,fiyat,vergi) grubunda TOPLAMA; fiyat/vergi/aciklama farki olsaydi ayri satir kalacakti (script abort kurali). 140'taki M3MTMN05x34 138'de yoktu, aynen eklendi.
+- Sonuc: PO/26-00142 (draft, Matia Demo placeholder, 149 satir); kaynaklar 138/139/140 cancel (silinmedi). Chatter'da birlesme + Murat Gunes earmark notu (1771x34). Dusus (trim) taslak uzerinde UI'dan.
+- XML-RPC gotchalari (scratch/mpp_merge_pos.py): message_post [[id]] + kwarg body ister (dict pozisyonel Fault verir); button_cancel None doner -> marshal Fault'a ragmen cancel UYGULANIR, state search_read ile teyit et; --finish=<id> modu yarim kalan isi tamamlar.
