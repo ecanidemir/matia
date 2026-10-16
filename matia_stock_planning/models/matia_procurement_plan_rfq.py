@@ -313,6 +313,10 @@ class MatiaProcurementPlanRfq(models.Model):
         _bumped = 0
         _amount = 0.0
         _delta = {}
+        # Old -> new PO-line quantities for the chatter note, keyed
+        # by plan line id: (old_qty_or_None, new_qty, po_uom_name).
+        # None old means a brand-new PO line on this RFQ.
+        _qty_info = {}
         for line in grp['lines']:
             _rem = float(grp['qty_map'].get(line.id, line.order_qty)
                          or 0.0)
@@ -333,8 +337,9 @@ class MatiaProcurementPlanRfq(models.Model):
                         line.product_id.default_code or
                         line.product_id.id, _rem)
                     _add = _rem
+                _old_po = float(_target.product_qty or 0.0)
                 _target.write({
-                    'product_qty': (_target.product_qty or 0.0) + _add,
+                    'product_qty': _old_po + _add,
                 })
                 line.write({
                     'purchase_order_id': po.id,
@@ -342,6 +347,12 @@ class MatiaProcurementPlanRfq(models.Model):
                 })
                 _bumped += 1
                 _delta[line.id] = _rem
+                _qty_info[line.id] = (
+                    _old_po,
+                    _old_po + _add,
+                    _target.product_uom.name
+                    if _target.product_uom else '',
+                )
                 _amount += _add * (_target.price_unit or 0.0)
             else:
                 _conv = self._rfq_line_eff(
@@ -364,13 +375,19 @@ class MatiaProcurementPlanRfq(models.Model):
                     line.product_id.id, []).append(_po_line)
                 _added += 1
                 _delta[line.id] = _rem
+                _qty_info[line.id] = (
+                    None,
+                    _vals['qty'],
+                    _po_line.product_uom.name
+                    if _po_line.product_uom else '',
+                )
                 _amount += _vals['qty'] * _vals['price']
         if _delta:
             try:
                 self._rfq_bom_chatter(
                     env_sudo, plan, po,
                     [ln for ln in grp['lines'] if ln.id in _delta],
-                    _delta)
+                    _delta, qty_info=_qty_info)
             except Exception:
                 _logger.warning(
                     'MPP BOM chatter failed for PO %s.', po.id)
@@ -552,7 +569,7 @@ class MatiaProcurementPlanRfq(models.Model):
         return res
 
     def _rfq_bom_chatter(self, env_sudo, plan, po, lines,
-                            qty_map=None):
+                            qty_map=None, qty_info=None):
         """Post a BOM-detail note on a freshly created RFQ.
 
         Each ordered line is listed with its ordered quantity; when
@@ -564,6 +581,10 @@ class MatiaProcurementPlanRfq(models.Model):
         lines additionally list their NET-based usage (which parent
         products consume how much per piece, e.g. a 3500 mm bar
         shows '[M3PRT01] Bracket: 200 mm x 10 Units = 2000 mm').
+        When qty_info is given (RFQ update path), each line also
+        carries its old -> new RFQ quantity, e.g. '(was 6, now 40
+        Units)' for a bumped line or '(new: 34 Units)' for a
+        brand-new line on an existing RFQ.
         Posted as an internal note so the vendor is not emailed.
 
         @param env_sudo: sudo environment.
@@ -572,6 +593,8 @@ class MatiaProcurementPlanRfq(models.Model):
         @param lines: plan line recordset ordered on this RFQ.
         @param qty_map: optional {plan_line_id: ordered qty} (open
             remainder; falls back to the line order_qty).
+        @param qty_info: optional {plan_line_id: (old_qty_or_None,
+            new_qty, po_uom_name)} for old -> new rendering.
         @return: None.
         """
         items = []
@@ -592,6 +615,19 @@ class MatiaProcurementPlanRfq(models.Model):
                 _pname,
                 self._rfq_fmt_qty(_oqty),
                 src_uom_name)
+            _qi = (qty_info or {}).get(line.id)
+            if _qi:
+                _old_q, _new_q, _po_uom = _qi
+                if _old_q is None:
+                    _tail = _('(new: %s%s)') % (
+                        self._rfq_fmt_qty(_new_q),
+                        ' %s' % _po_uom if _po_uom else '')
+                else:
+                    _tail = _('(was %s, now %s%s)') % (
+                        self._rfq_fmt_qty(_old_q),
+                        self._rfq_fmt_qty(_new_q),
+                        ' %s' % _po_uom if _po_uom else '')
+                head += ' ' + _tail
             bom = self._rfq_find_bom(
                 env_sudo, prod, po.company_id.id)
             subs = []

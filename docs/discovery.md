@@ -928,3 +928,8 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - 139'daki 4 urun 138'de de vardi (farkli miktar): rev2 update-modu manuel PO'yu (138) guncelleyemeyip yeni RFQ (139) acmis. Toplamlar 35'e tamamliyordu (29+6, 5+30, 5+30, 25+10). Birlestirme = ayni (urun,uom,fiyat,vergi) grubunda TOPLAMA; fiyat/vergi/aciklama farki olsaydi ayri satir kalacakti (script abort kurali). 140'taki M3MTMN05x34 138'de yoktu, aynen eklendi.
 - Sonuc: PO/26-00142 (draft, Matia Demo placeholder, 149 satir); kaynaklar 138/139/140 cancel (silinmedi). Chatter'da birlesme + Murat Gunes earmark notu (1771x34). Dusus (trim) taslak uzerinde UI'dan.
 - XML-RPC gotchalari (scratch/mpp_merge_pos.py): message_post [[id]] + kwarg body ister (dict pozisyonel Fault verir); button_cancel None doner -> marshal Fault'a ragmen cancel UYGULANIR, state search_read ile teyit et; --finish=<id> modu yarim kalan isi tamamlar.
+
+## RFQ Chatter Eski->Yeni Miktar Notu (2026-10-16)
+- Istek: update-modunda RFQ'ya eklenen/artan her parca icin PO chatter'ina eski->yeni bilgisi. Mevzubahis `_rfq_bom_chatter` zaten 3 noktada cagriliyordu (update `_rfq_add_lines` + 2 create-path) ama sadece delta miktari yaziyordu.
+- Cozum (commitlenmedi, local): `_rfq_add_lines` `_qty_info {plan_line: (old|None, new, po_uom)}` toplar (bump'ta write-oncesi `_old_po`; yeni satirda `_po_line.product_uom.name`); `_rfq_bom_chatter(..., qty_info=None)` bump'ta `(was 6, now 40 Units)`, yeni satirda `(new: 34 Units)` basar. Create-path cagrilari qty_info gecmez -> ciktisi degismez. odoo-reviewer: kritik bulgu yok. py_compile OK.
+- Deploy: Python degisikligi -> Git Deploy + restart (mesai disi + backup); `button_immediate_upgrade` YUKLEMEZ.
