@@ -9,7 +9,7 @@ To ensure consistent business logic, version-safe API usage, and memory rituals:
 ## Codebase Organization Summary
 
 - **`matia_stock_planning/`**: Capacity planning module (models, views, data, security, controllers, static).
-- **`scripts/`**: Reusable XML-RPC audit/query scripts + ritual tooling (`load_env.ps1`, `check_mem0.ps1`, `lint_error_log.ps1`).
+- **`scripts/`**: Reusable XML-RPC audit/query scripts + ritual tooling (`check_mem0.ps1`, `lint_error_log.ps1`).
 - **`plans/`**: Implementation plans for larger work (module changes, migration prep).
 - **`docs/`**: `discovery.md` is the permanent knowledge store — READ every session, APPEND lasting findings.
 - **`scratch/`**: One-off experiments (git-ignored).

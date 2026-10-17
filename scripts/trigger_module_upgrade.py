@@ -7,9 +7,9 @@ ALSO NOTE: if logins themselves crash (e.g. missing column on res.users),
 XML-RPC auth crashes too and this script cannot help; fix code + redeploy.
 
 Credentials ONLY from process env. Without flags it uses the prod vars
-(ODOO_URL/ODOO_DB/ODOO_USERNAME/ODOO_PASSWORD); with --staging it uses
-ODOO_STAGING_URL/ODOO_STAGING_DB/ODOO_STAGING_USERNAME/
-ODOO_STAGING_PASSWORD. Never prints secrets.
+(MATIA_ODOO_URL/MATIA_ODOO_DB/MATIA_ODOO_USERNAME/MATIA_ODOO_PASSWORD); with --staging it uses
+MATIA_ODOO_STAGING_URL/MATIA_ODOO_STAGING_DB/MATIA_ODOO_STAGING_USERNAME/
+MATIA_ODOO_STAGING_PASSWORD. Never prints secrets.
 Default is dry-run (reports state only); --apply triggers the upgrade.
 
 Usage:
@@ -33,7 +33,7 @@ def main():
         name = args[args.index("--module") + 1]
     except (ValueError, IndexError):
         name = "matia_stock_planning"
-    prefix = "ODOO_STAGING_" if "--staging" in args else "ODOO_"
+    prefix = "MATIA_ODOO_STAGING_" if "--staging" in args else "MATIA_ODOO_"
     url = os.environ.get(prefix + "URL", "").rstrip("/")
     db = os.environ.get(prefix + "DB", "")
     user = os.environ.get(prefix + "USERNAME", "")

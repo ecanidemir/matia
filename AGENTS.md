@@ -9,7 +9,7 @@
 ## Purpose
 
 Bu projenin amacı, `matia.odoobulut.com` (Odoo 15) sunucusundaki **yapılandırma sorularını**
-ve **alınan hataları** AI yardımıyla çözmektir. Canlı instance (`ODOO_*`) + `.env`'deki `ODOO_STAGING_*` bilgileriyle `odoo_staging` MCP üzerinden erişilen staging vardır, SSH yoktur.
+ve **alınan hataları** AI yardımıyla çözmektir. Canlı instance (`MATIA_ODOO_*` User env) + `MATIA_ODOO_STAGING_*` bilgileriyle `odoo_staging` MCP üzerinden erişilen staging vardır, SSH yoktur.
 
 **Kapsam:**
 - Odoo yapılandırma ayarlarını sorgulama ve açıklama
@@ -33,7 +33,7 @@ ve **alınan hataları** AI yardımıyla çözmektir. Canlı instance (`ODOO_*`)
 ## Repository Structure
 
 - **[matia_stock_planning](file:///C:/work/20-projects/odoo/matia/matia_stock_planning)**: Stok/kapasite planlama modülü ("Cihaz Kapasite Planı" ekranı). Standart layout: `models/` -> `views/` -> `data/` -> `security/` -> `controllers/`, `static/`.
-- **[scripts](file:///C:/work/20-projects/odoo/matia/scripts)**: Tekrar kullanılabilir XML-RPC sorgu/audit script'leri + ritüel script'leri (`load_env.ps1`, `check_mem0.ps1`, `lint_error_log.ps1`). Üretim Odoo modülü buraya konmaz.
+- **[scripts](file:///C:/work/20-projects/odoo/matia/scripts)**: Tekrar kullanılabilir XML-RPC sorgu/audit script'leri + ritüel script'leri (`check_mem0.ps1`, `lint_error_log.ps1`). Üretim Odoo modülü buraya konmaz.
 - **[plans](file:///C:/work/20-projects/odoo/matia/plans)**: Kapsamlı işler (modül değişikliği, göç hazırlığı) öncesi plan dosyaları.
 - **[docs](file:///C:/work/20-projects/odoo/matia/docs)**: `discovery.md` (kalıcı bilgi deposu, KRİTİK) + teknik notlar.
 - **[scratch](file:///C:/work/20-projects/odoo/matia/scratch)**: Tek seferlik denemeler (git-ignored).
@@ -91,13 +91,13 @@ JSON string'lerinde backslash escape sorunu nedeniyle config dosyalarında forwa
    4. Boş env şüphesi varsa User env'de `MATIA_*` tanımlı mı kontrol et (normal Desktop açılışında User env yeterlidir; opencode.json `{env:...}` yalnızca proses env'inden okur).
 4. **OpenCode her zaman proje kökünde çalıştırılmalı.** Dışında çalıştırılırsa opencode.json bulunamaz, MCP'ler başlamaz.
 5. **Yıkıcı işlemlerden önce onay al:** modül kur/kaldır, veri silme/toplu güncelleme, yapılandırma değişikliği (canlı + staging dahil).
-6. **Credential'ları asla loglama** — `ODOO_PASSWORD` değerini çıktıya dahil etme.
+6. **Credential'ları asla loglama** — `MATIA_ODOO_PASSWORD` değerini çıktıya dahil etme.
 
 ## Environment (SSH yok)
 
 - **Credentials:** `.env` dosyasında saklanır (git-ignored). Şablon: `.env.example`.
-- **Başlatma:** OpenCode Desktop normal açılış yeterlidir (`MATIA_*` User env'den okunur). Terminal/XML-RPC scriptleri için `. .\scripts\load_env.ps1` (workspace `.env`'i yükler).
-- **Odoo 15** — XML-RPC transport (`ODOO_TRANSPORT=xmlrpc`)
+- **Başlatma:** OpenCode Desktop normal açılış yeterlidir (`MATIA_*` User env'den okunur).
+- **Odoo 15** — XML-RPC transport (`MATIA_ODOO_TRANSPORT=xmlrpc`)
 - **Bağlantı:** https://matia.odoobulut.com (DB: `matia.odoobulut.com`)
 
 ## Verification & Auditing

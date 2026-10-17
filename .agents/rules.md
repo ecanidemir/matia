@@ -10,7 +10,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
 
 ## 1. Baglanti ve Sorgulama
 
-- **MCP once**: Tum Odoo sorgulamalari icin `odoo_matia_*` MCP araclarini kullan. Transport XML-RPC'dir (`ODOO_TRANSPORT=xmlrpc`). JSON-2'den asla bahsetme (Odoo 19 ile gelmistir).
+- **MCP once**: Tum Odoo sorgulamalari icin `odoo_matia_*` MCP araclarini kullan. Transport XML-RPC'dir (`MATIA_ODOO_TRANSPORT=xmlrpc`). JSON-2'den asla bahsetme (Odoo 19 ile gelmistir).
 - **MCP baglanti hatasi teşhis proseduru** (ASLA "sunucu kapali" diye varsayim yapma) — sirayla uygula:
   1. Hata mesajinin TAMAMINI oku. `WinError 10061` / "connection refused" genelde MCP server'in localhost portuna baglanamadigini gosterir, hedef Odoo'nun degil.
   2. `odoo_matia_list_instances` cagir. Donen `url`/`db` bos ise → **config/env sorunu**, hedef sunucu sorunu degildir.
@@ -23,7 +23,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
 ## 2. Kodlama Standartlari (`matia_stock_planning` + deneme scriptleri)
 
 - **Python Docstring**: Her model, method ve wizard class'i docstring icermeli. `@param`, `@return` ve methodun amaci aciklanmali.
-- **Hardcoded Deger Yasagi**: URL, DB adi, kullanici adi, sifre/API anahtari koda gomulmez. `.env` dosyasindan okunur (`ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD`).
+- **Hardcoded Deger Yasagi**: URL, DB adi, kullanici adi, sifre/API anahtari koda gomulmez. `.env` dosyasindan okunur (`MATIA_ODOO_URL`, `MATIA_ODOO_DB`, `MATIA_ODOO_USERNAME`, `MATIA_ODOO_PASSWORD`).
 - **Hata Yonetimi**: XML-RPC cagrilari ve Odoo `write`/`create`/`copy` islemleri `try-except` icine alinmali. Hatada kullaniciya net mesaj ver.
 - **`_(...)` Kullanimi**: Tum kullanici-yonelik string'ler `_("...")` ile sarmalanmali (translation destegi).
 - **`@api.depends` Tamligi**: Computed field'lar icin `@api.depends` listesi OKUNAN tum field'lari icermeli. Eksik depends -> stale stored field.
@@ -44,7 +44,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
 ## 4. Guvenlik
 
 - **Hassas Veriler**: Sifre/API anahtari asla koda gomulmez, `.env` dosyasindan okunur. `.env` `.gitignore`'da, `opencode.json` duzenlemesi `.env`'i hedef almaz (edit deny).
-- **Loglama**: Debug log'larinda `ODOO_PASSWORD` degeri ASLA yazdirilma. Secret suphesi push'u bloklar (`scripts/lint_error_log.ps1`).
+- **Loglama**: Debug log'larinda `MATIA_ODOO_PASSWORD` degeri ASLA yazdirilma. Secret suphesi push'u bloklar (`scripts/lint_error_log.ps1`).
 - **Canli DB write kurali (KRITIK — staging VAR, once stagingde dogrula)**: Bu projede MCP write tool'lari ACIKTIR, teknik engel yoktur; engel PROSEDURELDUR:
   1. Once ilgili kaydi `search_read` ile oku ve kullanıcıya goster.
   2. Kucuk duzeltme disindaki her write (modul kur/kaldir, toplu update, config degisikligi) ONCESI kullaniciya sor.
@@ -54,7 +54,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
 ## 5. Script Yazimi
 
 - **Script Klasoru**: Tekrar kullanilabilir audit/sorgu script'leri `scripts/` icinde. Tek seferlik denemeler `scratch/` altinda (git-ignored). Kok dizine koyma.
-- **Env Okuma**: Script'ler `.env`'i `scripts/load_env.ps1` (PowerShell) deseniyle yukler. `python-dotenv` gibi harici bagimlilik ekleme; stdlib (`xmlrpc.client`) yeter.
+- **Env Okuma**: Script'ler kimlik bilgisini proses env'deki `MATIA_ODOO_*` / `MATIA_ODOO_STAGING_*` degiskenlerinden okur (Desktop User env'den gelir). `python-dotenv` gibi harici bagimlilik ekleme; stdlib (`xmlrpc.client`) yeter.
 - **Default salt-okunur**: Script default'u read-only calismali. Write gerekiyorsa explicit flag (`--apply`) + onaya baglanmali.
 - **Gecici Dosya Temizligi**: Isi biten debug script'i sil veya `scratch/`'e tasi. `scripts/`'de cop birikmesin.
 

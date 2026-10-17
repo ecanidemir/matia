@@ -8,7 +8,7 @@
 #
 # Kullanim:
 #   powershell -ExecutionPolicy Bypass -File scripts/check_mem0.ps1
-#   (Terminalde XML-RPC scriptleri icin once: . .\scripts\load_env.ps1)
+#   (User env eksikse: MATIA_* + MEM0_API_KEY tanimla, opencode'u restart et)
 #
 # Cikis kodlari: 0 = saglikli, 1 = anahtar gecersiz/sunucu hatasi, 2 = anahtar eksik.
 # Guvenlik: anahtar degeri ASLA ekrana/loga yazilmaz (uzunluk dahi yazilmaz).

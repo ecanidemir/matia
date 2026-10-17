@@ -939,3 +939,9 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Silinenler: scripts/start-opencode.ps1, scripts/launch_opencode_desktop.ps1, scripts/setup_new_machine.ps1 (V2 + makine tasima tamamlandi, Desktop User env MATIA_* dogrudan goruyor).
 - Kalan: load_env.ps1 (terminal .py failover ODOO_* icin), check_mem0.ps1, lint_error_log.ps1. .env/.env.example ODOO_* semasinda kaldi (MCP artik MATIA_* User env kullaniyor).
 - Kural: yeni baslatma/yeni-makine scripti ekleme; referanslar AGENTS.md/AI.md/rules.md/check_mem0/load_env/.env.example'dan temizlendi.
+
+## MATIA_* Env Birlesmesi (2026-10-18)
+
+- ODOO_*/ODOO_STAGING_* artik kullanilmiyor; her sey MATIA_ODOO_*/MATIA_ODOO_STAGING_* (User env, 11 anahtar). .py helper'lar (smoke_after_deploy, trigger_module_upgrade) MATIA_* okur.
+- Silinen: scripts/load_env.ps1 (.env yukleyiciye gerek kalmadi). .env/.env.example anahtarlari MATIA_*'a cevrilidi (.env git-ignored yerel yedek).
+- opencode.json'daki ODOO_URL/ODOO_DB/... KEY'ler odoo-mcp paketinin bekledigi girdi adlaridir, DEGISTIRME (value'lar {env:MATIA_*} ile eslenir).

@@ -5,9 +5,9 @@ Python code (registry) references stored fields whose DB columns were
 never created because the module Upgrade step was skipped.
 
 Read-only. Credentials ONLY from process env. Without flags it uses the
-prod vars (ODOO_URL/ODOO_DB/ODOO_USERNAME/ODOO_PASSWORD); with --staging
-it uses ODOO_STAGING_URL/ODOO_STAGING_DB/ODOO_STAGING_USERNAME/
-ODOO_STAGING_PASSWORD. Never prints secrets.
+prod vars (MATIA_ODOO_URL/MATIA_ODOO_DB/MATIA_ODOO_USERNAME/MATIA_ODOO_PASSWORD); with --staging
+it uses MATIA_ODOO_STAGING_URL/MATIA_ODOO_STAGING_DB/MATIA_ODOO_STAGING_USERNAME/
+MATIA_ODOO_STAGING_PASSWORD. Never prints secrets.
 
 Usage:
     python scripts/smoke_after_deploy.py [--staging]
@@ -32,7 +32,7 @@ def fail(msg):
 
 
 def main():
-    prefix = "ODOO_STAGING_" if "--staging" in sys.argv[1:] else "ODOO_"
+    prefix = "MATIA_ODOO_STAGING_" if "--staging" in sys.argv[1:] else "MATIA_ODOO_"
     url = os.environ.get(prefix + "URL", "").rstrip("/")
     db = os.environ.get(prefix + "DB", "")
     user = os.environ.get(prefix + "USERNAME", "")
