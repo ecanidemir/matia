@@ -15,10 +15,10 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
   1. Hata mesajinin TAMAMINI oku. `WinError 10061` / "connection refused" genelde MCP server'in localhost portuna baglanamadigini gosterir, hedef Odoo'nun degil.
   2. `odoo_matia_list_instances` cagir. Donen `url`/`db` bos ise → **config/env sorunu**, hedef sunucu sorunu degildir.
   3. `odoo_matia_health_check` cagir; `instance_count` ve `default_instance` alanlarina bak.
-  4. Bos env suphesi varsa: `powershell -ExecutionPolicy Bypass -File scripts/start-opencode.ps1` ile baslatilmis mi kontrol et (workspace `.env` OTOMATIK yuklenmez; opencode.json `{env:...}` yalnizca proses env'inden okur).
-  5. **OpenCode her zaman proje kokunde calistirilmali** (`C:\Users\TKA\Desktop\antigravity\odoo\odoo_matia`). Disinda calistirilirsa opencode.json bulunamaz, MCP'ler baslamaz.
+  4. Bos env suphesi varsa: `powershell -ExecutionPolicy Bypass -File scripts/start-opencode.ps1` User envde `MATIA_*` tanimli mi kontrol et (normal Desktop acilisinda User env yeterlidir; workspace `.env` OTOMATIK yuklenmez; opencode.json `{env:...}` yalnizca proses env'inden okur).
+  5. **OpenCode her zaman proje kokunde calistirilmali** (`C:\work\20-projects\odoo\matia`). Disinda calistirilirsa opencode.json bulunamaz, MCP'ler baslamaz.
 - **Failover**: MCP araci basarisiz olursa, ayni isi `scripts/` altindaki XML-RPC helper ile dene. Hata mesajini kullaniciya goster.
-- **Tek instance**: Staging yok, tek canli DB var (`matia.odoobulut.com`). Tum sorgular once salt-okunur (`search_read`/`read`) ile teyit edilir.
+- **Canli + staging**: canli + staging (odoo_staging MCP) var (`matia.odoobulut.com`). Tum sorgular once salt-okunur (`search_read`/`read`) ile teyit edilir.
 
 ## 2. Kodlama Standartlari (`matia_stock_planning` + deneme scriptleri)
 
@@ -45,7 +45,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
 
 - **Hassas Veriler**: Sifre/API anahtari asla koda gomulmez, `.env` dosyasindan okunur. `.env` `.gitignore`'da, `opencode.json` duzenlemesi `.env`'i hedef almaz (edit deny).
 - **Loglama**: Debug log'larinda `ODOO_PASSWORD` degeri ASLA yazdirilma. Secret suphesi push'u bloklar (`scripts/lint_error_log.ps1`).
-- **Canli DB write kurali (KRITIK — staging yok)**: Bu projede MCP write tool'lari ACIKTIR, teknik engel yoktur; engel PROSEDURELDUR:
+- **Canli DB write kurali (KRITIK — staging VAR, once stagingde dogrula)**: Bu projede MCP write tool'lari ACIKTIR, teknik engel yoktur; engel PROSEDURELDUR:
   1. Once ilgili kaydi `search_read` ile oku ve kullanıcıya goster.
   2. Kucuk duzeltme disindaki her write (modul kur/kaldir, toplu update, config degisikligi) ONCESI kullaniciya sor.
   3. Mumkunse `preview`/`dry-run` ciktisini paylas, sonra uygula.
@@ -90,7 +90,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
   Detay icin global `error-memory` skill'ini yukle. Mem0 default scope `project`'tir.
 - **Mem0 401 Triyaji (ZORUNLU sira, ezberden anahtar suclama YASAK)**:
   1. `powershell -File scripts/check_mem0.ps1` calistir (read-only, secret yazdirmaz).
-  2. Exit 2 = opencode process'te env yok -> `scripts/start-opencode.ps1` ile baslat (dogrudan `opencode` komutu `.env` yuklemez).
+  2. Exit 2 = process\de MEM0_API_KEY yok -> User enve ekle + opencode restart et (Desktop GUI acilisinda User envi gorur).
   3. Exit 1 = anahtar gercekten gecersiz -> dashboard'dan rotate et (sadece bu durumda).
   4. El yazimi Mem0 REST cagrilarinda trailing slash sart (`/v1/memories/search/`); slash'siz path 301'de auth header'i dusurup sahte 401 uretir.
 - **Secretli Komut Kurali**: `$env:SECRET` iceren komut ASLA cift tirnakli `-Command "..."` icine gomulmez (dis shell once genisletir, hata ciktisina duser). Test icin `cmd /c "(set VAR= && ...)"` kalibi kullan. Sizan anahtar aninda rotate edilir.
