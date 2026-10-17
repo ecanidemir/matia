@@ -9,7 +9,7 @@
 ## Purpose
 
 Bu projenin amacı, `matia.odoobulut.com` (Odoo 15) sunucusundaki **yapılandırma sorularını**
-ve **alınan hataları** AI yardımıyla çözmektir. Tek canlı instance vardır, staging yoktur, SSH yoktur.
+ve **alınan hataları** AI yardımıyla çözmektir. Canlı instance (`ODOO_*`) + `.env`'deki `ODOO_STAGING_*` bilgileriyle `odoo_staging` MCP üzerinden erişilen staging vardır, SSH yoktur.
 
 **Kapsam:**
 - Odoo yapılandırma ayarlarını sorgulama ve açıklama
@@ -32,11 +32,11 @@ ve **alınan hataları** AI yardımıyla çözmektir. Tek canlı instance vardı
 
 ## Repository Structure
 
-- **[matia_stock_planning](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/matia_stock_planning)**: Stok/kapasite planlama modülü ("Cihaz Kapasite Planı" ekranı). Standart layout: `models/` -> `views/` -> `data/` -> `security/` -> `controllers/`, `static/`.
-- **[scripts](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/scripts)**: Tekrar kullanılabilir XML-RPC sorgu/audit script'leri + ortam script'leri (`start-opencode.ps1`, `load_env.ps1`, `check_mem0.ps1`, `lint_error_log.ps1`, `setup_new_machine.ps1`). Üretim Odoo modülü buraya konmaz.
-- **[plans](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/plans)**: Kapsamlı işler (modül değişikliği, göç hazırlığı) öncesi plan dosyaları.
-- **[docs](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/docs)**: `discovery.md` (kalıcı bilgi deposu, KRİTİK) + teknik notlar.
-- **[scratch](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/scratch)**: Tek seferlik denemeler (git-ignored).
+- **[matia_stock_planning](file:///C:/work/20-projects/odoo/matia/matia_stock_planning)**: Stok/kapasite planlama modülü ("Cihaz Kapasite Planı" ekranı). Standart layout: `models/` -> `views/` -> `data/` -> `security/` -> `controllers/`, `static/`.
+- **[scripts](file:///C:/work/20-projects/odoo/matia/scripts)**: Tekrar kullanılabilir XML-RPC sorgu/audit script'leri + ritüel script'leri (`load_env.ps1`, `check_mem0.ps1`, `lint_error_log.ps1`). Üretim Odoo modülü buraya konmaz.
+- **[plans](file:///C:/work/20-projects/odoo/matia/plans)**: Kapsamlı işler (modül değişikliği, göç hazırlığı) öncesi plan dosyaları.
+- **[docs](file:///C:/work/20-projects/odoo/matia/docs)**: `discovery.md` (kalıcı bilgi deposu, KRİTİK) + teknik notlar.
+- **[scratch](file:///C:/work/20-projects/odoo/matia/scratch)**: Tek seferlik denemeler (git-ignored).
 - `gas_client/`, `solidworks_macros/`: Entegrasyon referans kodları.
 
 ## High-Signal Patterns
@@ -88,15 +88,15 @@ JSON string'lerinde backslash escape sorunu nedeniyle config dosyalarında forwa
    1. Hata mesajının TAMAMINI oku (`WinError 10061` genelde localhost MCP port sorunudur).
    2. `odoo_matia_list_instances` çağır; `url`/`db` boşsa → **config/env sorunu**.
    3. `odoo_matia_health_check` çağır; `instance_count` ve `default_instance` alanlarına bak.
-   4. Boş env şüphesi varsa `scripts/start-opencode.ps1` ile başlatılıp başlatılmadığını kontrol et.
+   4. Boş env şüphesi varsa User env'de `MATIA_*` tanımlı mı kontrol et (normal Desktop açılışında User env yeterlidir; opencode.json `{env:...}` yalnızca proses env'inden okur).
 4. **OpenCode her zaman proje kökünde çalıştırılmalı.** Dışında çalıştırılırsa opencode.json bulunamaz, MCP'ler başlamaz.
-5. **Yıkıcı işlemlerden önce onay al:** modül kur/kaldır, veri silme/toplu güncelleme, yapılandırma değişikliği. Staging yok — teknik engel değil prosedür engeli.
+5. **Yıkıcı işlemlerden önce onay al:** modül kur/kaldır, veri silme/toplu güncelleme, yapılandırma değişikliği (canlı + staging dahil).
 6. **Credential'ları asla loglama** — `ODOO_PASSWORD` değerini çıktıya dahil etme.
 
 ## Environment (SSH yok)
 
 - **Credentials:** `.env` dosyasında saklanır (git-ignored). Şablon: `.env.example`.
-- **Başlatma:** `powershell -ExecutionPolicy Bypass -File scripts/start-opencode.ps1` (workspace `.env`'i yükler, sonra opencode'u başlatır). Doğrudan `opencode` komutu `.env` yüklemez → MCP boş config ile kalkar.
+- **Başlatma:** OpenCode Desktop normal açılış yeterlidir (`MATIA_*` User env'den okunur). Terminal/XML-RPC scriptleri için `. .\scripts\load_env.ps1` (workspace `.env`'i yükler).
 - **Odoo 15** — XML-RPC transport (`ODOO_TRANSPORT=xmlrpc`)
 - **Bağlantı:** https://matia.odoobulut.com (DB: `matia.odoobulut.com`)
 
@@ -104,7 +104,6 @@ JSON string'lerinde backslash escape sorunu nedeniyle config dosyalarında forwa
 
 - **Hafıza flush:** `/log-error` ile kayıt + `powershell -File scripts/lint_error_log.ps1` temizliği (format + secret + `[auto]` birikimi).
 - **Mem0 triyaj:** `powershell -File scripts/check_mem0.ps1` (exit 2 = env yok, exit 1 = anahtar geçersiz).
-- **Yeni makine:** `powershell -File scripts/setup_new_machine.ps1` (aletler, MEM0 key, plugin, skill, ritüel, `.env`).
 - **Test:** otomatik test yok; doğrulama `search_read`/`fields_get` ve küçük `scratch/` script'leri ile yapılır.
 
 ## Operational Gotchas

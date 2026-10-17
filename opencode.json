@@ -1,51 +1,49 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["AGENTS.md", "AI.md", ".agents/rules.md", ".agents/memory/HOT.md"],
-  "permission": {
-    "bash": {
-      "rm -rf *": "deny"
-    },
-    "edit": {
-      "**/.env": "deny"
-    }
-  },
+  "permissions": [
+    { "action": "shell", "resource": "rm -rf *", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env", "effect": "deny" }
+  ],
   "compaction": {
     "auto": true,
-    "prune": true,
-    "reserved": 10000
+    "keep": { "tokens": 8000 },
+    "buffer": 10000
   },
   "mcp": {
-    "odoo_matia": {
-      "type": "local",
-      "command": [
-        "cmd",
-        "/c",
-        "uvx",
-        "odoo-mcp@0.6.0"
-      ],
-      "environment": {
-        "ODOO_URL": "{env:ODOO_URL}",
-        "ODOO_DB": "{env:ODOO_DB}",
-        "ODOO_USERNAME": "{env:ODOO_USERNAME}",
-        "ODOO_PASSWORD": "{env:ODOO_PASSWORD}",
-        "ODOO_TRANSPORT": "{env:ODOO_TRANSPORT}"
-      }
-    },
-    "odoo_staging": {
-      "type": "local",
-      "command": [
-        "cmd",
-        "/c",
-        "uvx",
-        "odoo-mcp@0.6.0"
-      ],
-      "environment": {
-        "ODOO_URL": "{env:ODOO_STAGING_URL}",
-        "ODOO_DB": "{env:ODOO_STAGING_DB}",
-        "ODOO_USERNAME": "{env:ODOO_STAGING_USERNAME}",
-        "ODOO_PASSWORD": "{env:ODOO_STAGING_PASSWORD}",
-        "ODOO_TRANSPORT": "{env:ODOO_STAGING_TRANSPORT}",
-        "ODOO_MCP_ENABLE_WRITES": "{env:ODOO_MCP_ENABLE_WRITES_STAGING}"
+    "servers": {
+      "odoo_matia": {
+        "type": "local",
+        "command": [
+          "cmd",
+          "/c",
+          "uvx",
+          "odoo-mcp@1.3.0"
+        ],
+        "environment": {
+          "ODOO_URL": "{env:MATIA_ODOO_URL}",
+          "ODOO_DB": "{env:MATIA_ODOO_DB}",
+          "ODOO_USERNAME": "{env:MATIA_ODOO_USERNAME}",
+          "ODOO_PASSWORD": "{env:MATIA_ODOO_PASSWORD}",
+          "ODOO_TRANSPORT": "{env:MATIA_ODOO_TRANSPORT}"
+        }
+      },
+      "odoo_staging": {
+        "type": "local",
+        "command": [
+          "cmd",
+          "/c",
+          "uvx",
+          "odoo-mcp@1.3.0"
+        ],
+        "environment": {
+          "ODOO_URL": "{env:MATIA_ODOO_STAGING_URL}",
+          "ODOO_DB": "{env:MATIA_ODOO_STAGING_DB}",
+          "ODOO_USERNAME": "{env:MATIA_ODOO_STAGING_USERNAME}",
+          "ODOO_PASSWORD": "{env:MATIA_ODOO_STAGING_PASSWORD}",
+          "ODOO_TRANSPORT": "{env:MATIA_ODOO_STAGING_TRANSPORT}",
+          "ODOO_MCP_ENABLE_WRITES": "{env:MATIA_ODOO_MCP_ENABLE_WRITES_STAGING}"
+        }
       }
     }
   }

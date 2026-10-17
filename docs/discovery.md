@@ -933,3 +933,9 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Istek: update-modunda RFQ'ya eklenen/artan her parca icin PO chatter'ina eski->yeni bilgisi. Mevzubahis `_rfq_bom_chatter` zaten 3 noktada cagriliyordu (update `_rfq_add_lines` + 2 create-path) ama sadece delta miktari yaziyordu.
 - Cozum (commitlenmedi, local): `_rfq_add_lines` `_qty_info {plan_line: (old|None, new, po_uom)}` toplar (bump'ta write-oncesi `_old_po`; yeni satirda `_po_line.product_uom.name`); `_rfq_bom_chatter(..., qty_info=None)` bump'ta `(was 6, now 40 Units)`, yeni satirda `(new: 34 Units)` basar. Create-path cagrilari qty_info gecmez -> ciktisi degismez. odoo-reviewer: kritik bulgu yok. py_compile OK.
 - Deploy: Python degisikligi -> Git Deploy + restart (mesai disi + backup); `button_immediate_upgrade` YUKLEMEZ.
+
+## Bootstrap Sadelestirme (2026-10-18)
+
+- Silinenler: scripts/start-opencode.ps1, scripts/launch_opencode_desktop.ps1, scripts/setup_new_machine.ps1 (V2 + makine tasima tamamlandi, Desktop User env MATIA_* dogrudan goruyor).
+- Kalan: load_env.ps1 (terminal .py failover ODOO_* icin), check_mem0.ps1, lint_error_log.ps1. .env/.env.example ODOO_* semasinda kaldi (MCP artik MATIA_* User env kullaniyor).
+- Kural: yeni baslatma/yeni-makine scripti ekleme; referanslar AGENTS.md/AI.md/rules.md/check_mem0/load_env/.env.example'dan temizlendi.

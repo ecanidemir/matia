@@ -4,9 +4,7 @@
 # Kullanim (manuel, mevcut terminal icin):
 #   . .\scripts\load_env.ps1
 #
-# Not: opencode.json'daki {env:ODOO_*} substitution'lari yalnizca proses
-# environment'indan okunur; workspace .env OTOMATIK yuklenmez. Kalici cozum:
-# opencode'u `scripts/start-opencode.ps1` ile baslat.
+# Not: MCP icin opencode.json {env:MATIA_*} degerleri User envden gelir (normal Desktop acilisi yeterlidir); bu script yalnizca terminal/XML-RPC scriptleri icindir (.env'deki ODOO_* anahtarlarini yukler).
 #
 # Guvenlik: API key / sifre gibi secret degerler .env dosyasindadir ve
 # .gitignore'da ignore edilir. Bu script sadece current process'e inject eder,

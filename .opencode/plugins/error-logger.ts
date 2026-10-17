@@ -1,4 +1,4 @@
-import type { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
 import { appendFile, readFile } from "node:fs/promises"
 import path from "node:path"
 
@@ -30,31 +30,35 @@ function summarize(event: any): string {
   return `${head}: ${body}`.replace(/\s+/g, " ").trim()
 }
 
-export const ErrorLogger: Plugin = async ({ client, worktree }) => {
-  return {
-    event: async ({ event }) => {
-      if (event.type !== "session.error") return
-      try {
-        const msg = redact(summarize(event)).slice(0, 160)
-        // Sinyal yoksa olu satir yazma (mesaj icerigi tasimayan olaylari atla)
-        if (!msg) return
-        const file = path.join(worktree, LOG_REL)
-        const cur = await readFile(file, "utf8").catch(() => "")
-        const lines = cur.split("\n")
-        if (lines.filter((l) => l.includes("[auto]")).length >= MAX_AUTO_LINES) {
-          await client.app.log({
-            body: { service: "error-logger", level: "warn", message: "auto log cap reached, skipping" },
-          })
-          return
+export default Plugin.define({
+  id: "error-logger",
+  setup(ctx) {
+    const controller = new AbortController()
+    const root = ctx.location.directory
+
+    void (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (event.type !== "session.error") continue
+        try {
+          const msg = redact(summarize(event)).slice(0, 160)
+          // Sinyal yoksa olu satir yazma (mesaj icerigi tasimayan olaylari atla)
+          if (!msg) continue
+          const file = path.join(root, LOG_REL)
+          const cur = await readFile(file, "utf8").catch(() => "")
+          const lines = cur.split("\n")
+          if (lines.filter((l) => l.includes("[auto]")).length >= MAX_AUTO_LINES) {
+            console.warn("[error-logger] auto log cap reached, skipping")
+            continue
+          }
+          if (cur.includes(msg)) continue // dedup: aynı hata zaten loglanmış
+          const date = new Date().toISOString().slice(0, 10)
+          await appendFile(file, `${date} | [auto] ${msg} | kürate edilmedi -> /log-error ile işle\n`, "utf8")
+        } catch (e) {
+          console.warn(`[error-logger] skip: ${String(e).slice(0, 120)}`)
         }
-        if (cur.includes(msg)) return // dedup: aynı hata zaten loglanmış
-        const date = new Date().toISOString().slice(0, 10)
-        await appendFile(file, `${date} | [auto] ${msg} | kürate edilmedi -> /log-error ile işle\n`, "utf8")
-      } catch (e) {
-        await client.app.log({
-          body: { service: "error-logger", level: "warn", message: `skip: ${String(e).slice(0, 120)}` },
-        })
       }
-    },
-  }
-}
+    })()
+
+    return () => controller.abort()
+  },
+})

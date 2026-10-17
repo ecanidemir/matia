@@ -1,14 +1,14 @@
 # CLAUDE.md - Matia Odoo Hub
 
 This repository is for AI-assisted Odoo 15 troubleshooting and configuration
-(`matia.odoobulut.com` — single live instance, XML-RPC, no SSH, no staging).
+(`matia.odoobulut.com` — single live instance, XML-RPC, no SSH, staging mevcut).
 
 To ensure consistent logic, version-safe API usage, and proper environment workflows:
-👉 **You MUST read and follow the master guidelines file: [AGENTS.md](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/AGENTS.md)**
+👉 **You MUST read and follow the master guidelines file: [AGENTS.md](file:///C:/work/20-projects/odoo/matia/AGENTS.md)**
 
 ## Key Directives
 
-1. Refer to [AGENTS.md](file:///C:/Users/TKA/Desktop/antigravity/odoo/odoo_matia/AGENTS.md) for full directory mappings and skill policy.
+1. Refer to [AGENTS.md](file:///C:/work/20-projects/odoo/matia/AGENTS.md) for full directory mappings and skill policy.
 2. Follow `.agents/workflows/diagnose_flow.md` for every question/bug (recall → read-only query → analyze → document → memory flush).
 3. Connect to Odoo 15 via `odoo_matia_*` MCP tools; verify suspicious fields with `fields_get`.
 4. Do NOT use Odoo 19 patterns (`list` views, `privilege_id`, JSON-2, Constraint/Index) or the `odoo-19`/`odoo-owl` skills.

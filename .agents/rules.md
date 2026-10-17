@@ -15,7 +15,7 @@ Bu projede (Odoo 15, `matia.odoobulut.com`, XML-RPC, SSH yok) calisirken asagida
   1. Hata mesajinin TAMAMINI oku. `WinError 10061` / "connection refused" genelde MCP server'in localhost portuna baglanamadigini gosterir, hedef Odoo'nun degil.
   2. `odoo_matia_list_instances` cagir. Donen `url`/`db` bos ise → **config/env sorunu**, hedef sunucu sorunu degildir.
   3. `odoo_matia_health_check` cagir; `instance_count` ve `default_instance` alanlarina bak.
-  4. Bos env suphesi varsa: `powershell -ExecutionPolicy Bypass -File scripts/start-opencode.ps1` User envde `MATIA_*` tanimli mi kontrol et (normal Desktop acilisinda User env yeterlidir; workspace `.env` OTOMATIK yuklenmez; opencode.json `{env:...}` yalnizca proses env'inden okur).
+  4. Bos env suphesi varsa User envde `MATIA_*` tanimli mi kontrol et (normal Desktop acilisinda User env yeterlidir; opencode.json `{env:...}` yalnizca proses env'inden okur).
   5. **OpenCode her zaman proje kokunde calistirilmali** (`C:\work\20-projects\odoo\matia`). Disinda calistirilirsa opencode.json bulunamaz, MCP'ler baslamaz.
 - **Failover**: MCP araci basarisiz olursa, ayni isi `scripts/` altindaki XML-RPC helper ile dene. Hata mesajini kullaniciya goster.
 - **Canli + staging**: canli + staging (odoo_staging MCP) var (`matia.odoobulut.com`). Tum sorgular once salt-okunur (`search_read`/`read`) ile teyit edilir.

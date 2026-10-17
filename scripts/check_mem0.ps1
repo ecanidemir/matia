@@ -8,7 +8,7 @@
 #
 # Kullanim:
 #   powershell -ExecutionPolicy Bypass -File scripts/check_mem0.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts/start-opencode.ps1  # env'li baslatma
+#   (Terminalde XML-RPC scriptleri icin once: . .\scripts\load_env.ps1)
 #
 # Cikis kodlari: 0 = saglikli, 1 = anahtar gecersiz/sunucu hatasi, 2 = anahtar eksik.
 # Guvenlik: anahtar degeri ASLA ekrana/loga yazilmaz (uzunluk dahi yazilmaz).
@@ -24,9 +24,8 @@ $key = $env:MEM0_API_KEY
 if ([string]::IsNullOrWhiteSpace($key)) {
   Write-Host "[check_mem0] [XX] MEM0_API_KEY process env'de YOK." -ForegroundColor Red
   Write-Host "  Cozum sirasi:" -ForegroundColor Yellow
-  Write-Host "    1. Repo kokunde: powershell -ExecutionPolicy Bypass -File scripts/start-opencode.ps1"
-  Write-Host "       (dogrudan 'opencode' komutu workspace .env'i yuklemez)"
-  Write-Host "    2. Yeni makine: powershell -File scripts/setup_new_machine.ps1"
+  Write-Host "    1. User env'de MATIA_* + MEM0_API_KEY tanimli mi kontrol et"
+  Write-Host "       (Desktop normal acilista User env'i dogrudan gorur)"
   Write-Host "  Not: dosya logu (.agents/memory/errors-log.md) calismaya devam eder,"
   Write-Host "  ama add_memory/search_memories 401 verir."
   exit 2
@@ -67,7 +66,6 @@ if ($realCode -eq 401) {
   Write-Host "[check_mem0] [XX] Anahtar GECERSIZ/IPTAL (401)." -ForegroundColor Red
   Write-Host "  Cozum: https://app.mem0.ai/dashboard/api-keys adresinden yeni anahtar uret,"
   Write-Host "  kullanici ortam degiskenine yaz + opencode'u restart et."
-  Write-Host "  (Detay: scripts/setup_new_machine.ps1 adim 2)"
   exit 1
 }
 if ($realCode -lt 0) { exit 1 }
