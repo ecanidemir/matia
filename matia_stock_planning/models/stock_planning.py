@@ -25,6 +25,16 @@ _UOM_NAME_MAP = {
     'takım': 'Set',
 }
 
+
+def _disp_qty(qty):
+    """Compact display quantity (int when whole, else 2 decimals).
+
+    @param qty: numeric quantity.
+    @return: int or rounded float for display.
+    """
+    qty = float(qty or 0.0)
+    return int(qty) if qty.is_integer() else round(qty, 2)
+
 # Company roots are independent (see docs/discovery.md): TR = 1, US = 2.
 _MSP_TR_COMPANY_ID = 1
 _MSP_US_COMPANY_ID = 2
@@ -866,7 +876,7 @@ class MatiaStockPlanning(models.AbstractModel):
             scope_of_loc[lid] = 'spare'
         # pid -> {lid: qty} per scope list.
         buckets = {'tekrmd': {}, 'other': {}, 'ncr': {}, 'spare': {}}
-        # (scope list, pid) -> distinct lot/serial names.
+        # (scope list, pid) -> {lot/serial name: quantity}.
         lots = {}
         for rg in env_sudo['stock.quant'].read_group(
                 [('location_id', 'in', list(scope_of_loc))],
@@ -892,7 +902,9 @@ class MatiaStockPlanning(models.AbstractModel):
             if lot:
                 # Lot name may come back as a lazy translated string;
                 # coerce to str for the comma-joined display.
-                lots.setdefault((key, _p[0]), set()).add(str(lot[1]))
+                per_lot = lots.setdefault((key, _p[0]), {})
+                lot_name = str(lot[1])
+                per_lot[lot_name] = per_lot.get(lot_name, 0.0) + qty
 
         # 4. Bulk identity + location names, then one row per product
         # per scope list.
@@ -920,15 +932,26 @@ class MatiaStockPlanning(models.AbstractModel):
                                 for lid in loc_qty})
                 names = [n for n in names if n]
                 total = sum(loc_qty.values())
-                total_disp = (int(total) if float(total).is_integer()
-                              else round(total, 2))
+                total_disp = _disp_qty(total)
                 uom = (pr.get('uom_id') or [False, ''])[1] or 'Units'
-                if is_tr and uom == 'Units':
-                    uom = 'Adet'
+                if is_tr:
+                    if uom == 'Units':
+                        uom = 'Adet'
+                else:
+                    # US pages stay English even though the DB stores
+                    # Turkish names (Adet, Takım, ...).
+                    uom = _UOM_NAME_MAP.get(uom, uom)
                 code = pr.get('default_code') or ''
                 name = pr.get('name') or ''
-                lot_text = ', '.join(
-                    sorted(lots.get((key, pid), set())))
+                lot_parts = []
+                for lot_name in sorted(lots.get((key, pid), {})):
+                    lot_qty = lots[(key, pid)][lot_name]
+                    if float(lot_qty).is_integer() and int(lot_qty) == 1:
+                        lot_parts.append(lot_name)
+                    else:
+                        lot_parts.append('%s (%s)' % (
+                            lot_name, _disp_qty(lot_qty)))
+                lot_text = ', '.join(lot_parts)
                 row = {
                     'code': code,
                     'name': name,
