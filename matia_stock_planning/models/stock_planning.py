@@ -648,24 +648,37 @@ class MatiaStockPlanning(models.AbstractModel):
 
     @api.model
     def get_count_sheet(self, company):
-        """Printable stock-count rows for one company (Count List pages).
+        """Printable stock-count lists for one company (Count List pages).
 
-        Explodes the 4 kit BOMs to the lowest level (variant BOM wins,
-        depth + cycle guards mirror the price-overview walk), then keeps
-        only products with stock (quantity > 0) in that company's Stock
-        locations. One row per product: code, name, type (Main Part for
-        kit top-level products, Sub Part for deeper levels), stock
-        location names (a location is listed once even with several
-        serial/lot quants) and total quantity with UoM. Rows sort by
-        type (Main first), then location, then code, then name. Labels
-        are fixed per company (TR page Turkish, US page English),
-        independent of the user's language.
+        Four scope lists, each showing only products with stock
+        (quantity > 0):
+        - tekrmd: the 4 kit BOMs exploded to the lowest level (variant
+          BOM wins, depth + cycle guards mirror the price-overview
+          walk), kept only in that company's Stock locations. Rows
+          carry Main/Sub Part type and sort Main first, then location,
+          code, name.
+        - other: Stock locations, products NOT in the 4 BOMs.
+        - ncr: that company's NCR locations, BOM-independent.
+        - spare: that company's Spare locations, BOM-independent
+          (matched by name, so it works both under Stock/ and as a
+          sibling after the manual move; spare never joins the stock
+          scope to avoid double counting).
+
+        One row per product: code, name, stock location names (a
+        location is listed once even with several serial/lot quants),
+        total quantity with UoM and comma-separated lot/serial names.
+        Labels are fixed per company (TR page Turkish, US page
+        English), independent of the user's language.
 
         @param company: 'tr' or 'us'.
-        @return: {'company', 'lang', 'title', 'subtitle', 'headers',
-            'rows', 'generated', 'count', 'file_base', 'print_label',
-            'excel_label'}; each row carries 'no', 'code', 'name',
-            'is_main', 'type_label', 'locs', 'qty', 'uom', 'qty_text'.
+        @return: {'company', 'lang', 'title', 'subtitle', 'generated',
+            'print_label', 'excel_label', 'empty_label', 'file_base',
+            'scopes', 'lists'} plus backwards-compatible top-level
+            'headers'/'rows'/'count' of the tekrmd list. Each list
+            carries 'key', 'title', 'headers', 'show_type', 'rows',
+            'count'; each row carries 'no', 'code', 'name',
+            'type_label' (tekrmd only), 'locs', 'qty', 'uom',
+            'qty_text', 'lots'.
         """
         company = (company or '').strip().lower()
         if company not in ('tr', 'us'):
@@ -674,22 +687,43 @@ class MatiaStockPlanning(models.AbstractModel):
         if is_tr:
             labels = {
                 'lang': 'tr',
-                'title': 'TR Stok Sayım Listesi - 4 Kapasite BOM (en alt seviye)',
-                'headers': ['Kod', 'Ürün Adı', 'Tür', 'Depo / Lokasyon',
-                            'Miktar'],
+                'title': 'TR Stok Sayım Listesi',
                 'print_label': 'Yazdır',
                 'excel_label': "Excel'e Aktar",
+                'empty_label': 'Kayıt yok',
                 'file_base': 'TekRMD_TR_Sayim_Listesi',
+                'scope_titles': {
+                    'tekrmd': 'Stok - TekRMD (4 BOM)',
+                    'other': 'Stok - Diğer Parçalar',
+                    'ncr': 'NCR',
+                    'spare': 'Spare',
+                },
+                'tekrmd_headers': ['Kod', 'Ürün Adı', 'Tür',
+                                   'Depo / Lokasyon', 'Miktar',
+                                   'Lot/Seri'],
+                'plain_headers': ['Kod', 'Ürün Adı', 'Depo / Lokasyon',
+                                  'Miktar', 'Lot/Seri'],
             }
         else:
             labels = {
                 'lang': 'en',
-                'title': 'US Stock Count List - 4 Capacity BOMs (lowest level)',
-                'headers': ['Code', 'Product Name', 'Type',
-                            'Warehouse Location', 'Quantity'],
+                'title': 'US Stock Count List',
                 'print_label': 'Print',
                 'excel_label': 'Export Excel',
+                'empty_label': 'No records',
                 'file_base': 'TekRMD_US_Count_List',
+                'scope_titles': {
+                    'tekrmd': 'Stock - TekRMD (4 BOMs)',
+                    'other': 'Stock - Other Parts',
+                    'ncr': 'NCR',
+                    'spare': 'Spare',
+                },
+                'tekrmd_headers': ['Code', 'Product Name', 'Type',
+                                   'Warehouse Location', 'Quantity',
+                                   'Lot/Serial'],
+                'plain_headers': ['Code', 'Product Name',
+                                   'Warehouse Location', 'Quantity',
+                                   'Lot/Serial'],
             }
 
         all_company_ids = self.env['res.company'].with_context(
@@ -699,34 +733,69 @@ class MatiaStockPlanning(models.AbstractModel):
             active_test=False
         ).sudo().env
 
-        # 1. Company stock locations: same classifier as the capacity
-        # page (WHTR/Stock* or WHUS/Stock*, internal, NCR excluded).
-        # Subcontracting locations stay out of the count scope.
-        prefix = 'WHTR/Stock' if is_tr else 'WHUS/Stock'
-        loc_ids = []
+        # 1. Company locations split into stock / NCR / spare scopes.
+        # Internal + Subcontracting locations stay out. 'Spare' is
+        # matched by name so it works both under Stock/ (before the
+        # manual move) and as a sibling (after); spare never joins the
+        # stock scope to avoid double counting.
+        mark = 'WHTR' if is_tr else 'WHUS'
+        own_company = _MSP_TR_COMPANY_ID if is_tr else _MSP_US_COMPANY_ID
+        prefix = mark + '/Stock'
+        stock_ids, ncr_ids, spare_ids = [], [], []
         for loc in env_sudo['stock.location'].search(
                 [('usage', '=', 'internal')]):
             cname = loc.complete_name or ''
+            cid = loc.company_id.id if loc.company_id else False
+            if mark not in cname and cid != own_company:
+                continue
             if 'NCR' in cname:
+                ncr_ids.append(loc.id)
+            elif 'Spare' in cname:
+                spare_ids.append(loc.id)
+            elif 'Subcontract' in cname:
                 continue
-            if 'Subcontract' in cname:
-                continue
-            if cname.startswith(prefix):
-                loc_ids.append(loc.id)
+            elif cname.startswith(prefix):
+                stock_ids.append(loc.id)
 
         generated = datetime.now().strftime('%Y-%m-%d %H:%M')
-        empty = dict(labels)
-        empty.update({
-            'company': company,
-            'subtitle': '%s | %s: %s' % (
-                generated,
-                'Ürün' if is_tr else 'Products', 0),
-            'rows': [],
-            'generated': generated,
-            'count': 0,
-        })
-        if not loc_ids:
-            return empty
+
+        def _blank_lists():
+            """Four empty scope lists (same shape as the result)."""
+            out = []
+            for key in ('tekrmd', 'other', 'ncr', 'spare'):
+                show_type = key == 'tekrmd'
+                out.append({
+                    'key': key,
+                    'title': labels['scope_titles'][key],
+                    'headers': list(labels['tekrmd_headers'])
+                    if show_type else list(labels['plain_headers']),
+                    'show_type': show_type,
+                    'rows': [],
+                    'count': 0,
+                })
+            return out
+
+        def _shell(lists):
+            """Wrap scope lists in the page-level result dict."""
+            scopes = [{'key': lst['key'], 'label': lst['title'],
+                       'count': lst['count']} for lst in lists]
+            tekrmd = lists[0]
+            result = dict(labels)
+            result.update({
+                'company': company,
+                'subtitle': generated,
+                'generated': generated,
+                'scopes': scopes,
+                'lists': lists,
+                # Backwards-compatible top-level tekrmd list.
+                'headers': tekrmd['headers'],
+                'rows': tekrmd['rows'],
+                'count': tekrmd['count'],
+            })
+            return result
+
+        if not (stock_ids or ncr_ids or spare_ids):
+            return _shell(_blank_lists())
 
         # 2. Explode the 4 kit BOMs to the lowest level.
         kits = _mpp_find_kit_boms(env_sudo)
@@ -782,17 +851,27 @@ class MatiaStockPlanning(models.AbstractModel):
                     stack.append(
                         (bl.product_id.id, level + 1, path + (pid,)))
         if not pids:
-            return empty
+            return _shell(_blank_lists())
 
-        # 3. Per-(product, location) stock. The groupby merges
-        # serial/lot quants, so each location appears once per product.
-        # Only locations with quantity > 0 are kept.
-        prod_locs = {}
+        # 3. Per-(product, location, lot) stock over all three scopes
+        # in one read_group (lazy=False: with several groupbys the
+        # default lazy mode drops the trailing keys). Only quantity
+        # > 0 groups are kept, so every list shows stocked parts only.
+        scope_of_loc = {}
+        for lid in stock_ids:
+            scope_of_loc[lid] = 'stock'
+        for lid in ncr_ids:
+            scope_of_loc[lid] = 'ncr'
+        for lid in spare_ids:
+            scope_of_loc[lid] = 'spare'
+        # pid -> {lid: qty} per scope list.
+        buckets = {'tekrmd': {}, 'other': {}, 'ncr': {}, 'spare': {}}
+        # (scope list, pid) -> distinct lot/serial names.
+        lots = {}
         for rg in env_sudo['stock.quant'].read_group(
-                [('product_id', 'in', sorted(pids)),
-                 ('location_id', 'in', loc_ids)],
-                ['product_id', 'location_id', 'quantity'],
-                ['product_id', 'location_id'], lazy=False):
+                [('location_id', 'in', list(scope_of_loc))],
+                ['product_id', 'location_id', 'lot_id', 'quantity'],
+                ['product_id', 'location_id', 'lot_id'], lazy=False):
             _p = rg.get('product_id')
             _l = rg.get('location_id')
             if not _p or not _l:
@@ -800,62 +879,90 @@ class MatiaStockPlanning(models.AbstractModel):
             qty = float(rg.get('quantity') or 0.0)
             if qty <= 0.0:
                 continue
-            prod_locs.setdefault(_p[0], {})[_l[0]] = qty
-        if not prod_locs:
-            return empty
+            loc_scope = scope_of_loc.get(_l[0])
+            if not loc_scope:
+                continue
+            if loc_scope == 'stock':
+                key = 'tekrmd' if _p[0] in pids else 'other'
+            else:
+                key = loc_scope
+            per_loc = buckets[key].setdefault(_p[0], {})
+            per_loc[_l[0]] = per_loc.get(_l[0], 0.0) + qty
+            lot = rg.get('lot_id')
+            if lot:
+                lots.setdefault((key, _p[0]), set()).add(lot[1])
 
-        # 4. Bulk identity + location names, then sort by location,
-        # code, name.
-        used_loc_ids = {lid for loc_qty in prod_locs.values()
+        # 4. Bulk identity + location names, then one row per product
+        # per scope list.
+        used_loc_ids = {lid for bucket in buckets.values()
+                        for loc_qty in bucket.values()
                         for lid in loc_qty}
         loc_names = {loc.id: (loc.complete_name or loc.name or '')
                      for loc in env_sudo['stock.location'].browse(
                          list(used_loc_ids))}
+        all_pids = set()
+        for bucket in buckets.values():
+            all_pids.update(bucket)
         info = {}
-        for pr in Product.browse(list(prod_locs)).read(
-                ['default_code', 'name', 'uom_id']):
-            info[pr['id']] = pr
-        rows = []
-        for pid, loc_qty in prod_locs.items():
-            pr = info.get(pid) or {}
-            names = sorted({loc_names.get(lid, '')
-                            for lid in loc_qty})
-            names = [n for n in names if n]
-            total = sum(loc_qty.values())
-            total_disp = (int(total) if float(total).is_integer()
-                          else round(total, 2))
-            uom = (pr.get('uom_id') or [False, ''])[1] or 'Units'
-            if is_tr and uom == 'Units':
-                uom = 'Adet'
-            code = pr.get('default_code') or ''
-            name = pr.get('name') or ''
-            is_main = pid_level.get(pid, 1) == 0
-            rows.append({
-                'code': code,
-                'name': name,
-                'is_main': is_main,
-                'type_label': 'Main Part' if is_main else 'Sub Part',
-                'locs': names,
-                'qty': total_disp,
-                'uom': uom,
-                'qty_text': '%s %s' % (total_disp, uom),
+        if all_pids:
+            for pr in Product.browse(list(all_pids)).read(
+                    ['default_code', 'name', 'uom_id']):
+                info[pr['id']] = pr
+        lists = []
+        for key in ('tekrmd', 'other', 'ncr', 'spare'):
+            show_type = key == 'tekrmd'
+            rows = []
+            for pid, loc_qty in buckets[key].items():
+                pr = info.get(pid) or {}
+                names = sorted({loc_names.get(lid, '')
+                                for lid in loc_qty})
+                names = [n for n in names if n]
+                total = sum(loc_qty.values())
+                total_disp = (int(total) if float(total).is_integer()
+                              else round(total, 2))
+                uom = (pr.get('uom_id') or [False, ''])[1] or 'Units'
+                if is_tr and uom == 'Units':
+                    uom = 'Adet'
+                code = pr.get('default_code') or ''
+                name = pr.get('name') or ''
+                lot_text = ', '.join(
+                    sorted(lots.get((key, pid), set())))
+                row = {
+                    'code': code,
+                    'name': name,
+                    'locs': names,
+                    'qty': total_disp,
+                    'uom': uom,
+                    'qty_text': '%s %s' % (total_disp, uom),
+                    'lots': lot_text,
+                }
+                if show_type:
+                    is_main = pid_level.get(pid, 1) == 0
+                    row['is_main'] = is_main
+                    row['type_label'] = ('Main Part' if is_main
+                                         else 'Sub Part')
+                rows.append(row)
+            if show_type:
+                rows.sort(key=lambda r: (
+                    0 if r['is_main'] else 1,
+                    [n.lower() for n in r['locs']],
+                    (r['code'] or '').lower(),
+                    (r['name'] or '').lower()))
+            else:
+                rows.sort(key=lambda r: (
+                    [n.lower() for n in r['locs']],
+                    (r['code'] or '').lower(),
+                    (r['name'] or '').lower()))
+            for idx, row in enumerate(rows, 1):
+                row['no'] = idx
+            lists.append({
+                'key': key,
+                'title': labels['scope_titles'][key],
+                'headers': list(labels['tekrmd_headers'])
+                if show_type else list(labels['plain_headers']),
+                'show_type': show_type,
+                'rows': rows,
+                'count': len(rows),
             })
-        rows.sort(key=lambda r: (
-            0 if r['is_main'] else 1,
-            [n.lower() for n in r['locs']],
-            (r['code'] or '').lower(), (r['name'] or '').lower()))
-        for idx, row in enumerate(rows, 1):
-            row['no'] = idx
-
-        result = dict(labels)
-        result.update({
-            'company': company,
-            'subtitle': '%s | %s: %s' % (
-                generated,
-                'Ürün' if is_tr else 'Products', len(rows)),
-            'rows': rows,
-            'generated': generated,
-            'count': len(rows),
-        })
-        return result
+        return _shell(lists)
 

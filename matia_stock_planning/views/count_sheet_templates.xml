@@ -2,6 +2,8 @@
 <odoo>
     <!-- Printable TR/US stock-count sheets (Count List buttons).
          Full standalone page rendered by controllers/count_sheet.py.
+         Four scope tabs (tekrmd / other / ncr / spare) switch the
+         visible table on screen; printing outputs the visible tab.
          All wording comes from the server (TR page Turkish, US page
          English), so this template stays language-neutral. -->
     <template id="count_sheet_page" name="Stock Count Sheet">
@@ -10,13 +12,17 @@
                 <meta charset="utf-8"/>
                 <title><t t-esc="sheet.get('title', '')"/></title>
                 <style>
-                    @page { size: A4 portrait; margin: 8mm; }
+                    @page { size: A4 landscape; margin: 8mm; }
                     body { font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111; margin: 0; padding: 8px; }
                     h1 { font-size: 13pt; margin: 0 0 2px; }
+                    h2 { font-size: 11pt; margin: 12px 0 6px; }
                     .sub { color: #444; margin: 0 0 8px; font-size: 8pt; }
                     .toolbar { margin-bottom: 10px; }
                     .toolbar button, .toolbar a.btn { font-size: 10pt; padding: 6px 14px; margin-right: 8px; cursor: pointer; border: 1px solid #555; border-radius: 4px; background: #f0f0f0; color: #111; text-decoration: none; display: inline-block; }
                     .toolbar button.primary { background: #1e40af; border-color: #1e40af; color: #fff; }
+                    .tabs { margin-bottom: 6px; }
+                    .tabs .tab { font-size: 10pt; padding: 6px 14px; margin-right: 6px; cursor: pointer; border: 1px solid #94a3b8; border-radius: 4px 4px 0 0; background: #e2e8f0; color: #111; }
+                    .tabs .tab.active { background: #1e293b; border-color: #1e293b; color: #fff; font-weight: bold; }
                     table { border-collapse: collapse; width: 100%; }
                     th, td { border: 1px solid #888; padding: 2px 4px; vertical-align: top; }
                     thead { display: table-header-group; }
@@ -27,34 +33,64 @@
                     td.t { white-space: nowrap; }
                     td.l { font-size: 8pt; }
                     td.q { text-align: right; white-space: nowrap; }
-                    @media print { .toolbar { display: none; } body { padding: 0; } }
+                    td.lot { font-size: 7.5pt; color: #333; }
+                    p.empty { color: #64748b; font-style: italic; }
+                    @media print { .toolbar, .tabs { display: none; } body { padding: 0; } }
                 </style>
+                <script>
+                    function mspShowScope(key) {
+                        var secs = document.querySelectorAll('.msp-scope');
+                        for (var i = 0; i &lt; secs.length; i++) {
+                            secs[i].style.display = (secs[i].id === 'msp-scope-' + key) ? '' : 'none';
+                        }
+                        var tabs = document.querySelectorAll('.tabs .tab');
+                        for (var j = 0; j &lt; tabs.length; j++) {
+                            if (tabs[j].classList) {
+                                tabs[j].classList.toggle('active', tabs[j].getAttribute('data-scope') === key);
+                            }
+                        }
+                        var xl = document.getElementById('msp-excel-btn');
+                        if (xl) {
+                            xl.href = '/matia_stock_planning/count_sheet/' + xl.getAttribute('data-company') + '/xlsx/' + key;
+                        }
+                    }
+                </script>
             </head>
             <body>
                 <div class="toolbar">
                     <button class="primary" onclick="window.print()"><t t-esc="sheet.get('print_label', 'Print')"/></button>
-                    <a class="btn" t-attf-href="/matia_stock_planning/count_sheet/#{sheet.get('company', '')}/xlsx"><t t-esc="sheet.get('excel_label', 'Excel')"/></a>
+                    <a id="msp-excel-btn" class="btn" t-attf-href="/matia_stock_planning/count_sheet/#{sheet.get('company', '')}/xlsx/tekrmd" t-att-data-company="sheet.get('company', '')"><t t-esc="sheet.get('excel_label', 'Excel')"/></a>
                 </div>
                 <h1><t t-esc="sheet.get('title', '')"/></h1>
                 <p class="sub"><t t-esc="sheet.get('subtitle', '')"/></p>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>No</th>
-                            <th t-foreach="sheet.get('headers', [])" t-as="h"><t t-esc="h"/></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr t-foreach="sheet.get('rows', [])" t-as="r">
-                            <td class="n"><t t-esc="r.get('no', '')"/></td>
-                            <td class="c"><t t-esc="r.get('code', '')"/></td>
-                            <td><t t-esc="r.get('name', '')"/></td>
-                            <td class="t"><t t-esc="r.get('type_label', '')"/></td>
-                            <td class="l"><t t-foreach="r.get('locs', [])" t-as="ln"><t t-esc="ln"/><t t-if="not ln_last"><br/></t></t></td>
-                            <td class="q"><t t-esc="r.get('qty_text', '')"/></td>
-                        </tr>
-                    </tbody>
-                </table>
+                <div class="tabs">
+                    <button t-foreach="sheet.get('scopes', [])" t-as="s" t-attf-class="tab#{' active' if s_first else ''}" t-att-data-scope="s.get('key')" t-attf-onclick="mspShowScope('#{s.get('key')}')"><t t-esc="s.get('label')"/> (<t t-esc="s.get('count')"/>)</button>
+                </div>
+                <div t-foreach="sheet.get('lists', [])" t-as="lst">
+                    <section class="msp-scope" t-attf-id="msp-scope-#{lst.get('key')}" t-att-style="'display:none;' if not lst_first else ''">
+                        <h2><t t-esc="lst.get('title', '')"/> (<t t-esc="lst.get('count')"/>)</h2>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>No</th>
+                                    <th t-foreach="lst.get('headers', [])" t-as="h"><t t-esc="h"/></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr t-foreach="lst.get('rows', [])" t-as="r">
+                                    <td class="n"><t t-esc="r.get('no', '')"/></td>
+                                    <td class="c"><t t-esc="r.get('code', '')"/></td>
+                                    <td><t t-esc="r.get('name', '')"/></td>
+                                    <td t-if="lst.get('show_type')" class="t"><t t-esc="r.get('type_label', '')"/></td>
+                                    <td class="l"><t t-foreach="r.get('locs', [])" t-as="ln"><t t-esc="ln"/><t t-if="not ln_last"><br/></t></t></td>
+                                    <td class="q"><t t-esc="r.get('qty_text', '')"/></td>
+                                    <td class="lot"><t t-esc="r.get('lots', '')"/></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <p t-if="not lst.get('rows')" class="empty"><t t-esc="sheet.get('empty_label', '')"/></p>
+                    </section>
+                </div>
             </body>
         </html>
     </template>

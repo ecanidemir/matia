@@ -5,9 +5,11 @@ Two read-only routes per company behind the backend login
 (auth='user', same exposure as the existing export routes):
 
 - GET /matia_stock_planning/count_sheet/<tr|us>:
-  printable HTML page with Print + Excel buttons.
-- GET /matia_stock_planning/count_sheet/<tr|us>/xlsx:
-  .xlsx download (UTF-8 BOM CSV fallback without xlsxwriter).
+  printable HTML page with 4 scope tabs (tekrmd / other / ncr /
+  spare) plus Print + Excel buttons (Excel follows the active tab).
+- GET /matia_stock_planning/count_sheet/<tr|us>/xlsx[/<scope>]:
+  .xlsx download of one scope list (default tekrmd; UTF-8 BOM CSV
+  fallback without xlsxwriter).
 
 Data comes from matia.stock.planning.get_count_sheet; this module only
 owns the HTTP responses and filenames.
@@ -40,36 +42,55 @@ class MatiaCountSheetController(http.Controller):
         return request.render(
             'matia_stock_planning.count_sheet_page', {'sheet': sheet})
 
-    @http.route('/matia_stock_planning/count_sheet/<string:company>/xlsx',
+    @http.route(['/matia_stock_planning/count_sheet/<string:company>/xlsx',
+                 '/matia_stock_planning/count_sheet/<string:company>/xlsx/<string:scope>'],
                 type='http', auth='user', methods=['GET'])
-    def count_sheet_xlsx(self, company, **kwargs):
-        """Download the same rows as .xlsx (or CSV fallback).
+    def count_sheet_xlsx(self, company, scope='tekrmd', **kwargs):
+        """Download one scope list as .xlsx (or CSV fallback).
 
         @param company: 'tr' or 'us' (anything else -> 404).
+        @param scope: 'tekrmd', 'other', 'ncr' or 'spare' (else 404).
         """
         if (company or '').strip().lower() not in ('tr', 'us'):
             return request.not_found()
+        scope = (scope or '').strip().lower()
+        if scope not in ('tekrmd', 'other', 'ncr', 'spare'):
+            return request.not_found()
         sheet = request.env['matia.stock.planning'].get_count_sheet(
             company)
-        headers = sheet.get('headers', [])
-        rows = sheet.get('rows', []) or []
-        title = sheet.get('title', '')
+        target = None
+        for lst in sheet.get('lists', []) or []:
+            if lst.get('key') == scope:
+                target = lst
+                break
+        if target is None:
+            return request.not_found()
+        show_type = bool(target.get('show_type'))
+        headers = target.get('headers', [])
+        rows = target.get('rows', []) or []
+        title = '%s - %s' % (sheet.get('title', ''),
+                             target.get('title', ''))
         stamp = datetime.now().strftime('%Y%m%d_%H%M')
-        file_base = sheet.get('file_base') or 'Count_List'
+        file_base = '%s_%s' % (sheet.get('file_base') or 'Count_List',
+                               scope)
+
+        def _cells(row, loc_join=' / '):
+            """Row cells in header order (No excluded)."""
+            cells = [row.get('code') or '', row.get('name') or '']
+            if show_type:
+                cells.append(row.get('type_label') or '')
+            cells.extend([loc_join.join(row.get('locs') or []),
+                          row.get('qty_text') or '',
+                          row.get('lots') or ''])
+            return cells
 
         if not xlsxwriter:
             lines = ['\ufeff' + '%s - %s' % (title, sheet.get(
                 'generated', ''))]
             lines.append(';'.join(['No'] + list(headers)))
             for row in rows:
-                lines.append(';'.join([
-                    str(row.get('no', '')),
-                    row.get('code') or '',
-                    row.get('name') or '',
-                    row.get('type_label') or '',
-                    ' / '.join(row.get('locs') or []),
-                    row.get('qty_text') or '',
-                ]))
+                lines.append(';'.join(
+                    [str(row.get('no', ''))] + _cells(row)))
             content = '\r\n'.join(lines).encode('utf-8')
             return request.make_response(
                 content,
@@ -110,20 +131,17 @@ class MatiaCountSheetController(http.Controller):
         row_idx += 1
         for row in rows:
             ws.set_row(row_idx, 20)
-            ws.write(row_idx, 0, row.get('no', ''), num_fmt)
-            ws.write(row_idx, 1, row.get('code') or '', text_fmt)
-            ws.write(row_idx, 2, row.get('name') or '', text_fmt)
-            ws.write(row_idx, 3, row.get('type_label') or '', text_fmt)
-            ws.write(row_idx, 4,
-                     '\n'.join(row.get('locs') or []), text_fmt)
-            ws.write(row_idx, 5, row.get('qty_text') or '', num_fmt)
+            cells = [row.get('no', '')] + _cells(row, '\n')
+            for col_idx, val in enumerate(cells):
+                fmt = num_fmt if col_idx in (0, len(cells) - 2) else text_fmt
+                ws.write(row_idx, col_idx, val, fmt)
             row_idx += 1
-        ws.set_column(0, 0, 6)
-        ws.set_column(1, 1, 18)
-        ws.set_column(2, 2, 45)
-        ws.set_column(3, 3, 12)
-        ws.set_column(4, 4, 40)
-        ws.set_column(5, 5, 14)
+        widths = [6, 18, 45]
+        if show_type:
+            widths.append(12)
+        widths.extend([40, 14, 20])
+        for col_idx, width in enumerate(widths):
+            ws.set_column(col_idx, col_idx, width)
         workbook.close()
         output.seek(0)
         return request.make_response(
