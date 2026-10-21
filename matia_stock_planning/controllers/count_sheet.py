@@ -66,6 +66,7 @@ class MatiaCountSheetController(http.Controller):
                     str(row.get('no', '')),
                     row.get('code') or '',
                     row.get('name') or '',
+                    row.get('type_label') or '',
                     ' / '.join(row.get('locs') or []),
                     row.get('qty_text') or '',
                 ]))
@@ -112,15 +113,17 @@ class MatiaCountSheetController(http.Controller):
             ws.write(row_idx, 0, row.get('no', ''), num_fmt)
             ws.write(row_idx, 1, row.get('code') or '', text_fmt)
             ws.write(row_idx, 2, row.get('name') or '', text_fmt)
-            ws.write(row_idx, 3,
+            ws.write(row_idx, 3, row.get('type_label') or '', text_fmt)
+            ws.write(row_idx, 4,
                      '\n'.join(row.get('locs') or []), text_fmt)
-            ws.write(row_idx, 4, row.get('qty_text') or '', num_fmt)
+            ws.write(row_idx, 5, row.get('qty_text') or '', num_fmt)
             row_idx += 1
         ws.set_column(0, 0, 6)
         ws.set_column(1, 1, 18)
         ws.set_column(2, 2, 45)
-        ws.set_column(3, 3, 40)
-        ws.set_column(4, 4, 14)
+        ws.set_column(3, 3, 12)
+        ws.set_column(4, 4, 40)
+        ws.set_column(5, 5, 14)
         workbook.close()
         output.seek(0)
         return request.make_response(

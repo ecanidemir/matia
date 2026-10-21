@@ -653,17 +653,19 @@ class MatiaStockPlanning(models.AbstractModel):
         Explodes the 4 kit BOMs to the lowest level (variant BOM wins,
         depth + cycle guards mirror the price-overview walk), then keeps
         only products with stock (quantity > 0) in that company's Stock
-        locations. One row per product: code, name, stock location names
-        (a location is listed once even with several serial/lot quants)
-        and total quantity with UoM. Rows sort by location first, then
-        code, then name. Labels are fixed per company (TR page Turkish,
-        US page English), independent of the user's language.
+        locations. One row per product: code, name, type (Main Part for
+        kit top-level products, Sub Part for deeper levels), stock
+        location names (a location is listed once even with several
+        serial/lot quants) and total quantity with UoM. Rows sort by
+        type (Main first), then location, then code, then name. Labels
+        are fixed per company (TR page Turkish, US page English),
+        independent of the user's language.
 
         @param company: 'tr' or 'us'.
         @return: {'company', 'lang', 'title', 'subtitle', 'headers',
             'rows', 'generated', 'count', 'file_base', 'print_label',
             'excel_label'}; each row carries 'no', 'code', 'name',
-            'locs', 'qty', 'uom', 'qty_text'.
+            'is_main', 'type_label', 'locs', 'qty', 'uom', 'qty_text'.
         """
         company = (company or '').strip().lower()
         if company not in ('tr', 'us'):
@@ -673,7 +675,8 @@ class MatiaStockPlanning(models.AbstractModel):
             labels = {
                 'lang': 'tr',
                 'title': 'TR Stok Sayım Listesi - 4 Kapasite BOM (en alt seviye)',
-                'headers': ['Kod', 'Ürün Adı', 'Depo / Lokasyon', 'Miktar'],
+                'headers': ['Kod', 'Ürün Adı', 'Tür', 'Depo / Lokasyon',
+                            'Miktar'],
                 'print_label': 'Yazdır',
                 'excel_label': "Excel'e Aktar",
                 'file_base': 'TekRMD_TR_Sayim_Listesi',
@@ -682,7 +685,8 @@ class MatiaStockPlanning(models.AbstractModel):
             labels = {
                 'lang': 'en',
                 'title': 'US Stock Count List - 4 Capacity BOMs (lowest level)',
-                'headers': ['Code', 'Product Name', 'Warehouse Location', 'Quantity'],
+                'headers': ['Code', 'Product Name', 'Type',
+                            'Warehouse Location', 'Quantity'],
                 'print_label': 'Print',
                 'excel_label': 'Export Excel',
                 'file_base': 'TekRMD_US_Count_List',
@@ -736,6 +740,9 @@ class MatiaStockPlanning(models.AbstractModel):
         tmpl_bom_cache = {}
         seen = set()
         pids = set()
+        # Shallowest explosion level per product (top-level kit lines
+        # are level 0 -> Main Part, deeper levels -> Sub Part).
+        pid_level = {}
         stack = []
         for kit in kits:
             for bl in kit['bom'].bom_line_ids:
@@ -750,6 +757,8 @@ class MatiaStockPlanning(models.AbstractModel):
             if pid in path or level > _MPP_MAX_LEVEL:
                 continue
             pids.add(pid)
+            if pid not in pid_level or level < pid_level[pid]:
+                pid_level[pid] = level
             if pid in seen:
                 continue
             seen.add(pid)
@@ -820,15 +829,19 @@ class MatiaStockPlanning(models.AbstractModel):
                 uom = 'Adet'
             code = pr.get('default_code') or ''
             name = pr.get('name') or ''
+            is_main = pid_level.get(pid, 1) == 0
             rows.append({
                 'code': code,
                 'name': name,
+                'is_main': is_main,
+                'type_label': 'Main Part' if is_main else 'Sub Part',
                 'locs': names,
                 'qty': total_disp,
                 'uom': uom,
                 'qty_text': '%s %s' % (total_disp, uom),
             })
         rows.sort(key=lambda r: (
+            0 if r['is_main'] else 1,
             [n.lower() for n in r['locs']],
             (r['code'] or '').lower(), (r['name'] or '').lower()))
         for idx, row in enumerate(rows, 1):
