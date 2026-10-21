@@ -783,7 +783,7 @@ class MatiaStockPlanning(models.AbstractModel):
                 [('product_id', 'in', sorted(pids)),
                  ('location_id', 'in', loc_ids)],
                 ['product_id', 'location_id', 'quantity'],
-                ['product_id', 'location_id']):
+                ['product_id', 'location_id'], lazy=False):
             _p = rg.get('product_id')
             _l = rg.get('location_id')
             if not _p or not _l:
