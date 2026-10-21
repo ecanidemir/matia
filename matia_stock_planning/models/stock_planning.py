@@ -943,15 +943,21 @@ class MatiaStockPlanning(models.AbstractModel):
                     uom = _UOM_NAME_MAP.get(uom, uom)
                 code = pr.get('default_code') or ''
                 name = pr.get('name') or ''
-                lot_parts = []
-                for lot_name in sorted(lots.get((key, pid), {})):
-                    lot_qty = lots[(key, pid)][lot_name]
-                    if float(lot_qty).is_integer() and int(lot_qty) == 1:
-                        lot_parts.append(lot_name)
-                    else:
-                        lot_parts.append('%s (%s)' % (
-                            lot_name, _disp_qty(lot_qty)))
-                lot_text = ', '.join(lot_parts)
+                per_lot = lots.get((key, pid), {})
+                if len(per_lot) == 1:
+                    # Single lot holds the whole row quantity; the
+                    # parens would repeat the Quantity column.
+                    lot_text = next(iter(sorted(per_lot)))
+                else:
+                    lot_parts = []
+                    for lot_name in sorted(per_lot):
+                        lot_qty = per_lot[lot_name]
+                        if float(lot_qty).is_integer() and int(lot_qty) == 1:
+                            lot_parts.append(lot_name)
+                        else:
+                            lot_parts.append('%s (%s)' % (
+                                lot_name, _disp_qty(lot_qty)))
+                    lot_text = ', '.join(lot_parts)
                 row = {
                     'code': code,
                     'name': name,
