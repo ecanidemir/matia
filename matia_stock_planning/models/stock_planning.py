@@ -890,7 +890,9 @@ class MatiaStockPlanning(models.AbstractModel):
             per_loc[_l[0]] = per_loc.get(_l[0], 0.0) + qty
             lot = rg.get('lot_id')
             if lot:
-                lots.setdefault((key, _p[0]), set()).add(lot[1])
+                # Lot name may come back as a lazy translated string;
+                # coerce to str for the comma-joined display.
+                lots.setdefault((key, _p[0]), set()).add(str(lot[1]))
 
         # 4. Bulk identity + location names, then one row per product
         # per scope list.
