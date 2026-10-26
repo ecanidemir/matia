@@ -945,3 +945,92 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - ODOO_*/ODOO_STAGING_* artik kullanilmiyor; her sey MATIA_ODOO_*/MATIA_ODOO_STAGING_* (User env, 11 anahtar). .py helper'lar (smoke_after_deploy, trigger_module_upgrade) MATIA_* okur.
 - Silinen: scripts/load_env.ps1 (.env yukleyiciye gerek kalmadi). .env/.env.example anahtarlari MATIA_*'a cevrilidi (.env git-ignored yerel yedek).
 - opencode.json'daki ODOO_URL/ODOO_DB/... KEY'ler odoo-mcp paketinin bekledigi girdi adlaridir, DEGISTIRME (value'lar {env:MATIA_*} ile eslenir).
+
+## Mail Giden/Gelen Teshisi (2026-10-19, salt-okunur)
+
+- Giden: tek server `odoogmail` (id 6, smtp.gmail.com:587 STARTTLS, user enes@matiamobility.com) `use_google_gmail_service=True` ile OAuth kullaniyor. `mail.mail`: exception 104 / sent 3 / outgoing 0. Son 30 exception dagilimi: 17x TR + 4x EN access-token hatasi + 9x "Connection unexpectedly closed" — Gmail OAuth refresh kirik, fallback SMTP de tutmuyor.
+- Gelen: `fetchmail.server` 0 kayit — gelen kutusu yapilandirilmamis. Cron "Mail: Fetchmail Service" aktif ama islevsiz. Catchall domain matiamobility.com + alias reply-odoo + bounce bounce + default.from notifications mevcut.
+- Cron "Mail: Email Queue Manager" 1 saate ayarlı — kuyruk cok yavas bosalir, mailler gecikmis gorunur. Oneri: OAuth'u Google Cloud Console'da teyit edip yeniden yetkilendir (veya App Password'e gec), Queue Manager araligini dusur, gelen icin fetchmail kaydi ac. Secret token'lar loglanmadi.
+
+## Mail Cozumu Teyidi (2026-10-19, canli)
+
+- Giden OAuth 11:11'de yenilendi (expiration ileriye alindi), test maili gitti.
+- Gelen `fetchmail.server` id 7 `gmailgelen` (imap.gmail.com, enes@matiamobility.com) kuruldu, state done, son cekme 11:17:41. Reply `mail.message` 80876 (11:13:27, res.partner 1118, email tipi) chatter'a dustu.
+- Ders: gelen maili `partner_ids` domain'iyle arama YANILTIR (email tipi partner_ids tasimayabilir); dogru sorgu `model + res_id` (ornek: res.partner 1118).
+
+## PO Torna Paketi Tasima 142->146 (2026-10-20, canli, uygulandi)
+
+- PO/26-00142 (id 537, 149 satir, Matia Demo) -> PO/26-00146 (id 541, MAKSAN CNC, bostu): Excel listesindeki 70 satirdan 66'si tasindi (adet 142'den, fiyat Excel'den; M3S2TN04=85; 142'de olmayan M3L2TN23/M3T2TN05/M3U2TN01 atlandi). 146: 66 satir, 275680 TRY + KDV 330816; 142: 83 satir kaldi (693674.35 total). Chatter notu iki PO'ya dusuldu.
+- Kural: prod `odoo_matia` MCP write kapali (`ODOO_MCP_ENABLE_WRITES=1` yok) -> tasima direk XML-RPC ile (`scratch/po_move_142_146.py`, dry-run + --apply; once create+dogrula, sonra unlink+dogrula). Sira: uyumsuzluk raporu + kullanici karari (dup fiyat, atlanan 3 kod, fiyat=Excel) -> ic test (validate/preview) -> onay -> uygula -> MCP ile capraz dogrula.
+
+## PO Freze Paketi Tasima 142->147 (2026-10-20, canli, uygulandi)
+
+- PO/26-00142 (83 satir kalmisti) -> PO/26-00147 (id 542, Uzmanlar Kalip, bostu/draft): UZMANLAR KALIP.xlsx 46 satir, liste TEMIZ (cift yok, eksik yok, 46/46 142'de; hepsi Units + %20 KDV). 147: 46 satir, 836805 TRY + KDV 1004166; 142: 37 satir kaldi (252621.55 total). Betik `scratch/po_move_142_147.py` (onceki 146 betiginin 147 uyarlamasi). NOT: M3MTMN05 142 chatter'inda Murat Gunes'e ayrilmisti, bu tasimayla Uzmanlar'a gecti (chatter notuna yazildi).
+
+## Purchase Form FieldWrapper Crash (2026-10-20, aralikli)
+
+- Hata: `purchase.order` formda `FieldWrapper.updateModifiersValue → Cannot set properties of null (setting 'props')` (field_wrapper.js: `this.componentRef.comp.props = this.props`, comp=null = ic Owl field henuz mount olmamis / destroy edilmisken modifier uygulanmis; Odoo 15 core race, `_registerModifiers` yolu).
+- Tetikleyiciler: UI view `purchase.order.limit_200` (ID 4302, 2024-11-01, xml_id yok, `order_line/tree limit=200`) + cok-satirli PO'lar (PO/26-00138 148 satir cancel, PO/26-00142 83 satir merge-kokenli, PO/26-00146 67 satir; 15-20 Eki 2026) + debug assets modu + sunucu bellek baskisi (%70-85, workers=2).
+- `matia_stock_planning` DISLANdi: purchase view inherit YOK, JS core patch YOK (sadece 3 action_registry kaydi), watcher backend-only (button_cancel/unlink). Buyuk PO'lar `bsi_merge_any_purchase` merge kokenli (origin `Merge of ...`), plan RFQ degil.
+- Kalici mitigasyon (refresh degil): gunluk calismada `?debug=assets` birak; limit_200 deaktif edip Odoo default 40+pager'a don (tek tik, reversible).
+
+## Staging A/B A-fazi NEGATIF (2026-10-20)
+
+- Staging `PO/26-00351` (id 746, 150 satir, RACE-TEST, draft) limit_200 AKTIFKEN browser'da cokmedi. 150 satir tek basina her sunucuda yetmiyor.
+- Prod `purchase.order`'da custom `x_` field YOK (82 field, tamami standart); base form 83 field, 14 attrs'li (order_line + satir field'lari dahil).
+- Kalan hipotezler: (1) timing/yuk — prod yavas (mem %70-85, workers=2, debug assets) staging hizli; (2) veri-bagimli — crash belirli state/partner/kur kombinasyonunda; test PO'su duz draft'ti; (3) uzun-acik-sekme oturumu. Sonraki adim: crash anındaki PO id'si + debug modu not edilecek.
+
+## Count Sheet Bos Sayfa — read_group lazy Bug (2026-10-21, kok neden bulundu + fix kodlandi, deploy BEKLIYOR)
+
+- Sikayet: `/matia_stock_planning/count_sheet/us` (TR de ayni) bos cikiyor. Modul canlida guncel (15.0.2.10.7), route + QWeb template saglam; `get_count_sheet` her iki sirket icin `Products: 0` donuyor.
+- Kok neden: `get_count_sheet` (stock_planning.py) `stock.quant`'i `['product_id','location_id']` cift groupby ile okuyor ama `lazy=False` vermiyordu. Odoo 15'te `read_group` default `lazy=True` ile SADECE ilk groupby'yi doner (`location_id` satirda YOK, `__context.group_by=['location_id']` dusulur); kod `rg.get('location_id')` bos olunca `continue` ile TUM satirlari atliyor -> `prod_locs={}` -> bos sayfa. Canli veriyle teyit: ayni domain `lazy:true`'da satirlarda `location_id` anahtari yok, `lazy:false`'ta var (WHUS/Stock 327 quant, 23155 adet mevcut).
+- Moduldeki diger 6 `read_group` tek groupby'li (`['product_id']`) oldugu icin saglam; cift groupby kullanan TEK cagri buydu.
+- Fix (commit BEKLIYOR): ayni cagriya `lazy=False` eklendi (`py_compile` OK). Kural: 2+ groupby'li her `read_group`'a `lazy=False` yaz; tek groupby'da default yeterli.
+- Deploy: Python degisikligi -> odoobulut Git Deploy + servis restart (mesai disi + backup) + modul Upgrade; sonrasi `/us` ve `/xlsx` ile teyit.
+
+## Count Sheet Type Sutunu (2026-10-21, kodlandi + pushlandi 1d5828c, deploy BEKLIYOR)
+
+- Istek: Main/Sub ayrimi + `Main > location > code` siralama, baslik Type.
+- `get_count_sheet` urun basina en sig patlatma seviyesini tutar (`pid_level`, min-seviye; birden fazla kit/seviyede gecen urun en sig seviyeyle Main kalir): seviye 0 = `Main Part`, digerleri `Sub Part` (`is_main` + `type_label`). Siralama `(main-once, location, code, name)`.
+- Sutun Adi/Urun arasina geldi: TR baslik `Tür`, US baslik `Type` (TR sayfa Turkce kuralina uyuldu). HTML + xlsx + CSV 3 cikti da tasir (xlsx genislik 12).
+- Manifest 15.0.2.10.7->15.0.2.10.8. Dogrulama: `py_compile` + XML parse + siralama simulasyonu OK.
+- Deploy: Python var -> Git Deploy + restart (mesai disi + backup) + Upgrade.
+
+## Count Sheet 4 Sekme + Lot Sutunu (2026-10-21, kodlandi + pushlandi 07228af, deploy BEKLIYOR)
+
+- Sekmeler: Stok TekRMD (4 BOM, Main/Sub + siralama aynen) / Stok Diger (stokta ama 4 BOM disi) / NCR (sirketin NCR'i, BOM-bagimsiz) / Spare (sirketin spare'i, BOM-bagimsiz). Sekmede sayac, yazdirma gorunen sekmeyi basar, Excel butonu aktif sekmeyi indirir (`/xlsx/<scope>`, eski `/xlsx` tekrmd'ye gider).
+- Spare isimle eslesir (`'Spare' in cname`): tasma oncesi Stock/ altinda da sonrasi kardes konumda da calisir, hicbir durumda stock kapsamına girmez (cift sayim yok).
+- Lot/Seri sutunu 4 listede var (virgulle ayrık, kucuk punto `.lot`): tek `read_group(product,location,lot, lazy=False)` + qty>0 filtresi; satir basi distinct lot adlari.
+- Lokasyon taramasi (2026-10-21 canli): Stock/NCR/Spare disinda tek internal konum `Physical Locations/Subcontracting Location` (TR, 208 quant, ~212k adet, fasoncu stoku - bilerek disarida). Arsiv disi tum internal konumlar Stock agacinda; kapsanmayan stok yok.
+- Manifest 15.0.2.10.8->15.0.2.10.9. Dogrulama: `py_compile` + XML parse + kapsam/lot simulasyonu OK.
+
+## Count Sheet Lazy Lot Hatasi (2026-10-21, canli 500, fix pushlandi a77ba4e, deploy BEKLIYOR)
+
+- Hata: upgrade sonrasi butonda Internal Server Error. Canli traceback: `get_count_sheet stock_planning.py:928 lot_text join -> TypeError: sequence item 0: expected str instance, lazy found`.
+- Kok neden: `read_group` `lot_id` adi lazy ceviri nesnesi donebiliyor; `', '.join` str ister. Diger groupby adlari (`product_id/location_id`) yalniz `[0]` ile okundugu icin etkilenmedi.
+- Fix: lot adlari toplanirken `str(lot[1])`. Kural: `read_group`'tan gelen m2o display adini join/sort'ta kullanmadan once `str()`'e cevir.
+- `py_compile` OK. Deploy: Python var -> Git Deploy + restart + Upgrade.
+
+## Count Sheet Lot Miktar + US Ingilizce UoM (2026-10-21, pushlandi 4c30779, deploy BEKLIYOR)
+
+- Lot sutunu: `LOT (miktar)` formatinda satir-bazli lot toplamlari; miktar 1 ise parantez yok (`LOT-A (8), LOT-B, LOT-C (2.5)`); birim yazilmaz (Quantity sutununda var). `_disp_qty` helper (tam sayi->int, degilse 2 ondalik) toplam + lot icin ortak.
+- US sayfalarinda `Adet` sizintisi bitti: US'te `_UOM_NAME_MAP` ile EN'e cevrilir (Adet->Units, Takim->Set...), TR davranisi aynen (Units->Adet).
+- Dogrulama: `py_compile` + format simulasyonu OK.
+
+## Upgrade "Updating"de Takilma (2026-10-21, canli olcu)
+
+- Sikayet: upgrade updating'de kaldi. Olcu: `ir.module.module` state=`installed`, installed=latest=`15.0.2.10.8`; `get_count_sheet` eski sekilsiz (lists yok) ama 166 US satir donuyor (lazy fix canlida calisiyor).
+- Yorum: DB yari-upgrade'de DEGIL; sunucudaki kod henuz .10.8 (4-sekme .10.9 deploy'u panele ulasmamis veya restart suruyor). UI'daki "updating" muhtemelen deploy/restart sirasinda tetiklenen upgrade cagrisi.
+- Kural: state `installed` iken tekrar tekrar Upgrade'e basma (paralel upgrade kilitlenir); once panelde Git Deploy durumunu bekle, sonra tek Upgrade. 166 satir eski kodun saglikli calistigini gosterir.
+
+## PO Murat Gunes Paketi Tasima 142->149 (2026-10-22, canli, uygulandi)
+
+- PO/26-00142 (37 satir kalmisti) -> PO/26-00149 (id 544, Murat Gunes, bostu/draft): MURAT GUNES listesi 34 satir, TEMIZ (cift yok, eksik yok, 34/34 142'de; hepsi Units + %20 KDV). 149: 34 satir, 1047850 TRY + KDV 1257420; 142: 3 satir kaldi (M3T2TN04, M1TRTN01, M3U2MN08; 3081.77 total). Betik `scratch/po_move_142_149.py`.
+- DERS: toplam onayi icin el-hesabi qty dict ASLA kullanma (2 adet hatasi 1149550 vs dogrusu 1047850 verdi: M3E2MN08 77 degil 38, M3C2MN06 76 degil 34); her zaman canli `search_read` qty ile hesapla + tutmazsa uygulamadan once farki bul ve kullaniciya duzelt.
+
+## PO Subcontract Auto-Register (2026-10-26, kodlandi - deploy BEKLIYOR)
+
+- Sorun: PO/26-00146 (Maksan 1299, 68 satir) onayda fason MO/resupply uretmedi; tek receipt Vendors->Stock. Kok neden TEK: 67 subcontract BOM'da `subcontractor_ids`=[1088,1240], 1299 yok. Bilesen rotalari tamam (42/42 `[5,9]`); bitmis-urun rotasi iddiasi YANLISTI (fason akista rota komponentte olur, plans/ + Route-vs-BOM girdisine bak).
+- Cozum: `models/purchase_subcontract_auto.py` (`purchase.order` inherit): `button_confirm` `super()` ONCESI `_msp_ensure_subcontract_vendors` calisir; fason BOM'lu satirlarda tedarikci `[(4, vendor)]` ile eklenir (mevcut korunur, variant BOM `product_id` filtresi var). Best-effort: hata purchase akisini bloklamaz (warning log). Manifest 15.0.2.10.10. Plan: `plans/subcontract_auto_add.md`.
+- Kural: Odoo fason BOM secimini onay aninda yapar; onay-sonrasi automation ayni PO'yu kurtaramaz. Eski PO'lar (146 dahil) icin backfill + iptal/yeniden olusturma gerekir.
+- Deploy: Python var -> Git Deploy + restart (mesai disi + backup) + modul Upgrade. Commit/push kullanici onayiyla.
