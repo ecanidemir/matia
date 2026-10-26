@@ -1034,3 +1034,47 @@ et_cost/net_qty), sifirdan birim scratch_unit_usd'de (Product Cost ile cross-che
 - Cozum: `models/purchase_subcontract_auto.py` (`purchase.order` inherit): `button_confirm` `super()` ONCESI `_msp_ensure_subcontract_vendors` calisir; fason BOM'lu satirlarda tedarikci `[(4, vendor)]` ile eklenir (mevcut korunur, variant BOM `product_id` filtresi var). Best-effort: hata purchase akisini bloklamaz (warning log). Manifest 15.0.2.10.10. Plan: `plans/subcontract_auto_add.md`.
 - Kural: Odoo fason BOM secimini onay aninda yapar; onay-sonrasi automation ayni PO'yu kurtaramaz. Eski PO'lar (146 dahil) icin backfill + iptal/yeniden olusturma gerekir.
 - Deploy: Python var -> Git Deploy + restart (mesai disi + backup) + modul Upgrade. Commit/push kullanici onayiyla.
+
+## PO 146 Fason Onarimi (2026-10-26, canli, BASARILI)
+
+- Yontem (kullanici uyguladi): PO/26-00146 button_cancel -> button_draft -> button_confirm.
+- Sonuc: eski receipt 4121 cancel, yeni receipt 4123 assigned; 67/67 BOM'a 1299 eklendi (otomasyon `button_confirm` oncesi calisti); 67 fason MO (WHTR/SBC/..., confirmed, picking_type Subcontracting); 67 resupply teslimat (WHTR/RES/..., Stock -> Subcontracting Location). 1869 M1TRTN01'de BOM YOK -> dogru sekilde MO'suz normal alim satiri.
+- Kural teyidi: bitmis-urun rotasi fason akisi etkilemez (40 urunde [5] olmasina ragmen MO uredi); belirleyici olan BOM `subcontractor_ids` eslesmesi + komponent route 9.
+- Kapsam: 056+ onayli PO'larda baska bozuk yok (tarama: 50 PO + taslaklar). 045 (Maksan, Mayis) teslimatlari done oldugu icin kapsam disi birakildi.
+- Script: `scratch/po146_subcontract_fix.py` (kuru-kontrol + --apply, Fault-tolerant).
+
+## Batch Belge No Otomatik Kopyalama (2026-10-26, staging kuruldu + test PASS)
+
+- Sorun: RES transferleri (Resupply Subcontractor, sequence RES, orn. WHTR/RES/..)
+  `document_number` bossa dogrulamada "belge no giriniz" uyarisi; batch'teki Studio
+  alani `x_docno` (modules bos, Doc No) elle Actions > "Belge No Kopyala" (id 1243,
+  TUM pickinglere yazar) ile kopyalaniyordu (2 tik).
+- Cozum Adim 1 (Studio, deploy'suz): `base.automation` id 10
+  "Batch Belge No -> Hazir Transferler" (staging): on_write, model
+  stock.picking.batch (1901), filter `[('x_docno','!=',False)]`, state code.
+  `x_docno` strip edilip SADECE `assigned` pickinglere `document_number` yazilir
+  (dolu uzerine yazilir, kullanici karari); bos docno sessiz gecilir. Plain dongu
+  (safe_eval'de lambda yok). Tek `base.automation` create yeterli (delegate ile
+  server action otomatik acilir); MCP sirasi preview -> validate -> execute
+  (direkt execute token-hatasi verir).
+- Test (staging BATCH/00002, Validate YOK): 4357 assigned -> `document_number`
+  "asfdasd" doldu; 4358/4356 confirmed bos kaldi (PASS). Batch'te 2 confirmed
+  varken Dogrula zaten cekirdek "waiting for goods" hatasi verir (availability
+  oncelikli); once Check Availability + confirmed temizligi gerekir.
+- Revizyon (2026-10-26, kullanici istegi): Dogrula tum RES'lerin belgesini
+  kontrol ettigi icin kapsam genisletildi: `assigned` yerine `done`/`cancel`
+  haric TUM pickingler (dolu uzerine yazilir). BATCH/00002'de 3/3 doldu (PASS).
+- Teshis notu: "hic miktar rezerve/yapilmamis" hatasi belgesiz transferden DEGIL,
+  satirsiz transferden gelir (`button_validate`: `move_line_ids` bos veya sifir
+  olan picking patlar). Ornek: 4357'de 1 satir vardi (625 rezerve, 300 done
+  girilmis - dogru), 4356/4358'de HIC satir yoktu (confirmed, rezerve hic
+  olusmamis -> satir olusmaz -> done girilecek yer de yok). Cozum: bekleyenleri
+  batch'ten cikarip sadece hazirlari dogrula (stok yoksa Check Availability de
+  ise yaramaz).
+- Adim 2 (KODLANDI + review OK 2026-10-26, commit/deploy BEKLIYOR,
+  `plans/batch_docno_autocopy.md`): `models/stock_picking_batch_docno.py`
+  (`action_done` override + `_msp_copy_docno_to_pickings`, `_fields` guard'li,
+  best-effort + `_logger.exception`); manifest 15.0.2.10.11 + depends
+  `stock_picking_batch`; `py_compile` OK; odoo-reviewer KRITIK YOK.
+  Deploy sonrasi Studio otomasyonu pasiflestirilir (cift yazim onlenir).
+- Prod'a tasima: Studio UI'dan birebir kayit (ID ortama ozel olabilir).
